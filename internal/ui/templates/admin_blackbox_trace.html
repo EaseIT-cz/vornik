@@ -46,8 +46,8 @@
                     <div class="font-mono text-emerald-700 dark:text-emerald-300">${{printf "%.4f" .Trace.Header.TotalCostUSD}}</div>
                 </div>
                 <div class="col-span-2 md:col-span-4">
-                    <div class="text-gray-500 uppercase tracking-wider mb-0.5">Digest <span class="text-[10px] text-gray-600">(schema v{{.Trace.Header.SchemaVersion}}) — cite this to identify the trace</span></div>
-                    <div class="font-mono text-[10px] text-gray-400 break-all">{{.Trace.Header.TraceDigest}}</div>
+                    <div class="text-gray-500 uppercase tracking-wider mb-0.5">Digest <span class="text-xs text-gray-600">(schema v{{.Trace.Header.SchemaVersion}}) — cite this to identify the trace</span></div>
+                    <div class="font-mono text-xs text-gray-400 break-all">{{.Trace.Header.TraceDigest}}</div>
                 </div>
             </div>
 
@@ -78,14 +78,14 @@
                 <div class="divide-y divide-dark-700/40">
                     {{range .Trace.Events}}
                     <div class="px-4 py-2 flex items-start gap-3 hover:bg-dark-700/30 transition-colors">
-                        <div class="text-[10px] text-gray-500 font-mono whitespace-nowrap pt-1 w-24">{{.Timestamp.Format "15:04:05.000"}}</div>
+                        <div class="text-xs text-gray-500 font-mono whitespace-nowrap pt-1 w-24">{{.Timestamp.Format "15:04:05.000"}}</div>
                         <div class="flex-shrink-0">
-                            <span class="px-1.5 py-0.5 text-[10px] font-mono rounded ring-1 ring-dark-600 bg-dark-700 text-gray-300">{{.Kind}}</span>
+                            <span class="px-1.5 py-0.5 text-xs font-mono rounded ring-1 ring-dark-600 bg-dark-700 text-gray-300">{{.Kind}}</span>
                         </div>
                         <div class="flex-1 min-w-0">
                             <div class="text-sm text-gray-200 truncate" title="{{.Title}}">{{.Title}}</div>
-                            {{if .Summary}}<div class="text-[11px] text-gray-500 truncate" title="{{.Summary}}">{{.Summary}}</div>{{end}}
-                            <div class="text-[10px] text-gray-600 font-mono mt-0.5">
+                            {{if .Summary}}<div class="text-xs text-gray-500 truncate" title="{{.Summary}}">{{.Summary}}</div>{{end}}
+                            <div class="text-xs text-gray-600 font-mono mt-0.5">
                                 {{if .Role}}<span class="text-violet-800 dark:text-violet-400">{{.Role}}</span>{{end}}
                                 {{if .Model}} · {{.Model}}{{end}}
                                 {{if .StepID}} · step={{.StepID}}{{end}}
@@ -93,7 +93,7 @@
                                 · {{.Source}}{{if .SourceID}}/{{.SourceID}}{{end}}
                             </div>
                         </div>
-                        {{if gt .CostUSD 0.0}}<div class="text-[11px] font-mono text-emerald-700 dark:text-emerald-300 whitespace-nowrap pt-1">${{printf "%.4f" .CostUSD}}</div>{{end}}
+                        {{if gt .CostUSD 0.0}}<div class="text-xs font-mono text-emerald-700 dark:text-emerald-300 whitespace-nowrap pt-1">${{printf "%.4f" .CostUSD}}</div>{{end}}
                     </div>
                     {{end}}
                 </div>

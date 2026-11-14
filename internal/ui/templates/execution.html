@@ -105,7 +105,7 @@
                      statStrip primitive (which renders {{.Value}} verbatim)
                      receives a plain string, not a *time.Time pointer. */}}
                 <dl class="px-5 pt-4">
-                    <dt class="text-ink-500 uppercase tracking-wider text-[10px]">Task ID</dt>
+                    <dt class="text-ink-500 uppercase tracking-wider text-xs">Task ID</dt>
                     <dd class="mt-0.5 text-sm text-ink-100">
                         <a href="/ui/tasks/{{.Execution.TaskID}}" class="text-brand-400 hover:text-brand-300 font-mono" title="{{.Execution.TaskID}}">{{shortID .Execution.TaskID}}</a>
                     </dd>
@@ -130,7 +130,7 @@
                 {{if eq .Execution.Status "RUNNING"}}
                 {{$staleClass := checkpointStale .Execution.UpdatedAt}}
                 <dl class="px-5 pb-4">
-                    <dt class="text-ink-500 uppercase tracking-wider text-[10px] mb-1">Last checkpoint</dt>
+                    <dt class="text-ink-500 uppercase tracking-wider text-xs mb-1">Last checkpoint</dt>
                     <dd class="text-sm">
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1
                             {{if eq $staleClass "stale"}}bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-rose-800/50
@@ -258,11 +258,11 @@
                             {{if $step.Role}}<span class="text-xs px-1.5 py-0.5 rounded-full bg-accent-900/50 text-accent-300 ring-1 ring-accent-800/40">{{$step.Role}}</span>
                             {{else if $subRole}}<span class="text-xs px-1.5 py-0.5 rounded-full bg-accent-900/50 text-accent-300 ring-1 ring-accent-800/40">{{$subRole}}</span>
                             {{else if $o.Role}}<span class="text-xs px-1.5 py-0.5 rounded-full bg-accent-900/50 text-accent-300 ring-1 ring-accent-800/40">{{$o.Role}}</span>{{end}}
-                            {{if gt $o.DurationMS 0}}<span class="text-[10px] text-ink-500 font-mono">{{$o.DurationDisplay}}</span>{{end}}
+                            {{if gt $o.DurationMS 0}}<span class="text-xs text-ink-500 font-mono">{{$o.DurationDisplay}}</span>{{end}}
                             <span class="text-xs ml-auto {{$statusColor}}">{{$statusText}}</span>
                             {{if or (eq $execStatus "COMPLETED") (eq $execStatus "FAILED") (eq $execStatus "CANCELLED")}}
                             <button type="button"
-                                    class="text-[10px] px-2 py-0.5 rounded bg-surface-800 hover:bg-brand-900/40 text-ink-400 hover:text-brand-300 ring-1 ring-surface-600 hover:ring-brand-700/40 transition-colors"
+                                    class="text-xs px-2 py-0.5 rounded bg-surface-800 hover:bg-brand-900/40 text-ink-400 hover:text-brand-300 ring-1 ring-surface-600 hover:ring-brand-700/40 transition-colors"
                                     title="Reset execution state to before this step and re-run from here"
                                     data-on-click="retryExecutionFromStep" data-args="{{jsonArgs $.Execution.ID $o.StepID}}">
                                 ↻ retry
@@ -303,7 +303,7 @@
                             {{end}}
                             <span class="text-sm font-mono text-ink-100">{{deref $currentStep}}</span>
                             {{if $curStep.Role}}<span class="text-xs px-1.5 py-0.5 rounded-full bg-accent-900/50 text-accent-300 ring-1 ring-accent-800/40">{{$curStep.Role}}</span>{{end}}
-                            {{if gt $co.DurationMS 0}}<span class="text-[10px] text-ink-500 font-mono">{{$co.DurationDisplay}}</span>{{end}}
+                            {{if gt $co.DurationMS 0}}<span class="text-xs text-ink-500 font-mono">{{$co.DurationDisplay}}</span>{{end}}
                             <span class="text-xs ml-auto {{if eq $execStatus "RUNNING"}}text-accent-400{{else if eq $execStatus "FAILED"}}text-rose-800 dark:text-rose-400{{else}}text-ink-400{{end}}">
                                 {{if eq $execStatus "RUNNING"}}running{{else if eq $execStatus "FAILED"}}failed{{else}}{{$execStatus}}{{end}}
                             </span>
@@ -336,8 +336,8 @@
             </div>
             {{else if .Execution.CompletedSteps}}
             <!-- Completed Steps — reference panel (closed by default) -->
-            <details class="panel-ref overflow-hidden">
-                <summary>{{template "sectionHeader" (dict "Title" "Completed Steps")}}</summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Completed Steps</h2></summary>
                 <div class="px-5 py-4 space-y-1.5">
                     {{range .Execution.CompletedSteps}}
                     <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-900 border border-emerald-900/30">
@@ -400,14 +400,14 @@
                             the lookup that pairs timeline-bottom-
                             stripe to step name without hovering.
                     -->
-                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-ink-500">
+                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-500">
                         <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-emerald-500/70 inline-block"></span>ok</span>
                         <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-amber-500/70 inline-block"></span>pending</span>
                         <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-rose-500/70 inline-block"></span>error</span>
                         <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-ink-500/60 inline-block"></span>other</span>
                     </div>
                     {{if .StepColorOrder}}
-                    <div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-ink-400">
+                    <div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-ink-400">
                         {{range .StepColorOrder}}
                         <span class="inline-flex items-center gap-1">
                             <span class="w-2 h-2 rounded-sm inline-block" style="background: {{.Color}};"></span>
@@ -422,8 +422,8 @@
 
             <!-- Step Outcomes — reference panel (open when reviewing a finished execution) -->
             {{if .Outcomes}}
-            <details class="panel-ref overflow-hidden" {{if refOpen .Execution.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
-                <summary>{{template "sectionHeader" (dict "Title" "Step Outcomes" "MetaText" "output usability per step — the producer is blamed when a consumer can't read its output")}}</summary>
+            <details class="vk-disc" {{if refOpen .Execution.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Step Outcomes</h2><span class="vk-disc-meta">output usability per step — the producer is blamed when a consumer can't read its output</span></summary>
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead class="bg-surface-900/40 text-xs uppercase text-ink-500">
@@ -454,7 +454,7 @@
                                     {{else}}
                                     <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-surface-700 text-ink-300 ring-1 ring-surface-600">{{.Outcome}}</span>
                                     {{end}}
-                                    {{if .ErrorClass}}<div class="text-[10px] text-ink-500 mt-0.5 font-mono">{{.ErrorClass}}</div>{{end}}
+                                    {{if .ErrorClass}}<div class="text-xs text-ink-500 mt-0.5 font-mono">{{.ErrorClass}}</div>{{end}}
                                 </td>
                                 <td class="px-4 py-2 font-mono text-xs text-ink-400">{{if .AttributedToStepID}}{{.AttributedToStepID}}{{else}}—{{end}}</td>
                                 <td class="px-4 py-2 text-xs text-ink-400">{{.DurationDisplay}}</td>
@@ -488,11 +488,11 @@
                     <table class="min-w-full divide-y divide-surface-600/60">
                         <thead class="bg-surface-900/60">
                             <tr>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Step</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Severity</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Detector</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Claim</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Sentence</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Step</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Severity</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Detector</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Claim</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Sentence</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-surface-600/40">
@@ -512,7 +512,7 @@
                                 <td class="px-4 py-2 font-mono text-xs text-ink-400 align-top">{{$sig.Detector}}</td>
                                 <td class="px-4 py-2 text-xs text-ink-300 align-top">
                                     <div class="text-ink-200">{{$sig.ClaimType}}</div>
-                                    <div class="font-mono text-[11px] text-ink-400 break-all">{{$sig.ClaimValue}}</div>
+                                    <div class="font-mono text-xs text-ink-400 break-all">{{$sig.ClaimValue}}</div>
                                 </td>
                                 <td class="px-4 py-2 text-xs text-ink-400 max-w-md align-top" title="{{$sig.Detail}}">
                                     {{if $sig.Sentence}}{{$sig.Sentence}}{{else}}<span class="text-ink-600">—</span>{{end}}
@@ -568,10 +568,8 @@
             <!-- Result — reference panel (open when reviewing a finished execution) -->
             {{if .Execution.Result}}
             {{$r := parseResult .Execution.Result}}
-            <details class="panel-ref overflow-hidden" {{if refOpen .Execution.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
-                <summary>
-                    {{template "sectionHeader" (dict "Title" "Result")}}
-                </summary>
+            <details class="vk-disc" {{if refOpen .Execution.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Result</h2></summary>
                 <div class="px-5 pt-3 flex items-center gap-3 flex-wrap">
                     {{if $r.toolCount}}<span class="text-xs text-ink-500">{{$r.toolCount}} tool calls</span>{{end}}
                     {{if $r.duration}}<span class="text-xs text-ink-500">{{$r.duration}}s</span>{{end}}
@@ -593,8 +591,8 @@
                         </div>
                     </div>
                     {{end}}
-                    <details>
-                        <summary class="text-xs text-ink-500 cursor-pointer hover:text-ink-300 select-none">Raw JSON</summary>
+                    <details class="vk-disc vk-disc-row">
+                        <summary class="vk-disc-sum"><span class="vk-disc-title">Raw JSON</span></summary>
                         <pre class="text-xs text-ink-400 bg-surface-900 rounded-lg p-3 overflow-auto mt-2 max-h-[60vh] border border-surface-600/60">{{prettyJSON .Execution.Result}}</pre>
                     </details>
                 </div>
@@ -603,10 +601,8 @@
 
             <!-- Associated Task — reference panel (closed by default) -->
             {{if .Task}}
-            <details class="panel-ref overflow-hidden">
-                <summary>
-                    {{template "sectionHeader" (dict "Title" "Associated Task" "Href" (printf "/ui/tasks/%s" .Task.ID) "HrefLabel" "View task →")}}
-                </summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Associated Task</h2><a href="/ui/tasks/{{.Task.ID}}" class="text-xs text-ink-500 hover:text-ink-300">View task →</a></summary>
                 <div class="px-5 py-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <dl><dt class="text-xs text-ink-500 mb-1">Task ID</dt><dd class="text-sm text-ink-100 font-mono" title="{{.Task.ID}}">{{shortID .Task.ID}}</dd></dl>
                     <dl><dt class="text-xs text-ink-500 mb-1">Status</dt><dd class="mt-0.5">{{template "taskStatusBadge" .Task.Status}}</dd></dl>

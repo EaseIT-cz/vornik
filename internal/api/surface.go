@@ -28,6 +28,7 @@ const (
 	SurfaceSetupSession         Surface = "setup_session"
 	SurfaceSetupSessionRouter   Surface = "setup_session_router"
 	SurfaceSetupManaged         Surface = "setup_managed"
+	SurfaceSetupApply           Surface = "setup_apply" // GitHub #758; not granted
 	SurfaceConfigAssist         Surface = "config_assist"
 	SurfaceConfigShow           Surface = "config_show"
 	SurfaceInstinctRetireGlobal Surface = "instinct_retire_global"
@@ -49,6 +50,12 @@ const (
 	// un-namespaced secret:// references resolve to. Its gate is in the UI
 	// package (api.OperatorSurfaceAccessFor).
 	SurfaceOperatorCredentials Surface = "operator_credentials"
+	// SurfaceProjectKeys is the console's per-project keys page mutations
+	// (/ui/projects/{id}/keys POST: create, rotate, revoke, push toggles;
+	// GitHub #754, 18-security-and-tenancy.md "Amendment 2026-11-14
+	// (#754)"): the managed instance's owner, who has no shell, mints and
+	// revokes their own project keys. Its gate is in the UI package.
+	SurfaceProjectKeys Surface = "project_keys"
 )
 
 // tenantAdminSurfaces is the closed allowlist of B3: granted surfaces only.
@@ -61,6 +68,10 @@ var tenantAdminSurfaces = map[Surface]bool{
 	// (tenant_admin = the instance's owner); a multi-tenant instance
 	// (multi-tenancy design, Stage T) must revisit it.
 	SurfaceOperatorCredentials: true,
+	// GitHub #754: valid while managed mode is single-customer, as #623
+	// above (the owner's ["*"] is that customer's projects); a multi-tenant
+	// instance (Stage T) must revisit it.
+	SurfaceProjectKeys: true,
 }
 
 // TenantAdminMay reports whether a tenant_admin session may use surface.

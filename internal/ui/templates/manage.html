@@ -1,0 +1,24 @@
+{{define "manage.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    {{/* The Manage overview (ui-design-refresh-design.md §17.2 M1, #759):
+         one card per Manage page the viewer may open, decided on the server. */}}
+    <main id="main" tabindex="-1" class="flex-1 max-w-5xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <h1 class="text-2xl font-semibold text-gray-100">Manage</h1>
+        <p class="mt-1 text-gray-400">Everything you set up: your assistants, what they connect to, keys and your account.</p>
+        <div class="mt-6 grid gap-4 sm:grid-cols-2" data-block="manage-cards">
+            {{range .Cards}}
+            <a href="{{.Href}}" class="v-card block hover:border-brand-400" data-manage-card="{{.Key}}">
+                <h2 class="v-card__title">{{.Label}}</h2>
+                <p class="text-gray-400">{{.Purpose}}</p>
+            </a>
+            {{end}}
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

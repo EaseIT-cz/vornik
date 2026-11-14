@@ -6,6 +6,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -77,49 +78,60 @@ func cssDecl(t *testing.T, src, sel, prop string) string {
 	return strings.TrimSpace(regexp.MustCompile(`/\*.*?\*/`).ReplaceAllString(mm[1], ""))
 }
 
-// audit 2026-10-12 (GitHub #335 item 1): the no-backdrop-filter and
-// reduced-transparency fallbacks painted --glass-bg (white in BOTH themes) at
-// 0.92/0.96, so dark-theme glass turned near-white under light text (ink-100
-// 1.03:1). Every pinned text and control-border pair must hold on the
-// fallback, per theme.
-func TestPalette_GlassFallbackPerTheme(t *testing.T) {
+// Design system v2 part D (ui-design-refresh-design.md §12.2 D, #753):
+// .glass is the opaque card. Before #753 it was translucent white at 0.60
+// (light) and 0.12 (dark) over a 12px backdrop blur, with two fallbacks
+// (no backdrop-filter, reduced transparency) that GitHub #335 item 1 had to
+// repair. With an opaque surface the fallbacks have nothing to do, so they
+// are gone, and every pair pinned on surface-800 holds on glass by
+// construction.
+func TestPalette_GlassIsFlat_753(t *testing.T) {
 	src := partials(t)
-	fallbacks := map[string]string{}
-	for name, open := range map[string]string{
-		"no backdrop-filter":   "@supports not (backdrop-filter",
-		"reduced transparency": "@media (prefers-reduced-transparency: reduce)",
-	} {
-		i := strings.Index(src, open)
-		if i < 0 {
-			t.Fatalf("fallback %q not found", name)
+	for _, gone := range []string{"@supports not (backdrop-filter", "prefers-reduced-transparency", "backdrop-filter: blur"} {
+		if strings.Contains(src, gone) {
+			t.Errorf("_partials.html still has %q; .glass is opaque", gone)
 		}
-		mm := regexp.MustCompile(`\.glass\s*\{[^}]*?background:\s*([^;]+);`).FindStringSubmatch(src[i:])
-		if mm == nil {
-			t.Fatalf("fallback %q sets no .glass background", name)
-		}
-		fallbacks[name] = mm[1]
+	}
+	rule := regexp.MustCompile(`\.glass\s*\{[^}]*\}`).FindString(src)
+	if rule == "" {
+		t.Fatal(".glass rule not found")
+	}
+	if strings.Contains(rule, "box-shadow") || strings.Contains(rule, "backdrop") {
+		t.Errorf(".glass keeps a shadow or blur: %s", rule)
 	}
 	for theme, header := range themeHeaders {
 		m := themeTokens(t, src, header)
-		g := strings.Index(src, "Glass surface system")
-		for k, v := range themeTokens(t, src[g:], header) {
-			m[k] = v
-		}
-		for fname, val := range fallbacks {
-			c, a := cssColour(t, val, m)
-			for _, base := range []string{"surface-900", "surface-800"} {
-				fill := over(c, m[base], a)
-				for _, ink := range []string{"ink-100", "ink-200", "ink-300", "ink-400", "ink-500"} {
-					if got := contrast(m[ink], fill); got < 4.5 {
-						t.Errorf("%s: %s text on %s fallback over %s = %.2f:1, want >= 4.5:1", theme, ink, fname, base, got)
-					}
-				}
-				if got := contrast(m["control-border"], fill); got < 3 {
-					t.Errorf("%s: control-border on %s fallback over %s = %.2f:1, want >= 3:1", theme, fname, base, got)
-				}
-			}
+		gbg, ga := glass(t, src, header)
+		if ga != 1 || gbg != m["surface-800"] {
+			t.Errorf("%s: glass fill %v at %.2f, want surface-800 %v at 1", theme, gbg, ga, m["surface-800"])
 		}
 	}
+	// The border is the card hairline in both themes (it was translucent
+	// white before #753, invisible on the opaque light card).
+	g := strings.Index(src, "Glass surface system")
+	if n := strings.Count(src[g:], "--glass-border: rgb(var(--surface-600));"); n != 2 {
+		t.Errorf("--glass-border should be rgb(var(--surface-600)) in both themes; found %d", n)
+	}
+}
+
+// No template may still read a glass token #753 part D deleted: the
+// declaration would be silently invalid.
+func TestPalette_NoDeletedGlassTokens_753(t *testing.T) {
+	files, err := filepath.Glob("templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`var\(--glass-(blur|shadow|inner)\)`)
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := re.FindString(string(raw)); m != "" {
+			t.Errorf("%s reads %s, deleted in #753 part D", f, m)
+		}
+	}
+	t.Logf("examined %d templates", len(files))
 }
 
 // glassComposites returns .glass over page and over card for a theme.

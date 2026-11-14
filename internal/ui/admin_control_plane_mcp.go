@@ -13,7 +13,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/mcp"
 
 	"gopkg.in/yaml.v3"
 
@@ -107,6 +109,12 @@ func validMCPEndpoint(transport, url, command string) error {
 	return nil
 }
 
+// WithMCPRefusals wires the hub's "Refused at registration" list (GitHub #625
+// item 5; agent-administered design, "Follow-up 2026-11-12 (#625 item 5)").
+func WithMCPRefusals(src func() []mcp.Refusal) ServerOption {
+	return func(s *Server) { s.mcpRefusals = src }
+}
+
 // buildCPMCP fills the MCP tab's list from the cached registry snapshot (no
 // live probe on load — the badge is last-known status).
 func (s *Server) buildCPMCP(ctx context.Context, data *AdminControlPlaneData) {
@@ -119,6 +127,9 @@ func (s *Server) buildCPMCP(ctx context.Context, data *AdminControlPlaneData) {
 				}
 			}
 		}
+	}
+	if s.mcpRefusals != nil {
+		data.MCPRefused = s.mcpRefusals()
 	}
 	if s.mcpRegistry == nil {
 		return

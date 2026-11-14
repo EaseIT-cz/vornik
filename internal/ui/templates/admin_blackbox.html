@@ -64,7 +64,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-4 py-2.5 border-b border-dark-700/60 flex items-center gap-3">
                     <div class="text-xs uppercase tracking-wider text-gray-500">Workflow-healing triggers</div>
-                    <span class="text-[10px] text-gray-600">Phase B — hourly regression detector</span>
+                    <span class="text-xs text-gray-600">Phase B — hourly regression detector</span>
                     <a href="/ui/admin/blackbox/overrides" class="text-xs text-gray-400 hover:text-gray-200 ml-auto">Overrides →</a>
                 </div>
                 {{if .Triggers}}
@@ -73,14 +73,14 @@
                 <div class="overflow-x-auto">
                     <table class="min-w-full">
                         <thead><tr class="border-b border-dark-700/60">
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" data-on-click="check-all" data-name="ids" aria-label="Select all"></th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Project / Workflow</th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Class</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Baseline → Comparison</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Δ</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Opened</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider"><span class="sr-only">Detail</span></th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" data-on-click="check-all" data-name="ids" aria-label="Select all"></th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project / Workflow</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Class</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Baseline → Comparison</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Δ</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Opened</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"><span class="sr-only">Detail</span></th>
                         </tr></thead>
                         <tbody class="divide-y divide-dark-700/40">
                             {{range .Triggers}}
@@ -95,9 +95,9 @@
                                 <td class="px-4 py-2 whitespace-nowrap">
                                     <a href="/ui/admin/blackbox/triggers/{{.ID}}" class="inline-block hover:opacity-80">
                                     {{if .IsOpen}}
-                                    <span class="px-1.5 py-0.5 text-[10px] font-mono rounded ring-1 ring-amber-700/50 bg-amber-900/30 text-amber-600 dark:text-amber-200">{{.Status}}</span>
+                                    <span class="px-1.5 py-0.5 text-xs font-mono rounded ring-1 ring-amber-700/50 bg-amber-900/30 text-amber-600 dark:text-amber-200">{{.Status}}</span>
                                     {{else}}
-                                    <span class="px-1.5 py-0.5 text-[10px] font-mono rounded ring-1 ring-dark-600 bg-dark-700 text-gray-400">{{.Status}}</span>
+                                    <span class="px-1.5 py-0.5 text-xs font-mono rounded ring-1 ring-dark-600 bg-dark-700 text-gray-400">{{.Status}}</span>
                                     {{end}}
                                     </a>
                                 </td>
@@ -117,7 +117,7 @@
                                     <span class="text-emerald-700 dark:text-emerald-300">{{printf "%.1f" .DeltaPct}}%</span>
                                     {{end}}
                                 </td>
-                                <td class="px-4 py-2 text-[10px] font-mono text-right text-gray-500">{{.CreatedAt}}</td>
+                                <td class="px-4 py-2 text-xs font-mono text-right text-gray-500">{{.CreatedAt}}</td>
                                 <td class="px-4 py-2 text-right">
                                     <a href="/ui/admin/blackbox/triggers/{{.ID}}" class="text-xs text-brand-400 hover:text-brand-300">Open →</a>
                                 </td>

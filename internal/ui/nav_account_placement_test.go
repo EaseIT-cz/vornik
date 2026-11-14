@@ -47,12 +47,15 @@ func navDestByKey(t *testing.T, key string) navDest {
 
 func TestNav_MyAccountLivesWithTheOtherIdentitySurfaces(t *testing.T) {
 	area := navDestArea(t, "my-account")
-	if area.Key != "admin" {
-		t.Errorf("My account is in the %q area, want %q — Steer is live control of running work", area.Key, "admin")
+	// Since #755 the identity surfaces sit in Manage: My account beside
+	// Keys & access. Control plane moved to the operator console with the
+	// other daemon-wide surfaces (design §13.2).
+	if area.Key != "manage" {
+		t.Errorf("My account is in the %q area, want %q — Diagnostics is live control of running work", area.Key, "manage")
 	}
-	// Same area as the surfaces the operator named, so the grouping is the
-	// property under test rather than one entry's coordinates.
-	for _, sibling := range []string{"admin-keys", "admin-control-plane"} {
+	// Same area as the identity surface the operator named, so the grouping
+	// is the property under test rather than one entry's coordinates.
+	for _, sibling := range []string{"admin-keys"} {
 		if got := navDestArea(t, sibling).Key; got != area.Key {
 			t.Errorf("%s is in area %q but My account is in %q", sibling, got, area.Key)
 		}

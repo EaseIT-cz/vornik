@@ -27,6 +27,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/fieldguard"
@@ -907,6 +908,23 @@ func validateProjectConfigFormNumbers(r *http.Request) error {
 		if err := validateOptionalFormFloat(r, field); err != nil {
 			return err
 		}
+	}
+	// GitHub #750: a duration the autonomy manager cannot use ("20", "0s")
+	// was saved, and the manager silently polled every 5 minutes.
+	return validateOptionalFormDuration(r, "autonomy_pollInterval")
+}
+
+// validateOptionalFormDuration refuses a non-empty duration field that
+// time.ParseDuration rejects or that is zero or less: the two cases the
+// autonomy manager falls back to its default on (web-ui-design.md, "The
+// settings page refuses a duration with no unit"). Empty means the default.
+func validateOptionalFormDuration(r *http.Request, field string) error {
+	raw := strings.TrimSpace(r.FormValue(field))
+	if raw == "" {
+		return nil
+	}
+	if d, err := time.ParseDuration(raw); err != nil || d <= 0 {
+		return fmt.Errorf("%s must be a positive duration with a unit, such as 20m or 1h", field)
 	}
 	return nil
 }

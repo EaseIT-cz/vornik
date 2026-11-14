@@ -13,7 +13,7 @@ import (
 // LeaderLockRepository implements
 // persistence.DaemonLeaderLockRepository against SQLite.
 //
-// SQLite is single-process so there's never real multi-replica
+// SQLite is usually single-process so there's rarely real multi-replica
 // contention, but we persist the row so:
 //   - Get/List work for diagnostics without special-casing.
 //   - The epoch fence token is monotonic and can be tested with
@@ -109,16 +109,37 @@ ON CONFLICT (worker_id) DO UPDATE SET
 	return true, newEpoch, nil
 }
 
-// Renew extends the lease only when holderID still matches the
-// row's holder. Always succeeds in single-process, but honours
-// the interface contract.
-func (r *LeaderLockRepository) Renew(_ context.Context, _, _ string, _ time.Time, _ time.Duration) (bool, error) {
-	return true, nil
+// Renew extends the lease only when holderID still matches the row's holder,
+// as on Postgres (GitHub #199). It used to answer true and change nothing, so
+// the elector's renewals left expires_at at the first acquire plus one TTL: a
+// live leader's lease read as expired, and DeleteExpired would remove it.
+func (r *LeaderLockRepository) Renew(ctx context.Context, workerID, holderID string, now time.Time, ttl time.Duration) (bool, error) {
+	if workerID == "" || holderID == "" {
+		return false, fmt.Errorf("leader_lock sqlite: workerID + holderID required")
+	}
+	if ttl <= 0 {
+		return false, fmt.Errorf("leader_lock sqlite: ttl must be positive")
+	}
+	const q = `UPDATE daemon_leader_locks SET renewed_at = ?, expires_at = ? WHERE worker_id = ? AND holder_id = ?`
+	res, err := r.db.ExecContext(ctx, q, sqliteTime(now), sqliteTime(now.Add(ttl)), workerID, holderID)
+	if err != nil {
+		return false, fmt.Errorf("leader_lock sqlite: renew: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("leader_lock sqlite: renew rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
-// Release is a no-op for the SQLite single-process deployment.
-// The daemon never has a successor to hand off to.
-func (r *LeaderLockRepository) Release(_ context.Context, _, _ string) error {
+// Release ends holderID's lease now, so a successor (another profile on the
+// same database, or this daemon's next start) need not wait out the TTL. A
+// release by a non-holder changes nothing. As on Postgres (GitHub #199).
+func (r *LeaderLockRepository) Release(ctx context.Context, workerID, holderID string) error {
+	const q = `UPDATE daemon_leader_locks SET expires_at = ? WHERE worker_id = ? AND holder_id = ?`
+	if _, err := r.db.ExecContext(ctx, q, sqliteTime(time.Now()), workerID, holderID); err != nil {
+		return fmt.Errorf("leader_lock sqlite: release: %w", err)
+	}
 	return nil
 }
 

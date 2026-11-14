@@ -11,7 +11,7 @@
                 <div>
                     <h1 class="text-xl font-semibold text-gray-100">Workflow — schema</h1>
                     <p class="text-xs text-gray-500 font-mono mt-1">{{.WorkflowID}}{{if .WorkflowPath}} · {{.WorkflowPath}}{{end}}</p>
-                    <p class="text-[11px] text-gray-500 mt-1">Every workflow + step parameter, rendered from the curated field schema. Terminals stay in raw YAML.</p>
+                    <p class="text-xs text-gray-500 mt-1">Every workflow + step parameter, rendered from the curated field schema. Terminals stay in raw YAML.</p>
                 </div>
                 <div class="flex items-center gap-3 text-sm">
                     <a href="/ui/workflows/{{.WorkflowID}}/graph" class="text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">View graph →</a>
@@ -39,9 +39,9 @@
             <form method="POST" action="/ui/workflows/{{.WorkflowID}}/schema" class="space-y-5" data-on-submit="wfRenumberCards">
                 {{range .TopSections}}
                 <details class="rounded-xl border border-dark-700 bg-dark-800/60" {{if not .Advanced}}open{{end}}>
-                    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-gray-200">{{.Title}}{{if .Advanced}} <span class="text-[10px] uppercase tracking-wide text-gray-500 font-normal">advanced</span>{{end}}</summary>
+                    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-gray-200">{{.Title}}{{if .Advanced}} <span class="text-xs uppercase tracking-wide text-gray-500 font-normal">advanced</span>{{end}}</summary>
                     <div class="px-4 pb-4 pt-1 space-y-4">
-                        {{if .Help}}<p class="text-[11px] text-gray-400 -mt-1">{{.Help}}</p>{{end}}
+                        {{if .Help}}<p class="text-xs text-gray-400 -mt-1">{{.Help}}</p>{{end}}
                         {{range .Rows}}{{template "schemaRow" .}}{{end}}
                     </div>
                 </details>
@@ -51,7 +51,7 @@
                     <div class="flex items-center justify-between gap-3">
                         <div>
                             <h3 class="text-sm font-semibold text-gray-200">{{.StepsTitle}}</h3>
-                            {{if .StepsHelp}}<p class="text-[11px] text-gray-400 mt-1">{{.StepsHelp}}</p>{{end}}
+                            {{if .StepsHelp}}<p class="text-xs text-gray-400 mt-1">{{.StepsHelp}}</p>{{end}}
                         </div>
                         <button type="button" id="add-step"
                                 data-card-url="/ui/workflows/{{.WorkflowID}}/schema/step"

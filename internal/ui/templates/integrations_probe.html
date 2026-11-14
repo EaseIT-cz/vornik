@@ -19,7 +19,7 @@
     <p class="font-medium">Couldn't reach the provider — try again{{if .Result.Detail}}: {{.Result.Detail}}{{end}}</p>
     {{end}}
     {{if .Result.Failures}}
-    <ul class="mt-1 space-y-0.5 text-[11px] opacity-80">
+    <ul class="mt-1 space-y-0.5 text-xs opacity-80">
         {{range .Result.Failures}}<li>{{if .Field}}{{.Field}}: {{end}}{{.Reason}}</li>{{end}}
     </ul>
     {{end}}

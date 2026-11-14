@@ -141,7 +141,7 @@ func TestDashboard_RendersWithTaskCountsAndActive(t *testing.T) {
 	srv := NewServer(WithTaskRepository(taskRepo), WithOnboardingDetector(alreadyOnboardedDetector()))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
+	srv.DiagnosticsOverview(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	assert.Contains(t, body, "task_run_1")
@@ -179,7 +179,7 @@ func TestDashboard_WithActiveChatCount(t *testing.T) {
 	srv := NewServer(WithActiveChatSource(&fakeActiveChatSource{count: 5}), WithOnboardingDetector(alreadyOnboardedDetector()))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
+	srv.DiagnosticsOverview(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	// The count "5" should appear somewhere in the body.
 	assert.Contains(t, rec.Body.String(), ">5<", "active chat count should render")
@@ -251,7 +251,7 @@ func TestDashboard_LimitParamHonoured(t *testing.T) {
 	srv := NewServer(WithTaskRepository(taskRepo), WithOnboardingDetector(alreadyOnboardedDetector()))
 	req := httptest.NewRequest(http.MethodGet, "/?limit=10", nil)
 	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
+	srv.DiagnosticsOverview(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	// limit=10 → page-size selector shows 10 selected.
 	assert.Contains(t, rec.Body.String(), `value="10" selected`)

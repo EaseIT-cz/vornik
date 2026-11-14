@@ -59,7 +59,7 @@ func perfBrokerStub(t *testing.T) *httptest.Server {
 func perfProject(url string) *registry.Project {
 	return &registry.Project{
 		ID:  "p1",
-		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", URL: url}}},
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: url}}},
 	}
 }
 

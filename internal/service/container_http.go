@@ -329,6 +329,9 @@ func (c *Container) initHTTPServer() error {
 	if c.Config != nil {
 		apiOpts = append(apiOpts, api.WithAdminClassKeys(c.Config.Admin))
 	}
+	if c.restartRequest != nil {
+		apiOpts = append(apiOpts, api.WithRestartRequester(c.restartRequest))
+	}
 	// Edition gate (outer) — Admin interfaces. Both initHTTPServer passes
 	// run this same function body, so the gate covers both automatically.
 	// The log fires only on the first pass (adminCapabilityLogged guard).
@@ -2534,6 +2537,13 @@ func (c *Container) initHTTPServer() error {
 	// dispatcher is wired.
 	if c.Dispatcher != nil {
 		uiOpts = append(uiOpts, ui.WithChatDispatcher(c.Dispatcher))
+		// A web chat turn outlives its request; the deploy idle gate must
+		// still wait for it (web-chat-design.md §2.3).
+		if c.apiServer != nil {
+			uiOpts = append(uiOpts, ui.WithLongWorkTracker(c.apiServer.TrackLongWork))
+		} else {
+			c.Logger.Error().Msg("web chat: no API server to count its turns; the deploy idle gate will not wait for a running web chat turn")
+		}
 		uiOpts = append(uiOpts, ui.WithAIDisclosure(c.AIDisclosure))
 		// Web chat is a ChannelReceiver like the other four: it owes the same
 		// Art 50 observability and the same media-perception rules.
@@ -2625,6 +2635,11 @@ func (c *Container) initHTTPServer() error {
 		// atomic.Pointer.Store (companion review 2026-07-10, IMPORTANT
 		// #1) — see the field's doc comment on Container.
 		c.uiServer.Store(uiServer)
+		// The dispatcher's status lines for web chat turns reach their page
+		// through the UI's turn registry (web-chat-design.md §2.3).
+		if c.turnStatus != nil {
+			c.turnStatus.setWebChatSink(uiServer)
+		}
 		uiHandler := wrapUIAdminGate(
 			c.Logger.With().Str("component", "ui").Logger(),
 			c.Config.Admin,
@@ -2925,6 +2940,7 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 	// The console's credentials page (GitHub #623). Always wired: the store is
 	// created on the first write when no key exists yet.
 	opts = append(opts, ui.WithOperatorCredentials(c.newOperatorCredentials()))
+	opts = append(opts, ui.WithMCPRefusals(c.mcpRefusals)) // GitHub #625 item 5
 	return opts
 }
 

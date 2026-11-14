@@ -136,3 +136,21 @@ func TestHintLayerIsNotClippedByItsCard(t *testing.T) {
 		t.Fatalf("the layer at 390px: %s", out)
 	}
 }
+
+// The ⓘ icon is drawn once, in CSS, not repeated as an inline SVG in every
+// hint (web-ui-design.md #748 E: 71 hints, 27.7 KB on a settings page).
+func TestHintIconIsACSSMaskNotAnInlineSVG(t *testing.T) {
+	page := openHintPage(t)
+	var got string
+	if err := page.eval(`(() => {
+		const b = document.querySelector('#a .vk-hint-btn');
+		const st = getComputedStyle(b, '::before');
+		const mask = st.webkitMaskImage || st.maskImage || '';
+		return (b.querySelector('svg') ? 'svg' : 'nosvg') + ' ' + (parseFloat(st.width) > 0 && parseFloat(st.height) > 0) + ' ' + (mask.indexOf('url(') === 0);
+	})()`, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "nosvg true true" {
+		t.Errorf("hint icon: got %q, want \"nosvg true true\" (no inline svg; a sized ::before with a mask)", got)
+	}
+}

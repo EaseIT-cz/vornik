@@ -451,18 +451,21 @@ func isClosedPredicate(p string) bool {
 // predicateColour returns a stable colour for an edge by predicate.
 // Free-form predicates render gray (matching the LLD §7.3 spec).
 func predicateColour(predicate string, closed bool) string {
+	// Returns a chart stroke class, not a colour (#757: the subgraph's
+	// colours follow the theme's chart tokens). Free-form predicates are
+	// muted; the closed vocabulary takes series colours.
 	if !closed {
-		return "#6b7280" // gray-500
+		return "c-stroke-muted"
 	}
 	switch strings.ToUpper(predicate) {
 	case persistence.PredicateDependsOn, persistence.PredicateRelatesTo:
-		return "#34d399" // emerald-400
+		return "c-stroke-s3"
 	case persistence.PredicateOwnedBy, persistence.PredicateChosenOver:
-		return "#a78bfa" // violet-400
+		return "c-stroke-s4"
 	case persistence.PredicateHasDeadline, persistence.PredicateQuotedPrice:
-		return "#fbbf24" // amber-400
+		return "c-stroke-s2"
 	}
-	return "#60a5fa" // blue-400 (other closed-vocab)
+	return "c-stroke-s1" // other closed-vocab
 }
 
 // decodeJSONStringArray parses a JSONB string array (aliases) into a

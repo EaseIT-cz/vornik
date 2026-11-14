@@ -149,8 +149,11 @@ if [ "$sweep_rc" -ne 0 ]; then
   echo "service-shard-lane: SWEEP FAILED (rc=$sweep_rc) — its output:" >&2
   cat "$TMPD/sweep.log" >&2
 elif [ -s "$TMPD/sweep.log" ]; then
-  # keep the operator informed without dumping a full -v sweep on success
-  grep -E '^(ok|FAIL|---)' "$TMPD/sweep.log" | tail -5 | sed 's/^/  sweep: /'
+  # The whole sweep, as the shards print theirs: make test's summary counts
+  # packages and tests from this output, and a five-line tail made a green
+  # stamp report 1,656 tests where ~35,000 had run, unable to tell a full
+  # sweep from an empty one (AGENTS.md §4; gate stamp at 7134fb2c5).
+  cat "$TMPD/sweep.log"
 fi
 
 if [ "$rc" -ne 0 ]; then

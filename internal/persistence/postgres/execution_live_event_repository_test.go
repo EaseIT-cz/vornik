@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 // TestLiveEvent_Append_AllocatesSeq: the headline contract —
@@ -152,5 +153,41 @@ func TestLiveEvent_DeleteOlderThan_FiresPrune(t *testing.T) {
 	}
 	if n != 42 {
 		t.Errorf("rows removed = %d, want 42", n)
+	}
+}
+
+// GitHub #662: a duplicate on idx_live_events_execution_seq (two appends read
+// the same MAX(seq)) is retried with a fresh MAX; any other error is not.
+func TestLiveEvent662_DuplicateSeqIsRetried(t *testing.T) {
+	db, mock, cleanup := newMockDBTX(t)
+	defer cleanup()
+	repo := NewExecutionLiveEventRepository(db)
+	dup := &pq.Error{Code: "23505", Constraint: "idx_live_events_execution_seq"}
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO execution_live_events")).WillReturnError(dup)
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO execution_live_events")).
+		WillReturnRows(sqlmock.NewRows([]string{"seq"}).AddRow(int64(7)))
+	seq, err := repo.Append(context.Background(), "exec-662", "narration_line", nil)
+	if err != nil {
+		t.Fatalf("Append after one duplicate: %v", err)
+	}
+	if seq != 7 {
+		t.Errorf("seq = %d, want 7", seq)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestLiveEvent662_OtherErrorsAreNotRetried(t *testing.T) {
+	db, mock, cleanup := newMockDBTX(t)
+	defer cleanup()
+	repo := NewExecutionLiveEventRepository(db)
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO execution_live_events")).
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "some_other_index"})
+	if _, err := repo.Append(context.Background(), "exec-662", "narration_line", nil); err == nil {
+		t.Fatal("a violation of another constraint was retried into success")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }

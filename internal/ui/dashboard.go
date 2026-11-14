@@ -100,6 +100,14 @@ type DashboardData struct {
 	// stay empty and the page says why.
 	GlanceRestricted bool
 
+	// The home page's own blocks (#756, design §14.2), filled by loadHome.
+	Greeting       string
+	StatusLine     string
+	DoneToday      int64
+	DoneTodayShown bool
+	NextScheduled  *AutonomyProjectETA
+	RecentDone     []homeRecent
+
 	// IsSession is true when the request authenticated via a browser
 	// session cookie (github-login phase 3). Drives the nav logout
 	// button — api-key callers have no session to revoke. Read by the
@@ -146,9 +154,9 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	data := DashboardData{
-		Title:       "Overview",
+		Title:       "Home",
 		CurrentPage: "dashboard",
-		IsSession:   api.SessionRoleFromContext(r.Context()) != "",
+		IsSession:   requestIsSession(r),
 	}
 
 	// 1. Needs you: the inbox's own rows and count (one implementation).
@@ -184,7 +192,7 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data.AllClear = nothingWaits && noDoctorErrors && healthy
 
 	// 3. At a glance: the statistics, below (§D).
-	s.loadGlance(ctx, r, &data)
+	s.loadHome(ctx, r, &data)
 
 	s.render(w, "dashboard.html", data)
 }
@@ -315,4 +323,28 @@ func sparklinePoints(values []float64, width, height int) (line, filled string) 
 	// a filled region instead of a stroke.
 	fmt.Fprintf(&fb, " %d,%d 0,%d", width, height, height)
 	return lb.String(), fb.String()
+}
+
+// DiagnosticsOverview serves /ui/diagnostics: the At-a-glance tiles that
+// lived on the home page before #756, moved unchanged (§14.2). Every session
+// may open it: loadGlance withholds instance-wide figures from a
+// project-scoped session and the page says why. It lives beside Dashboard
+// so the session-role read stays in one census-listed file (LLD 18 L2a).
+func (s *Server) DiagnosticsOverview(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	data := DashboardData{
+		Title:       "Diagnostics",
+		CurrentPage: "diagnostics-overview",
+		IsSession:   requestIsSession(r),
+	}
+	s.loadGlance(ctx, r, &data)
+	s.render(w, "diagnostics_overview.html", data)
+}
+
+// requestIsSession reports whether the request came with a browser session
+// (drives the nav's sign-out control). One read site for both pages in this
+// file, so the session-role census (LLD 18 L2a) is unchanged by #756.
+func requestIsSession(r *http.Request) bool {
+	return api.SessionRoleFromContext(r.Context()) != ""
 }

@@ -270,10 +270,18 @@ func (c *Container) chatCompletionSink() executor.CompletionNotifier {
 		// the breakage. This path sends a plain composed notice with no LLM turn
 		// and resolves the origin from the DB, which is what makes it survive
 		// both a restart and a degraded model.
-		map[string]bool{"slack": true, "email": true},
+		chatCompletionChannels,
 		c.Logger.With().Str("component", "chat-completion").Logger(),
 	)
 	n.disclosure = c.AIDisclosure
 	n.taskTextScrub = c.taskTextScrubber()
 	return n
 }
+
+// chatCompletionChannels are the channels the chat-completion notifier speaks
+// for (see newChatCompletionNotifier's comments for why Telegram is not one).
+// Slack and email implement conversation.LaterDeliveryChannel as true;
+// Telegram does too, but announces through its own follow-up path, so it is
+// not listed here. TestLaterDelivery_MatchesTheDeliveryPaths_WebChat pins
+// both sets.
+var chatCompletionChannels = map[string]bool{"slack": true, "email": true}

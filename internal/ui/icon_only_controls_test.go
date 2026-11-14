@@ -47,6 +47,7 @@ const (
 	bdModalGlass backdrop = "glass over black/60 over page"
 	bdSheetGlass backdrop = "glass over black/50 over page"
 	bdBrand500   backdrop = "brand-500"
+	bdBrand600   backdrop = "brand-600"
 )
 
 func resolveBackdrop(t *testing.T, b backdrop, m map[string]rgb, gbg rgb, ga float64) rgb {
@@ -70,6 +71,8 @@ func resolveBackdrop(t *testing.T, b backdrop, m map[string]rgb, gbg rgb, ga flo
 		return over(gbg, over(black, m["surface-900"], .5), ga)
 	case bdBrand500:
 		return m["brand-500"]
+	case bdBrand600:
+		return m["brand-600"]
 	}
 	t.Fatalf("unknown backdrop %q", b)
 	return rgb{}
@@ -108,6 +111,11 @@ var iconOnlyTable = []iconOnly{
 	{"task_detail.html", `title="Download"`, "", []glyphPair{{"", bdRaised}}},
 	// .fab: white on brand-500.
 	{"tasks.html", `aria-label="Create new task"`, "fab", []glyphPair{{"white", bdBrand500}}},
+	// Web chat (web-chat-design.md §2.1): the round send button is the
+	// primary button, white on brand-600; Copy under a reply is the quiet
+	// button, brand-400 on the page.
+	{"chat.html", `data-chat-send aria-label="Send"`, "v-btn--primary", []glyphPair{{"white", bdBrand600}}},
+	{"chat.html", `data-chat-copy aria-label="Copy reply"`, "v-btn--quiet", []glyphPair{{"brand-400", bdPage}}},
 }
 
 // ioRestText is an UNPREFIXED text colour class: a variant (hover:, dark:)

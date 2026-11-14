@@ -39,14 +39,16 @@ func TestNavPartial_IsAdminFlag(t *testing.T) {
 			// `hidden` when the caller is an admin.
 			name:        "IsAdmin=true renders Admin link visible",
 			data:        fixture{IsAdmin: true, CurrentPage: "dashboard"},
-			wantContain: `data-admin-link class="rail-ico`,
-			wantAbsent:  `data-admin-link class="hidden `,
+			wantContain: `data-admin-link class="rail-ico`, // the operator console rail icon (#755)
+			wantAbsent: `data-rail="operator"
+           data-admin-link class="hidden `,
 		},
 		{
 			name:        "IsAdmin=false renders Admin link hidden",
 			data:        fixture{IsAdmin: false, CurrentPage: "dashboard"},
-			wantContain: `data-admin-link class="hidden `,
-			wantAbsent:  `data-admin-link class="rail-ico`,
+			wantContain: `data-admin-link class="hidden rail-ico`,
+			wantAbsent: `data-rail="operator"
+           data-admin-link class="rail-ico`,
 		},
 	}
 

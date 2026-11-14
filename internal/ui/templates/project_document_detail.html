@@ -33,9 +33,9 @@
                     <div><dt class="text-gray-500">MIME type</dt><dd class="font-mono text-gray-300">{{.Document.MimeType}}</dd></div>
                     <div><dt class="text-gray-500">Extractor</dt><dd class="font-mono text-gray-300">{{.Document.ExtractorName}} v{{.Document.ExtractorVersion}}</dd></div>
                     <div><dt class="text-gray-500">Status</dt><dd>
-                        {{if eq .Document.Status "OK"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/40">OK</span>
-                        {{else if eq .Document.Status "PARTIAL"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-600/40">PARTIAL</span>
-                        {{else if eq .Document.Status "FAILED"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-600/40">FAILED</span>
+                        {{if eq .Document.Status "OK"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/40">OK</span>
+                        {{else if eq .Document.Status "PARTIAL"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-600/40">PARTIAL</span>
+                        {{else if eq .Document.Status "FAILED"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-600/40">FAILED</span>
                         {{else}}<span class="text-gray-400">{{.Document.Status}}</span>{{end}}
                     </dd></div>
                     {{if .Document.Publisher}}<div><dt class="text-gray-500">Publisher</dt><dd class="text-gray-300">{{.Document.Publisher}}</dd></div>{{end}}
@@ -45,7 +45,7 @@
                     <div><dt class="text-gray-500">Sections</dt><dd class="tabular-nums text-gray-300">{{.Document.SectionCount}}</dd></div>
                     <div><dt class="text-gray-500">Total text</dt><dd class="tabular-nums text-gray-300">{{humanizeSize .Document.TotalTextBytes}}</dd></div>
                     <div><dt class="text-gray-500">Extracted</dt><dd class="text-gray-300" title="{{.Document.ExtractedAtAbsolute}}">{{.Document.ExtractedAtDisplay}}</dd></div>
-                    <div class="sm:col-span-2"><dt class="text-gray-500">Storage path</dt><dd class="font-mono text-gray-400 break-all text-[10px]">{{.StoragePath}}</dd></div>
+                    <div class="sm:col-span-2"><dt class="text-gray-500">Storage path</dt><dd class="font-mono text-gray-400 break-all text-xs">{{.StoragePath}}</dd></div>
                 </dl>
                 <div class="mt-4 flex gap-2 flex-wrap">
                     {{if .CanReExtract}}
@@ -82,12 +82,12 @@
                         {{range $idx, $s := .Outline}}
                             <tr class="border-b border-dark-700/50 text-gray-200">
                                 <td class="px-4 py-2 tabular-nums text-gray-500">{{add $idx 1}}</td>
-                                <td class="px-4 py-2 font-mono text-[10px] text-gray-400">{{$s.SectionID}}</td>
+                                <td class="px-4 py-2 font-mono text-xs text-gray-400">{{$s.SectionID}}</td>
                                 <td class="px-4 py-2 text-gray-200">
                                     {{if gt $s.Depth 0}}<span class="text-gray-600">{{indentDots $s.Depth}}</span> {{end}}{{$s.Title}}
                                 </td>
                                 <td class="px-4 py-2 tabular-nums text-gray-400 text-right">{{humanizeBytes $s.TextBytes}}</td>
-                                <td class="px-4 py-2 text-gray-500 text-right text-[10px]">
+                                <td class="px-4 py-2 text-gray-500 text-right text-xs">
                                     {{if $s.PageStart}}p.{{$s.PageStart}}{{else if $s.TimestampStartSec}}@{{$s.TimestampStartSec}}s{{else}}—{{end}}
                                 </td>
                             </tr>

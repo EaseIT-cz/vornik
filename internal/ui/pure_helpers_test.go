@@ -18,17 +18,19 @@ import (
 // scatter relies on stable hex values — a regression here would
 // silently desync the legend dots from the scatter points.
 func TestClassColour(t *testing.T) {
+	// Fill classes on the chart tokens (#759 M3), not hex: a var() in an
+	// SVG fill attribute is dropped by the browser.
 	cases := map[string]string{
-		"research":       "#60a5fa",
-		"spec":           "#34d399",
-		"decision":       "#a78bfa",
-		"commit_msg":     "#fbbf24",
-		"diagnostic":     "#f87171",
-		"external_fetch": "#1C7ED6",
-		"summary":        "#fb923c",
-		"unclassified":   "#94a3b8",
-		"weird_new":      "#6b7280", // unknown → gray fallback
-		"":               "#6b7280",
+		"research":       "c-s1",
+		"spec":           "c-s3",
+		"decision":       "c-s4",
+		"commit_msg":     "c-s2",
+		"diagnostic":     "c-danger",
+		"external_fetch": "c-fill-brand",
+		"summary":        "c-warn",
+		"unclassified":   "c-fill-muted",
+		"weird_new":      "c-s5", // unknown: the neutral series
+		"":               "c-s5",
 	}
 	for class, want := range cases {
 		if got := classColour(class); got != want {
@@ -37,19 +39,18 @@ func TestClassColour(t *testing.T) {
 	}
 }
 
-// TestStatusStrokeColour pins the scatter-ring-by-status palette.
-// "transparent" for the default path means unverified points
-// render without a ring; verified/superseded/refuted/legacy each
-// get their own hex.
+// TestStatusStrokeColour pins the scatter-ring-by-status classes. An empty
+// class for the default path means unverified points render without a
+// ring, as "transparent" did before #759.
 func TestStatusStrokeColour(t *testing.T) {
 	cases := map[string]string{
-		"verified":   "#10b981",
-		"superseded": "#f59e0b",
-		"refuted":    "#ef4444",
-		"legacy":     "#64748b",
-		"unverified": "transparent",
-		"":           "transparent",
-		"unknown":    "transparent",
+		"verified":   "c-stroke-ok",
+		"superseded": "c-stroke-warn",
+		"refuted":    "c-stroke-danger",
+		"legacy":     "c-stroke-s5",
+		"unverified": "",
+		"":           "",
+		"unknown":    "",
 	}
 	for status, want := range cases {
 		if got := statusStrokeColour(status); got != want {

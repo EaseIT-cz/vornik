@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/testutil/testwait"
 )
 
 // Open opens path (a file path, or ":memory:") with the fixture bound,
@@ -76,11 +77,29 @@ func File(t testing.TB, name string) *sqlite.DB {
 // 2026-10-04/07). Its deadline is sqlite.FixtureConnectTimeout from now, and it
 // is cancelled when the test ends. It also bounds whatever else the test does
 // on it. Storage-abstraction design, "storage.Open in tests" (2026-10-12).
+// Since #469 (amendment 2026-11-12) the deadline is contextBound(t): the test
+// binary's outcome budget, never less than the fixture bound.
 func Context(t testing.TB) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), sqlite.FixtureConnectTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), contextBound(t))
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// contextBound is how long Context's deadline lies ahead: testwait.ForOutcome
+// for a test with a deadline, at least sqlite.FixtureConnectTimeout; the
+// fixture bound alone when t has no deadline (-timeout 0) or no Deadline
+// method (a testing.B, a testing.TB fake). A fixed 60 s failed two storage
+// tests under host load (GitHub #469).
+func contextBound(t any) time.Duration {
+	d, ok := t.(testwait.Deadliner)
+	if !ok {
+		return sqlite.FixtureConnectTimeout
+	}
+	if _, has := d.Deadline(); !has {
+		return sqlite.FixtureConnectTimeout
+	}
+	return max(testwait.ForOutcome(d), sqlite.FixtureConnectTimeout)
 }
 
 // connect is the single open every helper goes through; ctx is a parameter

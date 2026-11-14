@@ -152,7 +152,7 @@ if [[ "$MODE" == session ]]; then
   [[ "$CURRENT" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || CURRENT=""
   command -v curl >/dev/null 2>&1 || exit 0
   URL="${VORNIK_URL:-${CLAUDE_PLUGIN_OPTION_VORNIK_URL:-http://localhost:8080}}"
-  VORNIK_UA="vornik-companion/0.50.10 (claude-code)"
+  VORNIK_UA="vornik-companion/0.50.11 (claude-code)"
   [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.8 (codex)"
   NOW="$(date +%s 2>/dev/null)" || exit 0
 

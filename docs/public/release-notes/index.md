@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: a1ada23f695a48021d6d26781dd2fb958e3fab6ad63559153e997fe967fdcfa3
+      sha256: ae898fc4687df4094009fb3ad2be1a799eccd59bc97026f2d9491ca61f7b8951
 ---
 # Release Notes
 
@@ -16,6 +16,76 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.11.5
+
+### What's new
+
+- **A redesigned web console.** The console opens in a calmer light look by
+  default (dark is still an option), with larger, clearer type and cleaner
+  charts. Navigation is now organised around what you came to do: **Home**,
+  **Ask**, **Needs you**, and **Results & cost**, with Manage and Diagnostics one
+  layer down.
+- **A new Home page.** Home shows a greeting, an Ask box, what needs your
+  attention, today's done count, what you spent in the last 24 hours, your next
+  scheduled run, and recently finished work — instead of eleven engineering
+  views.
+- **Results & cost.** A new page shows what got done and what it cost over the
+  last 14 days, in one line, one chart, and a table by assistant.
+- **A phone-friendly bar.** On a phone the bottom bar is now five tabs — Home,
+  Ask, Needs you, Results, More — with Manage, Diagnostics, theme, account and
+  sign-out in a More sheet. The theme switch is now reachable on a phone.
+- **Chat that works like chat.** Sending a message shows it at once, runs the
+  turn in the background, and streams the reply in as it is written. A dropped
+  connection no longer cancels the turn, and Stop keeps what was written.
+- **Mint your own project keys.** On a managed instance the owner can now mint
+  and revoke project API keys from the console, with no shell.
+- **First run from the browser.** A new self-hosted install can get to a first
+  answer from the setup page without running a shell command.
+
+### Security
+
+- **Secrets are encrypted at rest.** Project integration secrets (passwords,
+  signing secrets, webhook secrets) and configuration placeholders are now stored
+  in the encrypted credential store instead of plaintext files.
+- **Operator credentials from the CLI.** `vornikctl credential list | set NAME |
+  remove NAME` manages operator credentials; `set` reads from stdin only. A
+  credential value is never logged or echoed.
+- **Slack allowlists apply without a restart.** Adding or removing an allowed
+  sender or channel now takes effect on a config reload; removing Slack from a
+  project closes the channel immediately.
+- **Dependency update.** OpenTelemetry was updated to 1.47.0, fixing two reported
+  vulnerabilities in the SDK and trace packages.
+
+### Fixes
+
+- **The project settings form refuses a duration with no unit.** A poll
+  interval saved as `20` (instead of `20m`) used to fall back silently to five
+  minutes; the form now refuses it and says what it expects, such as `20m` or
+  `1h`.
+- **Web chat no longer promises to report back.** The assistant used to say
+  "I'll report back" in the web chat, which cannot yet deliver a later message.
+  It now waits for a short task within the reply, or points you to the task's
+  page.
+- **`doctor fallback_rungs` no longer hides a live fault.** A fallback model that
+  failed before reaching the model, or whose last-failure time was unknown, could
+  be cleared as fixed when the model worked elsewhere. It now stays at ERROR
+  unless the failure was genuinely on the model path.
+- **A broker fill is retried while the broker runs.** A fill the daemon failed to
+  save used to wait until the broker restarted; it is now retried periodically.
+- **Containers recover after a network outage.** The scraper and gateway
+  containers now detect when they have no route out and restart themselves.
+- **The adoption board counts chat turns and tool calls**, so a chat-first
+  project is no longer invisible in the activity totals.
+- **Companion hints: no slow match on long commands.** The rule that spots a
+  `git commit` after variable assignments now matches in linear time in the
+  Hermes plugin (it could take minutes on a crafted long command). The Claude
+  Code and Codex hooks get the same rule. Plugins 0.23.3 (Hermes), 0.50.10
+  (Claude Code) and 0.45.8 (Codex).
+- **Hermes in Docker: mount your project outside the home.** The Hermes plugin
+  refuses files in its home directory; in the Docker image the home is
+  `/opt/data`. The README now tells Docker users to mount the project as its own
+  volume. Hermes 0.23.4.
 
 ## 2026.11.4
 

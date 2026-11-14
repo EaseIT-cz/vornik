@@ -307,7 +307,7 @@ func TestTasks_PreservesExistingFilters(t *testing.T) {
 
 func TestDashboard_RendersPageSizeSelector(t *testing.T) {
 	srv := NewServer(WithTaskRepository(tasksRepoStub(makeTasks(5))), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	require.Equal(t, 200, rr.Code, rr.Body.String())
@@ -317,7 +317,7 @@ func TestDashboard_RendersPageSizeSelector(t *testing.T) {
 func TestDashboard_LimitHonoursOperatorChoice(t *testing.T) {
 	rows := makeTasks(100)
 	srv := NewServer(WithTaskRepository(tasksRepoStub(rows)), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest("GET", "/?limit=10", nil)
+	req := httptest.NewRequest("GET", "/diagnostics?limit=10", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	require.Equal(t, 200, rr.Code)
@@ -326,7 +326,7 @@ func TestDashboard_LimitHonoursOperatorChoice(t *testing.T) {
 
 func TestDashboard_DefaultLimitWhenAbsent(t *testing.T) {
 	srv := NewServer(WithTaskRepository(tasksRepoStub(makeTasks(0))), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	require.Equal(t, 200, rr.Code)
@@ -335,7 +335,7 @@ func TestDashboard_DefaultLimitWhenAbsent(t *testing.T) {
 
 func TestDashboard_InvalidLimitFallsBack(t *testing.T) {
 	srv := NewServer(WithTaskRepository(tasksRepoStub(makeTasks(0))), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest("GET", "/?limit=bogus", nil)
+	req := httptest.NewRequest("GET", "/diagnostics?limit=bogus", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	require.Equal(t, 200, rr.Code)

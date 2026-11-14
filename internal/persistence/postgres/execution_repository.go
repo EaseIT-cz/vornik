@@ -432,6 +432,31 @@ func (r *ExecutionRepository) FailedRateByProject(ctx context.Context, since tim
 	return out, rows.Err()
 }
 
+// CountCompletedByProject counts COMPLETED executions per project with
+// completed_at in [since, until) (#757).
+func (r *ExecutionRepository) CountCompletedByProject(ctx context.Context, since, until time.Time) (map[string]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT project_id, COUNT(*)
+		FROM executions
+		WHERE status = 'COMPLETED' AND completed_at IS NOT NULL AND completed_at >= $1 AND completed_at < $2
+		GROUP BY project_id
+	`, since.UTC(), until.UTC())
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var project string
+		var n int64
+		if err := rows.Scan(&project, &n); err != nil {
+			return nil, err
+		}
+		out[project] = n
+	}
+	return out, rows.Err()
+}
+
 // LatencyP95ByProject returns per-project p95 wall-clock duration (seconds)
 // of COMPLETED executions finished at/after `since`. Duration is computed in
 // SQL (EPOCH diff); p95 is computed in Go per project.
@@ -640,8 +665,17 @@ func (r *ExecutionRepository) List(ctx context.Context, filter persistence.Execu
 		args = append(args, *filter.Status)
 		argNum++
 	}
+	if filter.CompletedSince != nil {
+		query += fmt.Sprintf(" AND completed_at IS NOT NULL AND completed_at >= $%d", argNum)
+		args = append(args, *filter.CompletedSince)
+		argNum++
+	}
 
-	query += " ORDER BY created_at DESC"
+	if filter.NewestCompletedFirst {
+		query += " ORDER BY completed_at DESC NULLS LAST"
+	} else {
+		query += " ORDER BY created_at DESC"
+	}
 
 	if filter.PageSize > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argNum)
@@ -690,6 +724,11 @@ func (r *ExecutionRepository) Count(ctx context.Context, filter persistence.Exec
 	if filter.Status != nil {
 		query += fmt.Sprintf(" AND status = $%d::execution_status", argNum)
 		args = append(args, *filter.Status)
+		argNum++
+	}
+	if filter.CompletedSince != nil {
+		query += fmt.Sprintf(" AND completed_at IS NOT NULL AND completed_at >= $%d", argNum)
+		args = append(args, *filter.CompletedSince)
 	}
 
 	var total int64

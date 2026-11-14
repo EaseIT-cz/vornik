@@ -357,7 +357,7 @@ func renderInlineMarkdown(text string) template.HTML {
 	//    asterisks twice.
 	out = reMdBold.ReplaceAllString(out, `<strong>$1</strong>`)
 	out = reMdItalic.ReplaceAllString(out, `<em>$1</em>`)
-	out = reMdInlineCode.ReplaceAllString(out, `<code class="px-1 py-0.5 rounded bg-dark-900 text-amber-300 font-mono text-[0.85em]">$1</code>`)
+	out = reMdInlineCode.ReplaceAllString(out, `<code class="px-1 py-0.5 rounded bg-dark-900 text-amber-700 font-mono dark:text-amber-300">$1</code>`)
 	// Links — only http(s); cap label + URL length.
 	//
 	// Safety invariant: `out` was HTML-escaped at line 219 BEFORE
@@ -403,7 +403,7 @@ func renderInlineMarkdown(text string) template.HTML {
 	for i, body := range blocks {
 		marker := fmt.Sprintf("%s%d\x00", placeholder, i)
 		rendered := fmt.Sprintf(
-			`<pre class="my-1 px-2 py-1.5 rounded bg-dark-700 border border-dark-600 overflow-x-auto"><code class="font-mono text-[0.85em] text-amber-800 dark:text-amber-200 whitespace-pre">%s</code></pre>`,
+			`<pre class="my-1 px-2 py-1.5 rounded bg-dark-700 border border-dark-600 overflow-x-auto"><code class="font-mono text-amber-800 dark:text-amber-200 whitespace-pre">%s</code></pre>`,
 			html.EscapeString(body))
 		out = strings.Replace(out, marker, rendered, 1)
 	}

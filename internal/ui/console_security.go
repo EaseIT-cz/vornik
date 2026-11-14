@@ -64,18 +64,28 @@ var (
 // /ui/static/* cache-first, keys on it, so a release with new CSS is fetched
 // instead of the old copy pinning.
 func tailwindCSSHref() string {
-	tailwindHrefOnce.Do(func() {
-		b, err := fs.ReadFile(staticFS, "static/tailwind.css")
-		if err != nil {
-			// Embedded at build time: absent only in a broken build, which
-			// TestTailwindCSS_Embedded catches. Still link the file.
-			tailwindHref = "/ui/static/tailwind.css"
-			return
-		}
-		sum := sha256.Sum256(b)
-		tailwindHref = "/ui/static/tailwind.css?v=" + hex.EncodeToString(sum[:])[:12]
-	})
+	tailwindHrefOnce.Do(func() { tailwindHref = staticHref("tailwind.css") })
 	return tailwindHref
+}
+
+// staticHrefs caches staticHref's answers by file name.
+var staticHrefs sync.Map
+
+// staticHref is the URL of an embedded static file with a content hash, so
+// the service worker (cache-first on /ui/static/*, keyed on the URL) fetches
+// a changed file instead of pinning the old one. The file server ignores the
+// query. An absent file (a broken build) still links the bare path.
+func staticHref(name string) string {
+	if v, ok := staticHrefs.Load(name); ok {
+		return v.(string)
+	}
+	href := "/ui/static/" + name
+	if b, err := fs.ReadFile(staticFS, "static/"+name); err == nil {
+		sum := sha256.Sum256(b)
+		href += "?v=" + hex.EncodeToString(sum[:])[:12]
+	}
+	staticHrefs.Store(name, href)
+	return href
 }
 
 var (

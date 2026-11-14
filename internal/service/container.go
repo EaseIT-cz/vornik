@@ -368,6 +368,9 @@ type Container struct {
 	// CLI provider (internal/chat/cli_client.go) can be plugged in
 	// alongside the HTTP one.
 	ChatClient chat.Provider
+	// restartRequest asks Run to stop for a restart (#758 W1); nil when the
+	// container was built outside Run (tests, tools).
+	restartRequest func()
 	// chatRouter is the router ChatClient dispatches through, kept so the
 	// doctor's model_route_coverage can ask it how a model routes instead of
 	// re-deriving the table (model-route-coverage design, 2026-09-24). Nil
@@ -391,6 +394,9 @@ type Container struct {
 	// before the poll loop hands inbound to HandleMessage). Nil when
 	// chat is disabled.
 	Dispatcher *dispatcher.Agent
+	// turnStatus is the dispatcher's status reporter, kept so the UI server,
+	// built later, can bind its web chat sink (web-chat-design.md §2.3).
+	turnStatus *turnStatusReporter
 	// sandboxRunner runs one-shot tools in the pinned agent image
 	// (process-spawn law S5a). Built by initSandboxTools.
 	sandboxRunner *sandboxtool.Runner
@@ -466,10 +472,15 @@ type Container struct {
 	// metrics registry is wired.
 	dispatcherMetrics *dispatcher.Metrics
 	mcpManager        *mcp.Manager
-	// mcpWithheld lists project MCP servers the last config resolution
-	// withheld (mcpDesiredServers), for the doctor. Guarded by mcpWithheldMu.
-	mcpWithheldMu sync.Mutex
-	mcpWithheld   []string
+	// mcpRefusedProject and mcpRefusedDaemon are the servers the last project
+	// pass (mcpDesiredServers) and daemon pass (daemonMCPServerConfigs)
+	// refused to register, each replaced whole by its pass: the hub's and the
+	// doctor's source (GitHub #625 item 5). "Withheld" in the older names
+	// (mcpWithheldMu, mcpWithheldServers) means refused. Guarded by
+	// mcpWithheldMu.
+	mcpWithheldMu     sync.Mutex
+	mcpRefusedProject []mcp.Refusal
+	mcpRefusedDaemon  []mcp.Refusal
 	// mcpNoGrantProject lists project oauth servers the last resolution
 	// withheld for want of a grant (auth design §14, GitHub #91): current
 	// state, the doctor's source. Guarded by mcpWithheldMu.
@@ -2427,6 +2438,11 @@ func (c *Container) Run(ctx context.Context) error {
 // routers. The in-flight executor + scheduler keep working until
 // shutdown() actually stops them.
 func (c *Container) beginDrain() {
+	// GitHub #685: from here a failed MCP dial is the process ending (systemd
+	// signals the stdio servers too), not a connection failure.
+	if c.mcpManager != nil {
+		c.mcpManager.BeginShutdown()
+	}
 	// The drain bit has two readers: /readyz (503 for load balancers) and,
 	// since GitHub #97, the chat-proxy wrapper (api.trackLongRequest), which
 	// refuses new chat requests with 503 DRAINING from this instant.
@@ -2728,6 +2744,16 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	// A restart request (POST /api/v1/setup/apply, #758 W1) cancels the same
+	// context a SIGTERM does, so the stop is the ordinary graceful one; Run
+	// then returns ErrRestartRequested and main exits 75.
+	ctx, requestStop := context.WithCancel(ctx)
+	defer requestStop()
+	var restartRequested atomic.Bool
+	requestRestart := func() {
+		restartRequested.Store(true)
+		requestStop()
+	}
 
 	// Load configuration, keeping the provenance the loader recorded so
 	// `config show --provenance` can serve it.
@@ -2766,7 +2792,7 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	// lines said community). Gating was never affected, only the logs.
 	container, err := NewContainerWithObservability(cfg, configPath, obsCfg,
 		WithBootProvenance(bootProv),
-		WithProviders(providers), WithEdition(edition))
+		WithProviders(providers), WithEdition(edition), WithRestartRequest(requestRestart))
 	if err != nil {
 		return fmt.Errorf("failed to initialize container: %w", err)
 	}
@@ -2803,7 +2829,7 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	}()
 
 	// Run until shutdown
-	return container.Run(ctx)
+	return runResult(restartRequested.Load(), container.Run(ctx))
 }
 
 // crossProjectCallRepo returns the CPC ledger repository only when this edition

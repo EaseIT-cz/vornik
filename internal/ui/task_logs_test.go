@@ -123,7 +123,7 @@ func TestTaskLogsStream_ImmediateContextCancelExits(t *testing.T) {
 // coloured spans; tags don't leak through.
 func TestLogHTML_EscapesAndColorsLevels(t *testing.T) {
 	html := logHTML("[INFO] hello <script>")
-	assert.Contains(t, html, "text-blue-400")
+	assert.Contains(t, html, "text-brand-400") // theme-aware since #753 part C
 	assert.Contains(t, html, "&lt;script&gt;")
 	assert.NotContains(t, html, "<script>")
 }

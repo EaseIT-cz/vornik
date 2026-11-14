@@ -97,7 +97,7 @@ clears the gate.
 
 ## Web console (Enterprise)
 
-The **Admin → Control plane** page (`/ui/admin/control-plane`) is a browser
+The **Operator console → Control plane** page (`/ui/admin/control-plane`) is a browser
 surface over the same ledger: browse proposals by status, read a proposal's
 rationale + diff, and **approve / reject / apply / rollback** with a click. It
 delegates to the same engine as the CLI, so every gate holds — a daemon-scope

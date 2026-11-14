@@ -132,6 +132,7 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	// base+identity stays a valid cached prefix across profile edits;
 	// reversed, every profile edit would also shift the identity block.
 	systemPrompt = appendChannelIdentity(systemPrompt, req.ChannelIdentity)
+	systemPrompt = appendNoLaterDelivery(systemPrompt, req.NoLaterDelivery)
 	systemPrompt = a.maybeInjectOperatorProfile(ctx, systemPrompt, req.OperatorID)
 	audit := newChatAuditTurn(a)
 	// Propagate the pre-allocated turn id through ctx so tools that
@@ -370,6 +371,7 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 	// base+identity stays a valid cached prefix across profile edits;
 	// reversed, every profile edit would also shift the identity block.
 	systemPrompt = appendChannelIdentity(systemPrompt, req.ChannelIdentity)
+	systemPrompt = appendNoLaterDelivery(systemPrompt, req.NoLaterDelivery)
 	systemPrompt = a.maybeInjectOperatorProfile(ctx, systemPrompt, req.OperatorID)
 	audit := newChatAuditTurn(a)
 	// Propagate the pre-allocated turn id through ctx so tools that

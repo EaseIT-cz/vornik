@@ -70,7 +70,7 @@
                          build (base template + typed addons). Hidden until then; the raw
                          YAML preview above stays regardless. -->
                     <div id="wizard-composition" class="hidden px-5 py-3 border-t border-dark-700/60 text-xs text-gray-300">
-                        <h3 class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">What will be wired</h3>
+                        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">What will be wired</h3>
                         <ul id="wizard-composition-list" class="space-y-1 list-disc list-inside text-gray-300"></ul>
                     </div>
 
@@ -100,13 +100,13 @@
                                 </div>
 
                                 <div id="composer-plan-approvals-wrap" class="hidden mt-3">
-                                    <div class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Human in the loop</div>
+                                    <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Human in the loop</div>
                                     <ul id="composer-plan-approvals" class="list-disc list-inside space-y-0.5 text-gray-300"></ul>
                                 </div>
 
                                 <!-- CostBand — always labelled an ESTIMATE (design §5.2). -->
                                 <div class="mt-3 text-gray-400">
-                                    <span class="text-[11px] uppercase tracking-wide text-gray-500">Cost</span>
+                                    <span class="text-xs uppercase tracking-wide text-gray-500">Cost</span>
                                     <span id="composer-plan-costband" class="ml-1 text-gray-200"></span>
                                     <span class="text-gray-500"> — estimate only; actual spend depends on run length and model.</span>
                                 </div>
@@ -118,7 +118,7 @@
                                      a later turn changes the cadence. -->
                                 <div id="composer-schedule-chip" class="hidden mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-900/50 border border-dark-700">
                                     <span id="composer-schedule-text" class="flex-1 text-gray-200"></span>
-                                    <button type="button" id="composer-schedule-confirm-btn" data-on-click="confirmComposerSchedule" class="px-2 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-[11px] font-medium disabled:opacity-50">Confirm</button>
+                                    <button type="button" id="composer-schedule-confirm-btn" data-on-click="confirmComposerSchedule" class="px-2 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-xs font-medium disabled:opacity-50">Confirm</button>
                                 </div>
                             </div>
 
@@ -134,8 +134,8 @@
                                  READ-ONLY (a <pre> has no editable affordance). Editing
                                  lands with the journaled commit path (task 1.2b). -->
                             <div id="composer-panel-yaml" role="tabpanel" aria-labelledby="composer-tab-yaml" class="hidden">
-                                <pre id="composer-yaml-content" class="whitespace-pre-wrap break-words text-[11px] text-gray-200"></pre>
-                                <p class="mt-2 text-[11px] text-gray-500">Read-only preview. <span class="italic">Open in editor after commit</span> — available once the journaled commit path ships (task 1.2b).</p>
+                                <pre id="composer-yaml-content" class="whitespace-pre-wrap break-words text-xs text-gray-200"></pre>
+                                <p class="mt-2 text-xs text-gray-500">Read-only preview. <span class="italic">Open in editor after commit</span> — available once the journaled commit path ships (task 1.2b).</p>
                             </div>
                         </div>
                     </div>
@@ -308,7 +308,7 @@
             // {raw: {...}}; render the raw map as YAML.
             const raw = proposal.raw || proposal;
             const pre = document.createElement('pre');
-            pre.className = 'whitespace-pre-wrap break-words text-[11px] text-gray-200';
+            pre.className = 'whitespace-pre-wrap break-words text-xs text-gray-200';
             pre.textContent = renderYaml(raw, 0).trimStart();
             els.preview.replaceChildren(pre);
             els.previewStatus.textContent = ready ? 'Ready to create' : 'Draft';

@@ -6,6 +6,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/mcp"
 )
 
 // GitHub #97 (2026-10-07 deploy cut an in-flight chat stream): the chat-proxy
@@ -72,5 +73,17 @@ func TestBeginDrain_SleepsOnlyTheGraceNotYetElapsed(t *testing.T) {
 				t.Fatal("the bit was cleared during shutdown")
 			}
 		})
+	}
+}
+
+// GitHub #685: beginDrain tells the MCP manager the daemon is stopping, so a
+// stdio dial systemd's SIGTERM ends is logged at DEBUG, not as a failure.
+func TestBeginDrain685_TellsTheMCPManager(t *testing.T) {
+	t.Setenv("VORNIK_DRAIN_GRACE_SECONDS", "0")
+	m := mcp.NewManager(zerolog.Nop())
+	c := &Container{Logger: zerolog.Nop(), mcpManager: m}
+	c.beginDrain()
+	if !m.ShuttingDown() {
+		t.Fatal("beginDrain did not call BeginShutdown on the MCP manager")
 	}
 }

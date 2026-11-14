@@ -11,7 +11,7 @@
 */}}
 {{define "pagination"}}
 {{if or (gt .Total 0) .Unknown}}
-<nav aria-label="{{if .Label}}{{.Label}}{{else}}Pagination{{end}}" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3 text-[11px] text-gray-400">
+<nav aria-label="{{if .Label}}{{.Label}}{{else}}Pagination{{end}}" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3 text-xs text-gray-400">
   <span>{{if .Unknown}}{{if gt .End 0}}Showing {{.Start}}–{{.End}}; the total could not be counted{{else}}No rows on this page; the total could not be counted{{end}}{{else}}Showing {{.Start}}–{{.End}} of {{.Total}}{{if .Noun}} {{.Noun}}{{end}}{{end}}</span>
   <div class="flex items-center gap-2">
     {{if .HasPrev}}

@@ -99,6 +99,9 @@ func (s *Server) processInputArtifactsWithOpts(ctx context.Context, projectID st
 	defer func() { _ = os.RemoveAll(tmpRoot) }()
 
 	out := make([]inputArtifactResult, 0, len(inputs))
+	// The agent's inputs land flat in artifacts/in/<name>, so two inputs with
+	// one name would leave one file under both entries (GitHub #678).
+	firstWithName := make(map[string]int, len(inputs))
 	for i, in := range inputs {
 		if in.Name == "" {
 			return nil, fmt.Errorf("inputArtifacts[%d]: name is required", i)
@@ -107,6 +110,10 @@ func (s *Server) processInputArtifactsWithOpts(ctx context.Context, projectID st
 		if err != nil {
 			return nil, fmt.Errorf("inputArtifacts[%d]: %w", i, err)
 		}
+		if j, dup := firstWithName[safeName]; dup {
+			return nil, fmt.Errorf("inputArtifacts[%d]: name %q is also inputArtifacts[%d]'s; the files land side by side in one directory, so one would replace the other: give each a distinct name (for example prefix the parent directory)", i, safeName, j)
+		}
+		firstWithName[safeName] = i
 		if in.Path != "" {
 			if err := validateDocumentPath(in.Path, safeName); err != nil {
 				return nil, fmt.Errorf("inputArtifacts[%d]: path: %w", i, err)

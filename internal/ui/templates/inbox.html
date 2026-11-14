@@ -27,19 +27,19 @@
             {{if gt (len .BrokerActions) 1}}
                 <form id="broker-batch" method="post" action="/ui/inbox/broker-actions/batch" class="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
                     <span>Tick writes below to decide them together; each is checked against exactly what its card shows.</span>
-                    <button type="submit" name="decision" value="approve" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium">Approve ticked</button>
-                    <button type="submit" name="decision" value="reject" class="px-3 py-1.5 rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white font-medium">Reject ticked</button>
+                    <button type="submit" name="decision" value="approve" class="v-btn v-btn--primary">Approve ticked</button>
+                    <button type="submit" name="decision" value="reject" class="v-btn v-btn--danger">Reject ticked</button>
                 </form>
             {{end}}
             {{with .AgentApprovals}}
             <div class="mb-4 space-y-2">
                 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Waiting on your approver device</h2>
                 <p class="text-xs text-gray-500">Your assistant's requests are decided on the phone you paired, not here.</p>
-                <ul class="space-y-2">
-                    {{range .}}<li class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 flex flex-wrap items-center justify-between gap-2">
+                <ul class="v-list">
+                    {{range .}}<li class="v-inbox-row"><div class="v-inbox-row__body flex flex-wrap items-center justify-between gap-2">
                         <div class="min-w-0"><p class="text-sm text-gray-100">{{.Sentence}}</p><p class="text-xs text-gray-500">{{.Age}}</p></div>
                         <a href="/ui/approve/{{.ID}}" class="px-3 py-1.5 rounded-lg border border-dark-500 text-xs text-gray-200 hover:bg-dark-700">Open on your approver device</a>
-                    </li>{{end}}
+                    </div></li>{{end}}
                 </ul>
             </div>
             {{end}}
@@ -50,7 +50,7 @@
             </div>
             {{end}}
             {{if or .Items .WebWrites .BrokerActions}}
-                <ul class="space-y-2">
+                <ul class="v-list">
                     {{range .BrokerActions}}{{template "brokerActionApprovalCard" .}}{{end}}
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
@@ -61,19 +61,19 @@
             {{with .StandingGrants}}
             <div class="mt-4 space-y-2">
                 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Standing approvals</h2>
-                <p class="text-[11px] text-gray-500">Writes these cover are sent without showing you their text. Pause or revoke takes effect on the next write; a write already being sent completes.</p>
-                <ul class="space-y-2">{{range .}}
-                    <li class="rounded-xl border border-dark-600 bg-dark-800 p-3 space-y-1.5 text-xs text-gray-300">
+                <p class="text-xs text-gray-500">Writes these cover are sent without showing you their text. Pause or revoke takes effect on the next write; a write already being sent completes.</p>
+                <ul class="v-list">{{range .}}
+                    <li class="v-inbox-row"><div class="v-inbox-row__body space-y-1.5 text-xs text-gray-300">
                         <div><span class="font-medium text-gray-100">{{.Action}}</span> to {{.Key}} <span class="text-gray-500">({{.ProjectID}} / {{.Workflow}})</span></div>
                         <div class="text-gray-500">{{.State}} · {{.UsesLeft}} of {{.MaxUses}} uses left · ends {{.Expires}}</div>
-                        {{with .Covered}}<details><summary class="text-gray-500">Writes it approved</summary><ul>{{range .}}<li class="font-mono">{{.ActionID}}: {{.Status}}</li>{{end}}</ul></details>{{end}}
+                        {{with .Covered}}<details class="vk-disc vk-disc-row"><summary class="vk-disc-sum"><span class="vk-disc-title">Writes it approved</span></summary><ul>{{range .}}<li class="font-mono">{{.ActionID}}: {{.Status}}</li>{{end}}</ul></details>{{end}}
                         <div class="flex flex-wrap gap-1.5">
-                        {{if eq .State "active"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/pause"><button type="submit" class="px-3 py-1.5 rounded-lg bg-dark-700 text-gray-200">Pause</button></form>{{end}}
-                        {{if eq .State "paused"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/unpause"><button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white">Resume</button></form>{{end}}
-                        {{if eq .State "suspended"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/confirm"><button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white">Confirm (the workflow changed what it can reach)</button></form>{{end}}
-                        {{if or (eq .State "active") (eq .State "paused") (eq .State "suspended")}}<form method="post" action="/ui/inbox/standing/{{.ID}}/revoke"><button type="submit" class="px-3 py-1.5 rounded-lg bg-rose-700/80 text-white">Revoke</button></form>{{end}}
+                        {{if eq .State "active"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/pause"><button type="submit" class="v-btn v-btn--secondary">Pause</button></form>{{end}}
+                        {{if eq .State "paused"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/unpause"><button type="submit" class="v-btn v-btn--primary">Resume</button></form>{{end}}
+                        {{if eq .State "suspended"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/confirm"><button type="submit" class="v-btn v-btn--primary">Confirm (the workflow changed what it can reach)</button></form>{{end}}
+                        {{if or (eq .State "active") (eq .State "paused") (eq .State "suspended")}}<form method="post" action="/ui/inbox/standing/{{.ID}}/revoke"><button type="submit" class="v-btn v-btn--danger">Revoke</button></form>{{end}}
                         </div>
-                    </li>{{end}}
+                    </div></li>{{end}}
                 </ul>
             </div>
             {{end}}
@@ -89,7 +89,7 @@
             <div class="mt-8 space-y-3">
                 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Your requests</h2>
                 {{if or .Requests .RecentRequests}}
-                <ul class="space-y-2">
+                <ul class="v-list">
                     {{range .Requests}}{{template "requestCardItem" .}}{{end}}
                     {{/* Broader list (task 4.4, design §5.7): recent
                          requests in ANY status, deduped against .Requests
@@ -123,14 +123,14 @@
      inline actions live on the "Needs your attention" row queue above,
      not on these cards. */}}
 {{define "requestCardItem"}}
-<li class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2">
+<li class="v-inbox-row"><div class="v-inbox-row__body space-y-2">
     <div class="flex items-center gap-2 flex-wrap">
-        <span class="text-[11px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full
+        <span class="text-xs font-medium uppercase tracking-wide px-2 py-0.5 rounded-full
             {{if eq .Bucket "needs-you"}}bg-amber-500/20 text-amber-700 dark:text-amber-300
             {{else if eq .Bucket "working"}}bg-sky-500/20 text-sky-700 dark:text-sky-300
             {{else}}bg-emerald-500/20 text-emerald-700 dark:text-emerald-300{{end}}">{{.BucketLabel}}</span>
-        {{if gt .Subtasks 0}}<span class="text-[10px] px-1.5 py-0.5 rounded-md bg-violet-900/40 text-violet-700 dark:text-violet-300" title="{{.Subtasks}} step(s)">{{.Subtasks}} steps</span>{{end}}
-        {{if .Origin}}<span class="text-[11px] text-gray-500 ml-auto">{{.Origin}}</span>{{end}}
+        {{if gt .Subtasks 0}}<span class="text-xs px-1.5 py-0.5 rounded-md bg-violet-900/40 text-violet-700 dark:text-violet-300" title="{{.Subtasks}} step(s)">{{.Subtasks}} steps</span>{{end}}
+        {{if .Origin}}<span class="text-xs text-gray-500 ml-auto">{{.Origin}}</span>{{end}}
     </div>
     <div class="text-sm text-gray-200">{{.StatusLine}}</div>
     {{/* Deliverables collapse into a native <details> (2026-07-12
@@ -138,24 +138,24 @@
          No JS: <details> state survives HTMX list swaps rebuilding the
          node as collapsed, which is the desired default anyway. */}}
     {{if .Deliverables}}
-    <details class="group">
-        <summary class="cursor-pointer select-none text-[11px] text-gray-400 hover:text-gray-300 py-1.5 -my-1">
-            📎 {{len .Deliverables}} file{{if ne (len .Deliverables) 1}}s{{end}} <span class="text-gray-600 group-open:hidden">— tap to show</span>
+    <details class="vk-disc vk-disc-row">
+        <summary class="vk-disc-sum">
+            <span class="vk-disc-title">📎 {{len .Deliverables}} file{{if ne (len .Deliverables) 1}}s{{end}}</span>
         </summary>
         <div class="flex flex-wrap gap-2 pt-1.5">
             {{range .Deliverables}}
-            <a href="{{.DownloadURL}}" class="text-[11px] px-2.5 py-1.5 rounded-lg bg-dark-700 text-gray-300 hover:bg-dark-600">{{.TypeLabel}}: {{.Name}}</a>
+            <a href="{{.DownloadURL}}" class="text-xs px-2.5 py-1.5 rounded-lg bg-dark-700 text-gray-300 hover:bg-dark-600">{{.TypeLabel}}: {{.Name}}</a>
             {{end}}
         </div>
     </details>
     {{end}}
-    <div class="flex items-center justify-between gap-2 text-[11px] text-gray-500">
+    <div class="flex items-center justify-between gap-2 text-xs text-gray-500">
         <span>{{.Age}}</span>
         {{/* State-specific CTA (mobile-usability pass): the link says
              what is expected of the user, with a real touch target. */}}
         <a href="{{.Href}}" class="text-accent-400 hover:text-accent-300 font-medium px-2 py-1.5 -mr-2 rounded-lg">{{.CTALabel}} →</a>
     </div>
-</li>
+</div></li>
 {{end}}
 
 {{/* brokerActionApprovalCard — one pending broker write action (broker
@@ -163,8 +163,8 @@
      arguments rendered here; approve refuses when the stored row no longer
      matches it. */}}
 {{define "brokerActionApprovalCard"}}
-<li id="broker-action-{{.ActionID}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
-    <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+<li id="broker-action-{{.ActionID}}" class="v-inbox-row"><div class="v-inbox-row__body space-y-2.5">
+    <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500">
         <input type="checkbox" form="broker-batch" name="pick" value="{{.ActionID}}|{{.ArgsSHA256}}" aria-label="Tick to decide together" class="h-4 w-4">
         <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">Needs approval</span>
         <span>{{.ProjectID}}</span>
@@ -173,31 +173,31 @@
     </div>
     <div class="min-w-0 space-y-0.5">
         <div class="text-sm text-gray-200"><span class="font-medium text-gray-100">{{.ActionKind}}</span> via <span class="font-mono text-gray-300">{{.Tool}}</span></div>
-        <div class="text-[11px] text-gray-500">task <a class="underline" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{if .KeyLabel}} · requested by {{.KeyLabel}}{{end}}</div>
-        <div class="text-[10px] text-gray-600 font-mono truncate">{{.ActionID}}</div>
+        <div class="text-xs text-gray-500">task <a class="underline" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{if .KeyLabel}} · requested by {{.KeyLabel}}{{end}}</div>
+        <div class="text-xs text-gray-600 font-mono truncate">{{.ActionID}}</div>
     </div>
-    <div class="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+    <div class="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
         A model drafted these arguments after reading third-party content{{if .UntrustedFields}} (free text in: {{range $i, $f := .UntrustedFields}}{{if $i}}, {{end}}<span class="font-mono">{{$f}}</span>{{end}}){{end}}.{{if .SchemaUnavailable}} The workflow no longer declares this action, so which fields are free text is unknown: treat every field as drafted.{{end}} Check the recipient and every word before approving: exactly this will be sent.
     </div>
-    <pre class="overflow-x-auto rounded-lg border border-dark-600 bg-dark-900 p-2 text-[11px] text-gray-200 whitespace-pre-wrap break-words">{{.ArgsPretty}}</pre>
+    <pre class="overflow-x-auto rounded-lg border border-dark-600 bg-dark-900 p-2 text-xs text-gray-200 whitespace-pre-wrap break-words">{{.ArgsPretty}}</pre>
     <div class="flex flex-wrap items-center gap-1.5">
         <form hx-post="/ui/inbox/broker-action/{{.ActionID}}/approve" hx-target="#broker-action-{{.ActionID}}" hx-swap="outerHTML" class="contents">
             <input type="hidden" name="args_sha256" value="{{.ArgsSHA256}}">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">Approve &amp; send</button>
+            <button type="submit" class="v-btn v-btn--primary flex-1 sm:flex-none">Approve &amp; send</button>
         </form>
         <form hx-post="/ui/inbox/broker-action/{{.ActionID}}/reject" hx-target="#broker-action-{{.ActionID}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
+            <button type="submit" class="v-btn v-btn--danger flex-1 sm:flex-none">Reject</button>
         </form>
     </div>
-    {{with .Grant}}<form method="post" action="/ui/inbox/broker-action/{{$.ActionID}}/approve-grant" class="rounded-lg border border-dark-600 p-2 space-y-1.5 text-[11px] text-gray-300">
+    {{with .Grant}}<form method="post" action="/ui/inbox/broker-action/{{$.ActionID}}/approve-grant" class="rounded-lg border border-dark-600 p-2 space-y-1.5 text-xs text-gray-300">
         <input type="hidden" name="args_sha256" value="{{$.ArgsSHA256}}">
         <div><span class="font-medium text-gray-100">Approve, and send future {{.Action}} to {{.Key}} without showing you their text</span>, for
         <select name="grant_days" class="bg-dark-900 border border-control rounded">{{range .Days}}<option value="{{.}}">{{.}} day{{if ne . 1}}s{{end}}</option>{{end}}</select>,
         at most <select name="grant_uses" class="bg-dark-900 border border-control rounded">{{range .Uses}}<option value="{{.}}">{{.}}</option>{{end}}</select> times.</div>
         <div class="text-gray-500">Not shown to you before sending: {{range $i, $f := .Unreviewed}}{{if $i}}, {{end}}<span class="font-mono">{{$f}}</span>{{end}}. An address may reach several people (a mailing list).</div>
-        <button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white">Approve, and approve future writes like this</button>
+        <button type="submit" class="v-btn v-btn--primary">Approve, and approve future writes like this</button>
     </form>{{end}}
-</li>
+</div></li>
 {{end}}
 
 {{/* webWriteApprovalCard — one pending supervised web-write approval
@@ -213,8 +213,8 @@
      the in-handler same-origin check gate the POST). hx-target removes the
      card in place once decided. */}}
 {{define "webWriteApprovalCard"}}
-<li id="{{.Anchor}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
-    <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+<li id="{{.Anchor}}" class="v-inbox-row"><div class="v-inbox-row__body space-y-2.5">
+    <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500">
         <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">Needs approval</span>
         <span>{{.ProjectID}}</span>
         <span class="px-1.5 py-0.5 rounded-md bg-dark-700 text-gray-400" title="web form submission">web write</span>
@@ -223,8 +223,8 @@
 
     <div class="min-w-0 space-y-0.5">
         <div class="text-sm text-gray-200">Submit a web form to <span class="font-medium text-gray-100">{{.TargetHost}}</span></div>
-        <div class="text-[11px] text-gray-500 break-all">{{.TargetURL}}</div>
-        <div class="text-[10px] text-gray-600 font-mono truncate">{{.SubmissionID}}</div>
+        <div class="text-xs text-gray-500 break-all">{{.TargetURL}}</div>
+        <div class="text-xs text-gray-600 font-mono truncate">{{.SubmissionID}}</div>
     </div>
 
     {{/* Filled-form screenshot: the visual half of the approval evidence.
@@ -235,7 +235,7 @@
     {{if .ScreenshotHref}}
     <img src="{{.ScreenshotHref}}" alt="Filled form preview for {{.TargetHost}}" class="max-w-full rounded-lg border border-dark-600">
     {{else}}
-    <div class="rounded-lg border border-dashed border-dark-600 bg-dark-700/40 px-3 py-4 text-[11px] text-gray-500">
+    <div class="rounded-lg border border-dashed border-dark-600 bg-dark-700/40 px-3 py-4 text-xs text-gray-500">
         Filled-form screenshot unavailable (pending screenshot-artifact wiring). Review the field table below before approving.
     </div>
     {{end}}
@@ -245,7 +245,7 @@
          operator cannot edit it here (reject-with-note → agent re-previews). */}}
     {{if .Fields}}
     <div class="overflow-x-auto rounded-lg border border-dark-600">
-        <table class="w-full text-left text-[11px]">
+        <table class="w-full text-left text-xs">
             <thead class="text-gray-500 bg-dark-700/60">
                 <tr>
                     <th class="px-2 py-1 font-medium">Field</th>
@@ -256,10 +256,10 @@
             <tbody class="text-gray-300">
                 {{range .Fields}}
                 <tr class="border-t border-dark-700">
-                    <td class="px-2 py-1 align-top">{{if .Label}}{{.Label}}<div class="text-[10px] text-gray-600 font-mono">{{.Name}}</div>{{else}}<span class="font-mono">{{.Name}}</span>{{end}}</td>
+                    <td class="px-2 py-1 align-top">{{if .Label}}{{.Label}}<div class="text-xs text-gray-600 font-mono">{{.Name}}</div>{{else}}<span class="font-mono">{{.Name}}</span>{{end}}</td>
                     <td class="px-2 py-1 align-top break-all">{{if eq .Provenance "volatile"}}<span class="text-gray-500 italic">(server-issued — value exempt)</span>{{else}}{{.Value}}{{end}}</td>
                     <td class="px-2 py-1 align-top">
-                        <span class="px-1.5 py-0.5 rounded-md text-[10px]
+                        <span class="px-1.5 py-0.5 rounded-md text-xs
                             {{if eq .Provenance "agent-bound"}}bg-emerald-500/20 text-emerald-700 dark:text-emerald-300
                             {{else if eq .Provenance "volatile"}}bg-violet-500/20 text-violet-700 dark:text-violet-300
                             {{else if eq .Provenance "hidden"}}bg-gray-500/20 text-gray-400
@@ -274,13 +274,13 @@
 
     <div class="flex flex-wrap items-center gap-1.5">
         <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/approve" hx-target="#{{.Anchor}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">Approve &amp; submit</button>
+            <button type="submit" class="v-btn v-btn--primary flex-1 sm:flex-none">Approve &amp; submit</button>
         </form>
         <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/reject" hx-target="#{{.Anchor}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
+            <button type="submit" class="v-btn v-btn--danger flex-1 sm:flex-none">Reject</button>
         </form>
     </div>
-</li>
+</div></li>
 {{end}}
 
 {{/* inboxItemRow — one "Needs your attention" row (task 4.3, design
@@ -317,8 +317,8 @@
      prompt excerpt (Title, via taskSummary) with the raw id demoted to
      small mono print — a row must say WHAT it is about and WHAT is
      expected of the user, not just which task id is waiting. */}}
-<li id="inbox-item-{{.TaskID}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
-    <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+<li id="inbox-item-{{.TaskID}}" class="v-inbox-row"><div class="v-inbox-row__body space-y-2.5">
+    <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500">
         <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full
             {{if eq .Kind "Needs approval"}}bg-amber-500/20 text-amber-700 dark:text-amber-300
             {{else if eq .Kind "Needs input"}}bg-sky-500/20 text-sky-700 dark:text-sky-300
@@ -331,11 +331,11 @@
     <div class="min-w-0">
         {{if .Title}}
         <a href="{{.Href}}" class="text-sm text-gray-200 hover:text-gray-100 line-clamp-2">{{.Title}}</a>
-        <div class="text-[10px] text-gray-600 font-mono truncate">{{.TaskID}}</div>
+        <div class="text-xs text-gray-600 font-mono truncate">{{.TaskID}}</div>
         {{else}}
         <a href="{{.Href}}" class="text-sm text-gray-200 hover:text-gray-100 truncate font-mono block">{{.TaskID}}</a>
         {{end}}
-        {{if .Detail}}<div class="text-[11px] text-rose-800/80 dark:text-rose-400/80">{{.Detail}}</div>{{end}}
+        {{if .Detail}}<div class="text-xs text-rose-800/80 dark:text-rose-400/80">{{.Detail}}</div>{{end}}
     </div>
 
     {{/* The ask itself (mobile-usability pass): a "Needs input" row
@@ -344,10 +344,10 @@
          all four fields; they were fetched but never rendered. */}}
     {{if and (eq .Kind "Needs input") .Checkpoint}}
     <div class="rounded-lg bg-dark-700/60 px-3 py-2 space-y-1">
-        {{if .Checkpoint.TaskForHuman}}<div class="text-[11px] text-gray-500">{{.Checkpoint.TaskForHuman}}</div>{{end}}
+        {{if .Checkpoint.TaskForHuman}}<div class="text-xs text-gray-500">{{.Checkpoint.TaskForHuman}}</div>{{end}}
         {{if .Checkpoint.Question}}<div class="text-sm text-gray-100">{{.Checkpoint.Question}}</div>{{end}}
-        {{if .Checkpoint.ExpectedBy}}<div class="text-[11px] text-amber-600 dark:text-amber-400">Answer expected by {{.Checkpoint.ExpectedBy}}</div>{{end}}
-        {{if .Checkpoint.DefaultIfNoResponse}}<div class="text-[11px] text-gray-500">If you don't answer: {{.Checkpoint.DefaultIfNoResponse}}</div>{{end}}
+        {{if .Checkpoint.ExpectedBy}}<div class="text-xs text-amber-600 dark:text-amber-400">Answer expected by {{.Checkpoint.ExpectedBy}}</div>{{end}}
+        {{if .Checkpoint.DefaultIfNoResponse}}<div class="text-xs text-gray-500">If you don't answer: {{.Checkpoint.DefaultIfNoResponse}}</div>{{end}}
     </div>
     {{end}}
 
@@ -359,10 +359,10 @@
              (it will have already disappeared once the first click's
              fragment swap lands). */}}
         <form hx-post="/ui/tasks/{{.TaskID}}/approve" hx-target="#inbox-item-{{.TaskID}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">Approve</button>
+            <button type="submit" class="v-btn v-btn--primary flex-1 sm:flex-none">Approve</button>
         </form>
         <form hx-post="/ui/tasks/{{.TaskID}}/reject" hx-target="#inbox-item-{{.TaskID}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
+            <button type="submit" class="v-btn v-btn--danger flex-1 sm:flex-none">Reject</button>
         </form>
     {{else if eq .Kind "Needs input"}}
         {{/* uiAnswerCheckpoint. Decision checkpoints get one button per
@@ -376,11 +376,11 @@
             <input type="hidden" name="checkpoint_id" value="{{.CheckpointID}}">
             {{if eq .Checkpoint.Kind "decision"}}
                 {{range .Checkpoint.Options}}
-                <button type="submit" name="choice" value="{{.ID}}" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors">{{.Label}}</button>
+                <button type="submit" name="choice" value="{{.ID}}" class="v-btn v-btn--primary flex-1 sm:flex-none">{{.Label}}</button>
                 {{end}}
             {{else}}
                 <input type="text" name="content" placeholder="Your answer…" class="flex-1 min-w-0 bg-dark-700 border border-control rounded-lg px-3 py-2 text-xs text-gray-200">
-                <button type="submit" class="px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors">Answer</button>
+                <button type="submit" class="v-btn v-btn--primary">Answer</button>
             {{end}}
         </form>
         {{end}}
@@ -393,10 +393,10 @@
                queue WITHOUT a re-run. Record kept, re-openable from task detail. */}}
         <a href="{{.FixItURL}}" class="flex-1 sm:flex-none text-center px-4 py-2 text-xs font-medium rounded-lg bg-violet-700/80 hover:bg-violet-600 text-white transition-colors">Help me fix this</a>
         <form hx-post="/ui/tasks/{{.TaskID}}/retry" hx-target="#inbox-item-{{.TaskID}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors">Retry</button>
+            <button type="submit" class="v-btn v-btn--primary flex-1 sm:flex-none">Retry</button>
         </form>
         <form hx-post="/ui/tasks/{{.TaskID}}/close" hx-target="#inbox-item-{{.TaskID}}" hx-swap="outerHTML" class="contents">
-            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-dark-600 hover:bg-dark-500 text-gray-200 transition-colors">Dismiss</button>
+            <button type="submit" class="v-btn v-btn--secondary flex-1 sm:flex-none">Dismiss</button>
         </form>
     {{else if eq .Kind "Retrying"}}
         {{/* Informational — an operator-retried task back in flight. No action:
@@ -411,5 +411,5 @@
         <a href="{{.Href}}" class="flex-1 sm:flex-none text-center px-4 py-2 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors">{{.Action}} →</a>
     {{end}}
     </div>
-</li>
+</div></li>
 {{end}}

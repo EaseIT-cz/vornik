@@ -31,7 +31,7 @@
             </section>
 
             {{range .Errors}}
-            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-200" role="alert">{{.}}</div>
+            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-800 dark:text-red-200" role="alert">{{.}}</div>
             {{end}}
             {{if .Outcomes}}
             <section aria-label="Decision outcomes" class="glass rounded-xl border border-dark-700 p-4">
@@ -64,10 +64,10 @@
                 <section id="kg" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
                     <h2 class="text-base font-semibold text-gray-100">Knowledge-graph candidates</h2>
                     <p class="text-xs text-gray-500">PERSON entities whose name or alias contains a searched name. A name cannot tell one person from another of the same name, and an entity carrying a name may not be a person at all: confirm only the ones that really are this subject. Confirming links the entity and every record that mentions it at “possible” confidence, as shared records.</p>
-                    {{if .KGWithheld}}<p class="text-sm text-red-200" role="alert">{{.KGWithheld}}</p>
+                    {{if .KGWithheld}}<p class="text-sm text-red-800 dark:text-red-200" role="alert">{{.KGWithheld}}</p>
                     {{else if not .KG}}<p class="text-sm text-gray-400">No entity matches. That is an answer, not an error: try another name.</p>
                     {{else}}
-                    {{if .KGCapped}}<p class="text-sm text-amber-300">More entities match than are shown: narrow the search with a project or a longer name.</p>{{end}}
+                    {{if .KGCapped}}<p class="text-sm text-amber-700 dark:text-amber-300">More entities match than are shown: narrow the search with a project or a longer name.</p>{{end}}
                     <ul class="space-y-2">{{range .KG}}
                         <li class="kg-candidate border-t border-dark-700 pt-2 text-sm">
                             {{if .Withheld}}
@@ -92,7 +92,7 @@
                 <section id="text" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
                     <h2 class="text-base font-semibold text-gray-100">Free-text candidates</h2>
                     <p class="text-xs text-gray-500">Stored memory records containing a searched name, newest first, at most 50. Each shows only the text around the first match. Confirming records an operator link at “probable” confidence with unknown exclusivity, so the record is treated as SHARED: an access export lists it with its content withheld, and an erasure handles it by the request's Art 17(1) ground (deleted under (d)/(e), redacted with review otherwise). Rejecting records your decision in the audit log only; the record will be proposed again by a later search.</p>
-                    {{if .TextCapped}}<p class="text-sm text-amber-300">More matches exist than are shown: narrow the search with a project or a longer name.</p>{{end}}
+                    {{if .TextCapped}}<p class="text-sm text-amber-700 dark:text-amber-300">More matches exist than are shown: narrow the search with a project or a longer name.</p>{{end}}
                     {{if not .Text}}<p class="text-sm text-gray-400">No stored record contains these names.</p>
                     {{else}}
                     <ul class="space-y-2">{{range .Text}}

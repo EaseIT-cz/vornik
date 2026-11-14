@@ -222,6 +222,30 @@ func RunChatAuditSuite(t *testing.T, repo persistence.ChatAuditRepository) {
 	t.Run("Insert_defaults_duplicate_and_GetByID", func(t *testing.T) { chatAuditInsert(ctx, t, repo) })
 	t.Run("List_filters_orders_and_round_trips", func(t *testing.T) { chatAuditList(ctx, t, repo) })
 	t.Run("SavePrompt_is_idempotent_and_GetPrompt_misses_with_ErrNotFound", func(t *testing.T) { chatAuditPrompts(ctx, t, repo) })
+	t.Run("CountSince_counts_the_window_by_project", func(t *testing.T) {
+		ac, ok := repo.(persistence.ActivityCounter)
+		if !ok {
+			t.Fatalf("%T must implement persistence.ActivityCounter (GitHub #261)", repo)
+		}
+		project := uniqueID("proj261")
+		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, at := range []time.Time{base.Add(-48 * time.Hour), base, base.Add(time.Minute)} {
+			if err := repo.Insert(ctx, &persistence.ChatAuditEntry{ChatID: uniqueID("c"), ProjectID: project, Timestamp: at, RoleUsed: "r", Model: "m"}); err != nil {
+				t.Fatalf("insert %d: %v", i, err)
+			}
+		}
+		if err := repo.Insert(ctx, &persistence.ChatAuditEntry{ChatID: uniqueID("c"), ProjectID: uniqueID("other"), Timestamp: base, RoleUsed: "r", Model: "m"}); err != nil {
+			t.Fatal(err)
+		}
+		n, err := ac.CountSince(ctx, project, base)
+		if err != nil || n != 2 {
+			t.Fatalf("CountSince(project, base) = %d, %v; want 2 (the turn before the window and the other project's are out)", n, err)
+		}
+		all, err := ac.CountSince(ctx, "", base)
+		if err != nil || all < 3 {
+			t.Fatalf("CountSince(all projects) = %d, %v; want at least 3", all, err)
+		}
+	})
 }
 
 func chatAuditInsert(ctx context.Context, t *testing.T, repo persistence.ChatAuditRepository) {
@@ -553,10 +577,11 @@ func clusterNodeDelete(ctx context.Context, t *testing.T, repo persistence.Clust
 // a rival is refused while the lease is live and inherits epoch+1 once it
 // has expired.
 //
-// Renew and Release are deliberately NOT asserted: the SQLite implementation
-// is a single-process degenerate (Renew always true, Release a no-op — see
-// its comments) while Postgres implements both. That difference is filed
-// (backlog 2026-09-05), not hidden here.
+// Renew and Release are asserted on both drivers since GitHub #199
+// (2026-11-13). Until then SQLite's Renew answered true without extending the
+// lease and Release did nothing, so on a SQLite install the elector's renewals
+// left expires_at at the first acquire plus one TTL: a lease held by a live
+// leader read as expired, and DeleteExpired would remove it.
 func RunLeaderLockSuite(t *testing.T, repo persistence.DaemonLeaderLockRepository) {
 	t.Helper()
 	ctx := context.Background()
@@ -572,6 +597,62 @@ func RunLeaderLockSuite(t *testing.T, repo persistence.DaemonLeaderLockRepositor
 	t.Run("DeleteExpired_refuses_a_live_row_and_removes_an_expired_one", func(t *testing.T) {
 		leaderLockDeleteExpired(ctx, t, repo, now)
 	})
+	t.Run("Renew_extends_the_holders_lease_and_refuses_a_rival", func(t *testing.T) { leaderLockRenew(ctx, t, repo, now) })
+	t.Run("Release_lets_a_rival_take_the_lease_at_once", func(t *testing.T) { leaderLockRelease(ctx, t, repo) })
+}
+
+func leaderLockRenew(ctx context.Context, t *testing.T, repo persistence.DaemonLeaderLockRepository, now time.Time) {
+	t.Helper()
+	w := uniqueID("worker-renew")
+	if ok, _, err := repo.Acquire(ctx, w, "holder-a", now, time.Minute); err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	later := now.Add(45 * time.Second)
+	ok, err := repo.Renew(ctx, w, "holder-a", later, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("holder renew: ok=%v err=%v", ok, err)
+	}
+	got, err := repo.Get(ctx, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ExpiresAt.Equal(later.Add(time.Minute)) || !got.RenewedAt.Equal(later) {
+		t.Fatalf("renew did not move the lease: renewed_at=%v expires_at=%v, want %v and %v",
+			got.RenewedAt, got.ExpiresAt, later, later.Add(time.Minute))
+	}
+	if ok, err := repo.Renew(ctx, w, "holder-b", later, time.Minute); err != nil || ok {
+		t.Fatalf("a rival renewed a lease it does not hold: ok=%v err=%v", ok, err)
+	}
+	// Past the first TTL the renewed lease is still live, so a rival is refused.
+	if ok, _, err := repo.Acquire(ctx, w, "holder-b", now.Add(90*time.Second), time.Minute); err != nil || ok {
+		t.Fatalf("a rival took a renewed lease: ok=%v err=%v", ok, err)
+	}
+}
+
+func leaderLockRelease(ctx context.Context, t *testing.T, repo persistence.DaemonLeaderLockRepository) {
+	t.Helper()
+	w := uniqueID("worker-release")
+	// A lease acquired a minute ago with a long TTL, so only Release can end it.
+	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	if ok, _, err := repo.Acquire(ctx, w, "holder-a", start, time.Hour); err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	if err := repo.Release(ctx, w, "holder-b"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := repo.Acquire(ctx, w, "holder-b", time.Now().UTC().Add(time.Second), time.Minute); err != nil || ok {
+		t.Fatalf("a rival's Release ended the holder's lease: ok=%v err=%v", ok, err)
+	}
+	if err := repo.Release(ctx, w, "holder-a"); err != nil {
+		t.Fatal(err)
+	}
+	ok, epoch, err := repo.Acquire(ctx, w, "holder-b", time.Now().UTC().Add(time.Second), time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("after the holder's Release a rival could not take the lease: ok=%v err=%v", ok, err)
+	}
+	if epoch != 2 {
+		t.Fatalf("epoch after takeover = %d, want 2", epoch)
+	}
 }
 
 // leaderLockDeleteExpired pins the predicate that IS the control for

@@ -14,9 +14,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"vornik.io/vornik/internal/aimark"
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/listener"
+	"vornik.io/vornik/internal/mcp"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/admin"
@@ -684,6 +686,14 @@ type Server struct {
 	chatStoresMu sync.Mutex
 	chatStores   map[string]*webchat.SessionStore
 
+	// chatTurns holds the web chat's background turns (chat_turns.go,
+	// web-chat-design.md §2.3); chatTurnTimeout overrides the 5-minute cap
+	// (tests); longWork counts a running turn for the deploy idle gate.
+	chatTurnsOnce   sync.Once
+	chatTurns       *chatTurnRegistry
+	chatTurnTimeout time.Duration
+	longWork        func() (done func(), ok bool)
+
 	// chatSessionPersister (optional) DB-backs every webchat
 	// SessionStore the lazy chatStoreFor constructs. Set via
 	// WithChatSessionPersister at boot; nil leaves stores
@@ -804,6 +814,9 @@ type Server struct {
 	adminMCPRefresher    MCPRefresher
 	// operatorCredentials backs /ui/credentials (GitHub #623).
 	operatorCredentials OperatorCredentials
+	// mcpRefusals lists the MCP servers the daemon refused to register, for
+	// the hub's MCP section (GitHub #625 item 5). Nil: no list.
+	mcpRefusals func() []mcp.Refusal
 	// runtimeReadiness powers /ui/admin/health/runtime — voice STT/
 	// TTS provider health + storage backend reachability. Nil-safe;
 	// page renders an "Available: false" placeholder when absent.
@@ -2473,6 +2486,10 @@ func (s *Server) Handler() http.Handler {
 	// Spend deep-dive — token + cost analytics with drill-down by
 	// project, source, task, role/model.
 	mux.HandleFunc("/spend", s.Spend)
+	// Results & cost (#757): what got done and what it cost, 14 days.
+	mux.HandleFunc("/results", s.Results)
+	// The Manage overview (#759): what each Manage page is for.
+	mux.HandleFunc("/manage", s.Manage)
 	mux.HandleFunc("/insights/tool-budget", s.InsightsToolBudget)
 	mux.HandleFunc("/insights/trends", s.InsightsTrends)
 	mux.HandleFunc("/insights/quality", s.InsightsQuality)
@@ -2518,6 +2535,8 @@ func (s *Server) Handler() http.Handler {
 
 	// Inbox — unified "what needs me" operator-action queue.
 	mux.HandleFunc("/inbox", s.Inbox)
+	mux.HandleFunc("/ask", s.Ask)                         // the Ask door (#755)
+	mux.HandleFunc("/diagnostics", s.DiagnosticsOverview) // the engineering tiles (#756)
 	// Supervised web-write approval actions (Task 6): authenticated,
 	// CSRF-protected POST approve/reject on a pending web_write_actions row.
 	// Approve mints the one-time capability token; both are POST-only (never a
@@ -2821,6 +2840,22 @@ func (s *Server) projectRouter(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/tasks/new"):
 		projectID := strings.TrimSuffix(path, "/tasks/new")
 		s.ProjectCreateTaskSubmit(w, r, projectID)
+	// Web chat turns (web-chat-design.md §2.2 to §2.4).
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/chat/turns"):
+		s.ChatTurnStart(w, r, strings.TrimSuffix(path, "/chat/turns"))
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/chat/reset"):
+		s.ChatReset(w, r, strings.TrimSuffix(path, "/chat/reset"))
+	case strings.Contains(path, "/chat/turns/"):
+		projectID, rest, _ := strings.Cut(path, "/chat/turns/")
+		turnID, action, _ := strings.Cut(rest, "/")
+		switch {
+		case r.Method == http.MethodGet && action == "":
+			s.ChatTurnPoll(w, r, projectID, turnID)
+		case r.Method == http.MethodPost && action == "cancel":
+			s.ChatTurnCancel(w, r, projectID, turnID)
+		default:
+			http.NotFound(w, r)
+		}
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/chat"):
 		projectID := strings.TrimSuffix(path, "/chat")
 		s.ChatPage(w, r, projectID)
@@ -3298,7 +3333,9 @@ func uiFuncMap() template.FuncMap {
 		// renderMarkdown — minimal inline markdown for
 		// conversation messages. Bold/italic/code/links/
 		// fenced blocks. See template_helpers.go.
-		"renderMarkdown": renderInlineMarkdown,
+		"renderMarkdown":     renderInlineMarkdown,
+		"renderChatMarkdown": renderChatMarkdown,
+		"staticHref":         staticHref,
 		// lower — basic string lowercase. Used by the
 		// conversation thread's data-search attribute so
 		// the client-side filter is case-insensitive.
@@ -3678,7 +3715,9 @@ func uiFuncMap() template.FuncMap {
 		"hasSessionFlag": hasSessionFlag,
 		"navModel":       navModel,
 		"navAreaForPage": navAreaForPage,
+		"navInMore":      navInMore,
 		"keysAccessTab":  keysAccessTab,
+		"navOwner":       navOwner,
 	}
 }
 

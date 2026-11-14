@@ -20,6 +20,17 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# new_sid PREFIX prints a session id no other case in this run uses (GitHub
+# #684). A hint fires once per session, so two cases that drew the same
+# $RANDOM shared a session and the second printed nothing; the counter lives
+# in a file so an id taken inside $(...) is still never reused.
+new_sid() {
+  local n
+  n=$(( $(cat "$WORK/sid-counter" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" >"$WORK/sid-counter"
+  printf '%s%s' "$1" "$n"
+}
+
 REPO="$WORK/repo"
 mkdir -p "$REPO"
 export PLUGIN_DATA="$WORK/data"
@@ -134,7 +145,7 @@ done
 OUT="$(run_hook observe "$(sh_in $S "cat $REPO/internal/rag/r3.go")" VORNIK_NUDGE_RECALL_WINDOW_S=0)"
 grep -q "internal/rag" <<<"$OUT" || fail "case3: a recall older than the window still suppressed the nudge"
 for resp in '{"isError":true,"content":[{"type":"text","text":"daemon down"}]}' 'null' '{"error":"x"}' '[]' '""'; do
-  S="sess3f$RANDOM"
+  S="$(new_sid sess3f)"
   run_hook recalled "$(post_recall "$S" "$resp")" >/dev/null || fail "case3: recalled mode exited non-zero on $resp"
   for n in 1 2; do run_hook observe "$(sh_in "$S" "cat $REPO/internal/memory/f$n.go")" >/dev/null; done
   OUT="$(run_hook observe "$(sh_in "$S" "cat $REPO/internal/memory/f3.go")")"
@@ -143,7 +154,8 @@ done
 
 # --- Case 4: parser (threshold 1 to see each key at once).
 key_of() { # command -> nudge text or empty (fresh session per probe)
-  local sid="k$RANDOM$RANDOM"
+  local sid
+  sid="$(new_sid k)"
   run_hook observe "$(sh_in "$sid" "$1")" VORNIK_NUDGE_THRESHOLD=1 | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null
 }
 want_key() { # key command

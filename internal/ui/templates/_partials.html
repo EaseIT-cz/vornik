@@ -8,10 +8,10 @@
     {{/* theme-color drives the mobile browser address-bar tint and the
          PWA title-bar accent. Updated at runtime by the theme-picker
          JS below so it tracks the operator's choice. The initial value
-         is the dark-theme page colour since dark is the default theme;
-         the early script will overwrite this before first paint if a
-         light-theme preference is saved/system-set. */}}
-    <meta name="theme-color" content="#10141A">
+         is the light-theme page colour since light is the default theme
+         (design §12 part A, #753); the early script will overwrite this
+         before first paint if a dark preference is saved/system-set. */}}
+    <meta name="theme-color" content="#F6F4EF">
     {{/* color-scheme is also set by the active palette's `color-scheme`
          CSS property in :root/[data-theme=dark], which the browser
          honours over this meta when the page is loaded. We keep the
@@ -30,11 +30,12 @@
         (function () {
             try {
                 var saved = localStorage.getItem('vornik:theme');
-                // Dark is the default (UI refresh 2026-06-08): honour an
-                // explicit saved pick first, then an explicit system LIGHT
-                // preference; otherwise fall through to dark.
+                // Light is the default (design §12 part A, #753): honour an
+                // explicit saved pick first, then an explicit system DARK
+                // preference; otherwise fall through to light, the same
+                // theme the page renders with JavaScript off.
                 var theme = saved
-                    || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                    || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
                 document.documentElement.setAttribute('data-theme', theme);
                 // Sync the address-bar tint with the chosen theme.
                 // Light = Paper #F6F4EF, dark = #10141A (Brand Manual v1.2).
@@ -315,6 +316,47 @@
            A change to `data-theme` on <html> re-paints the whole UI
            without re-rendering markup.
            ============================================================ */
+        /* Status ramps (design system v2 part C, ui-design-refresh-design.md §12.2 C, #753).
+           Ordered by lightness in BOTH themes, unlike the role-ordered brand scale,
+           because the templates already pair a light step with a dark: step
+           (text-rose-700 dark:text-rose-300). Tailwind's rose/red, amber/yellow and
+           emerald/green alias these (tailwind.config.js). Pinned by
+           status_palette_753_test.go. */
+        :root { /* status ramps (#753 part C) */
+            --danger-50: 254 243 242; /* #FEF3F2 */
+            --danger-100: 254 228 226; /* #FEE4E2 */
+            --danger-200: 254 205 202; /* #FECDCA */
+            --danger-300: 253 162 155; /* #FDA29B */
+            --danger-400: 249 112 102; /* #F97066 */
+            --danger-500: 229 72 61; /* #E5483D */
+            --danger-600: 200 50 31; /* #C8321F */
+            --danger-700: 180 35 24; /* #B42318 */
+            --danger-800: 145 32 24; /* #912018 */
+            --danger-900: 122 39 26; /* #7A271A */
+            --danger-950: 85 22 12; /* #55160C */
+            --warn-50: 255 250 235; /* #FFFAEB */
+            --warn-100: 254 240 199; /* #FEF0C7 */
+            --warn-200: 254 223 137; /* #FEDF89 */
+            --warn-300: 254 200 75; /* #FEC84B */
+            --warn-400: 245 184 75; /* #F5B84B */
+            --warn-500: 224 138 11; /* #E08A0B */
+            --warn-600: 181 71 8; /* #B54708 */
+            --warn-700: 154 74 6; /* #9A4A06 */
+            --warn-800: 122 58 5; /* #7A3A05 */
+            --warn-900: 94 45 6; /* #5E2D06 */
+            --warn-950: 58 28 4; /* #3A1C04 */
+            --ok-50: 243 249 236; /* #F3F9EC */
+            --ok-100: 226 240 210; /* #E2F0D2 */
+            --ok-200: 197 227 166; /* #C5E3A6 */
+            --ok-300: 155 219 107; /* #9BDB6B */
+            --ok-400: 134 198 83; /* #86C653 */
+            --ok-500: 94 154 48; /* #5E9A30 */
+            --ok-600: 63 122 31; /* #3F7A1F */
+            --ok-700: 54 105 26; /* #36691A */
+            --ok-800: 42 79 20; /* #2A4F14 */
+            --ok-900: 31 59 15; /* #1F3B0F */
+            --ok-950: 22 41 11; /* #16290B */
+        }
         :root, [data-theme="light"] {
             /* LIGHT — Brand Manual v1.2. The scale is ordered by ROLE, not
                lightness: the templates are dark-first, so the steps they use
@@ -340,6 +382,27 @@
             /* Form-control boundary: >= 3:1 vs page, card, raised and glass
                (WCAG 1.4.11; design §11.3). Binding pair: page, 3.04:1. */
             --control-border: 134 141 152; /* #868D98 */
+            /* Chart palette (#753 part E, #757): one series colour (chart-1), context bars (chart-muted), a limit line, four more series, quiet gridlines. */
+            --chart-1: 22 101 173; /* #1665AD */
+            --chart-2: 196 98 10; /* #C4620A */
+            --chart-3: 15 123 108; /* #0F7B6C */
+            --chart-4: 122 79 181; /* #7A4FB5 */
+            --chart-5: 94 102 114; /* #5E6672 */
+            --chart-muted: 103 141 186; /* #678DBA: 3.1:1 on Paper, 3.5:1 on the card */
+            --chart-threshold: 100 108 120; /* #646C78 */
+            --chart-grid: 236 232 223; /* #ECE8DF */
+            /* Status roles for the components (#753 part C): text, fill behind white,
+               tint; each is a ramp step. Warn text (700) is darker than the warn fill
+               (600) because amber needs the extra step to reach 4.5:1 as text. */
+            --danger-text: 180 35 24; /* #B42318 */
+            --danger-fill: 180 35 24; /* #B42318 */
+            --danger-tint: 254 243 242; /* #FEF3F2 */
+            --warn-text: 154 74 6; /* #9A4A06 */
+            --warn-fill: 181 71 8; /* #B54708 */
+            --warn-tint: 255 250 235; /* #FFFAEB */
+            --ok-text: 54 105 26; /* #36691A */
+            --ok-fill: 63 122 31; /* #3F7A1F */
+            --ok-tint: 243 249 236; /* #F3F9EC */
             /* Brand — EaseIT blue (role-ordered, see above) */
             --brand-50: 11 52 90;  /* #0B345A */
             --brand-100: 14 67 116; /* #0E4374 */
@@ -385,6 +448,25 @@
             /* Form-control boundary: >= 3:1 vs page, card, raised and glass
                (WCAG 1.4.11; design §11.3). Binding pair: glass over card, 3.03:1. */
             --control-border: 121 129 140; /* #79818C */
+            /* Chart palette (#753 part E, #757): see the light block. */
+            --chart-1: 79 163 230; /* #4FA3E6 */
+            --chart-2: 240 160 80; /* #F0A050 */
+            --chart-3: 60 195 174; /* #3CC3AE */
+            --chart-4: 179 149 232; /* #B395E8 */
+            --chart-5: 154 162 172; /* #9AA2AC */
+            --chart-muted: 78 115 156; /* #4E739C */
+            --chart-threshold: 138 146 156; /* #8A929C */
+            --chart-grid: 35 42 52; /* #232A34 */
+            /* Status roles (#753 part C), dark theme: see the light block. */
+            --danger-text: 249 112 102; /* #F97066 */
+            --danger-fill: 200 50 31; /* #C8321F */
+            --danger-tint: 85 22 12; /* #55160C */
+            --warn-text: 254 200 75; /* #FEC84B */
+            --warn-fill: 181 71 8; /* #B54708 */
+            --warn-tint: 58 28 4; /* #3A1C04 */
+            --ok-text: 155 219 107; /* #9BDB6B */
+            --ok-fill: 63 122 31; /* #3F7A1F */
+            --ok-tint: 22 41 11; /* #16290B */
             /* Brand — EaseIT blue (400 is text only: white on it is 2.7:1) */
             --brand-50: 238 245 252; /* #EEF5FC */
             --brand-100: 214 232 250; /* #D6E8FA */
@@ -427,9 +509,9 @@
         [data-theme="dark"] .theme-icon-sun  { display: block; }
         [data-theme="dark"] .theme-icon-moon { display: none; }
         /* Nav-logo outcome dot — the Harness mark's green "approved
-           outcome" (brand mark design §2.2). On the rail it is the
-           on-dark signal green in both themes' glass. */
-        .nav-logo-dot { fill: #9BDB6B; }
+           outcome" (brand mark design §2.2): Signal Green #6EA83B on the
+           light rail, #9BDB6B on the dark one, since #753 part D. */
+        .nav-logo-dot { fill: #6EA83B; }
         [data-theme="dark"] .nav-logo-dot { fill: #9BDB6B; }
 
         /* === Type system === Brand Manual v1.2 faces, self-hosted from
@@ -466,27 +548,9 @@
             font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
         }
 
-        /* === Atmosphere === page floor gets a soft brand glow + a hair of
-           grain instead of a flat fill, so the glass surfaces have something
-           with depth to sample. background-color still comes from the page's
-           bg-dark-900 utility; these layer on top, fixed so they don't scroll. */
-        body::before {
-            content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-            background:
-                radial-gradient(1100px circle at 8% -8%, rgb(var(--brand-500) / 0.16), transparent 55%),
-                radial-gradient(900px circle at 100% 0%, rgb(var(--brand-400) / 0.08), transparent 50%),
-                radial-gradient(1200px circle at 50% 120%, rgb(var(--brand-600) / 0.10), transparent 55%);
-        }
-        [data-theme="light"] body::before {
-            background:
-                radial-gradient(1100px circle at 8% -8%, rgb(var(--brand-500) / 0.10), transparent 55%),
-                radial-gradient(900px circle at 100% 0%, rgb(var(--brand-300) / 0.10), transparent 50%);
-        }
-        /* Fine grain overlay for tactile depth (very subtle). */
-        body::after {
-            content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.035;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-        }
+        /* === Atmosphere === none since #753 part D: background-color comes
+           from the page's bg-dark-900 utility (Paper in light), with no glow or
+           grain on top. */
         .htmx-request .htmx-indicator { display: inline; }
         .htmx-indicator { display: none; }
         .htmx-swapping { opacity: 0; transition: opacity 200ms ease-out; }
@@ -535,7 +599,7 @@
             align-items: center;
             padding: 0.125rem 0.5rem;
             border-radius: 9999px;
-            font-size: 0.75rem;
+            font-size: 13px;
             font-weight: 500;
             white-space: nowrap;
         }
@@ -690,47 +754,119 @@
         }
 
         /* === Glass surface system (UI refresh 2026-06-08, design §4) ===
-           L2 "balanced" translucency. Surfaces opt in via class="glass".
-           Tailwind CDN does not prune classes, so no safelist needed. */
+           Flat since #753 part D (design §12.2 D): .glass is the opaque card,
+           kept as a class name so its 408 uses change at once; pages move to
+           .v-card as they are redesigned. */
         :root, [data-theme="light"] {
-            --glass-bg: 255 255 255;          /* used as rgb(var(--glass-bg) / alpha) */
-            --glass-bg-alpha: 0.60;
-            --glass-border: rgba(255,255,255,0.80);
-            --glass-blur: 12px;
-            --glass-shadow: 0 8px 28px rgba(40,70,90,0.12);
-            --glass-inner: inset 0 1px 0 rgba(255,255,255,0.90);
+            /* Opaque since #753 part D: the card colour (surface-800), so
+               every pair pinned on surface-800 holds on .glass. */
+            --glass-bg: 255 255 255;          /* = surface-800 (light) */
+            --glass-bg-alpha: 1;
+            --glass-border: rgb(var(--surface-600));
         }
         [data-theme="dark"] {
-            --glass-bg: 255 255 255;
-            --glass-bg-alpha: 0.12;
-            --glass-border: rgba(255,255,255,0.22);
-            --glass-blur: 12px;
-            --glass-shadow: 0 8px 32px rgba(0,0,0,0.25);
-            --glass-inner: inset 0 1px 0 rgba(255,255,255,0.25);
+            --glass-bg: 23 28 35;             /* = surface-800 (dark) */
+            --glass-bg-alpha: 1;
+            --glass-border: rgb(var(--surface-600));
         }
         .glass {
             background: rgb(var(--glass-bg) / var(--glass-bg-alpha));
             border: 1px solid var(--glass-border);
-            backdrop-filter: blur(var(--glass-blur));
-            -webkit-backdrop-filter: blur(var(--glass-blur));
-            box-shadow: var(--glass-shadow), var(--glass-inner);
         }
-        /* Fallback: no backdrop-filter support → near-opaque CARD surface.
-           Not --glass-bg: that is white in both themes (a veil), so dark
-           glass turned near-white under light text (ink-100 1.03:1). The
-           card colour is white in light (unchanged) and the dark card in
-           dark, so every pair pinned on surface-800 holds (design §11.4 a). */
-        @supports not (backdrop-filter: blur(1px)) {
-            .glass { background: rgb(var(--surface-800) / 0.92); }
+
+        /* === Components (#753 part C) === */
+        /* Design system v2 (ui-design-refresh-design.md §12.2 C; reference:
+           docs/design/vornik-design-system/). Token-only: no literal colour,
+           three radii (12px cards, 8px controls, 9999px pills). Pages adopt
+           them one by one (epic #761); components_753_test.go pins them and
+           ratchets the raw-button count down. */
+        .v-btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+            min-height: 44px; padding: 10px 18px; box-sizing: border-box;
+            font: 600 15px/22px 'Manrope', system-ui, sans-serif;
+            border-radius: 8px; border: 1px solid transparent; cursor: pointer; text-decoration: none;
         }
-        /* Accessibility: respect reduced-transparency by dropping the blur. */
-        @media (prefers-reduced-transparency: reduce) {
-            .glass {
-                background: rgb(var(--surface-800) / 0.96); /* see fallback above */
-                backdrop-filter: none;
-                -webkit-backdrop-filter: none;
-            }
+        .v-btn:focus-visible { outline: 2px solid rgb(var(--brand-400)); outline-offset: 2px; }
+        .v-btn--primary { background: rgb(var(--brand-600)); color: rgb(255 255 255); }
+        .v-btn--primary:hover { background: rgb(var(--brand-500)); }
+        .v-btn--secondary { background: rgb(var(--surface-800)); color: rgb(var(--ink-100)); border-color: rgb(var(--control-border)); }
+        .v-btn--secondary:hover { background: rgb(var(--surface-700)); }
+        .v-btn--quiet { background: transparent; color: rgb(var(--brand-400)); padding-left: 8px; padding-right: 8px; }
+        .v-btn--quiet:hover { color: rgb(var(--brand-300)); text-decoration: underline; }
+        .v-btn--danger { background: rgb(var(--danger-fill)); color: rgb(255 255 255); }
+        .v-btn[disabled], .v-btn[aria-disabled="true"] { background: rgb(var(--surface-700)); color: rgb(var(--ink-600)); border-color: rgb(var(--surface-600)); cursor: not-allowed; }
+        .v-card { background: rgb(var(--surface-800)); border: 1px solid rgb(var(--surface-600)); border-radius: 12px; padding: 20px; }
+        .v-card--raised { border-color: transparent; box-shadow: 0 8px 24px rgb(var(--ink-100) / 0.12); }
+        .v-card__title { font-weight: 600; font-size: 18px; line-height: 26px; margin: 0 0 8px; color: rgb(var(--ink-100)); }
+        .v-list { background: rgb(var(--surface-800)); border: 1px solid rgb(var(--surface-600)); border-radius: 12px; overflow: hidden; }
+        .v-list-row {
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+            min-height: 44px; padding: 12px 20px; box-sizing: border-box;
+            border-top: 1px solid rgb(var(--surface-600)); color: rgb(var(--ink-100)); text-decoration: none;
         }
+        .v-list-row:first-child { border-top: 0; }
+        .v-list-row:hover { background: rgb(var(--surface-700)); }
+        .v-list-row__meta { color: rgb(var(--ink-400)); font-size: 13px; line-height: 18px; white-space: nowrap; }
+        .v-inbox-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 16px 20px; border-top: 1px solid rgb(var(--surface-600)); }
+        .v-inbox-row:first-child { border-top: 0; }
+        .v-inbox-row__body { flex: 1 1 260px; min-width: 0; }
+        .v-inbox-row__title { font-weight: 600; color: rgb(var(--ink-100)); }
+        .v-inbox-row__context { color: rgb(var(--ink-400)); font-size: 13px; line-height: 18px; }
+        .v-dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 9999px; background: rgb(var(--ink-400)); }
+        .v-dot--warn { background: rgb(var(--warn-text)); }
+        .v-dot--ok { background: rgb(var(--ok-text)); }
+        .v-dot--danger { background: rgb(var(--danger-text)); }
+        .v-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-width: 22px; height: 22px; padding: 0 8px; box-sizing: border-box; border-radius: 9999px;
+            background: rgb(var(--warn-fill)); color: rgb(255 255 255); font-size: 13px; line-height: 18px; font-weight: 600;
+        }
+        .v-stat { background: rgb(var(--surface-800)); border: 1px solid rgb(var(--surface-600)); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+        .v-stat__label, .v-stat__context { color: rgb(var(--ink-400)); font-size: 13px; line-height: 18px; }
+        .v-stat__value { font: 700 32px/40px 'Space Grotesk', 'Manrope', system-ui, sans-serif; letter-spacing: -0.02em; color: rgb(var(--ink-100)); }
+        .v-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 20px; text-align: center; color: rgb(var(--ink-400)); }
+        .v-empty__title { font-weight: 600; color: rgb(var(--ink-100)); }
+        .v-field { display: flex; flex-direction: column; gap: 4px; }
+        .v-field__label { font-weight: 600; color: rgb(var(--ink-100)); }
+        .v-field__control {
+            min-height: 44px; padding: 10px 12px; box-sizing: border-box; font: 400 15px/22px 'Manrope', system-ui, sans-serif;
+            border-radius: 8px; border: 1px solid rgb(var(--control-border)); background: rgb(var(--surface-800)); color: rgb(var(--ink-100));
+        }
+        .v-field__control:focus-visible { outline: 2px solid rgb(var(--brand-400)); outline-offset: 1px; }
+        .v-field__hint { color: rgb(var(--ink-400)); font-size: 13px; line-height: 18px; }
+        .v-field--error .v-field__control { border-color: rgb(var(--danger-text)); }
+        .v-field__error { color: rgb(var(--danger-text)); font-size: 13px; line-height: 18px; }
+        /* Charts and graphs (#753 part E, #757): SVG classes on the chart
+           palette. CSS beats SVG presentation attributes, so a template
+           names a class instead of a fill="#…". Text is the 13px caption. */
+        .c-chart text, .c-text { fill: rgb(var(--ink-400)); font-size: 13px; font-family: 'Manrope', system-ui, sans-serif; }
+        .c-text-strong { fill: rgb(var(--ink-100)); font-weight: 600; }
+        .c-grid { stroke: rgb(var(--chart-grid)); stroke-width: 1; }
+        .c-axis { stroke: rgb(var(--surface-600)); stroke-width: 1; }
+        .c-threshold { stroke: rgb(var(--chart-threshold)); stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+        .c-bar { fill: rgb(var(--chart-muted)); }
+        .c-bar-now, .c-s1 { fill: rgb(var(--chart-1)); }
+        .c-s2 { fill: rgb(var(--chart-2)); } .c-s3 { fill: rgb(var(--chart-3)); }
+        .c-s4 { fill: rgb(var(--chart-4)); } .c-s5 { fill: rgb(var(--chart-5)); }
+        .c-line-s1 { stroke: rgb(var(--chart-1)); stroke-width: 1.5; fill: none; }
+        .c-line-s4 { stroke: rgb(var(--chart-4)); stroke-width: 1.5; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+        .c-ok { fill: rgb(var(--ok-text)); } .c-warn { fill: rgb(var(--warn-text)); } .c-danger { fill: rgb(var(--danger-text)); }
+        .c-stroke-ok { stroke: rgb(var(--ok-text)); } .c-stroke-warn { stroke: rgb(var(--warn-text)); } .c-stroke-danger { stroke: rgb(var(--danger-text)); }
+        .c-stroke-muted { stroke: rgb(var(--control-border)); }
+        .c-stroke-s1 { stroke: rgb(var(--chart-1)); } .c-stroke-s2 { stroke: rgb(var(--chart-2)); }
+        .c-stroke-s3 { stroke: rgb(var(--chart-3)); } .c-stroke-s4 { stroke: rgb(var(--chart-4)); }
+        .c-stroke-s5 { stroke: rgb(var(--chart-5)); }
+        .c-fill-brand { fill: rgb(var(--brand-400)); } .c-fill-muted { fill: rgb(var(--chart-muted)); }
+        /* Graph nodes (workflow and memory graphs). */
+        .g-node { fill: rgb(var(--surface-800)); stroke: rgb(var(--control-border)); stroke-width: 1.5; }
+        .g-node--entry { stroke: rgb(var(--brand-400)); }
+        .g-node--unreachable { stroke: rgb(var(--warn-text)); stroke-dasharray: 4 3; }
+        .g-node--terminal { fill: rgb(var(--ok-tint)); }
+        .g-node--recovery { fill: rgb(var(--danger-tint)); }
+        .g-node--seed { fill: rgb(var(--chart-3)); stroke: rgb(var(--surface-800)); }
+        .g-node--entity { fill: rgb(var(--chart-1)); stroke: rgb(var(--surface-800)); }
+        .g-label { fill: rgb(var(--ink-100)); font-weight: 600; }
+        /* === end components === */
 
         /* === Rail + contextual-panel nav (UI refresh 2026-06-08) === */
         .rail-ico {
@@ -744,6 +880,7 @@
            translucent glass). The earlier subtle 0.12-alpha tint + brand-text
            was nearly invisible on the rail/panel/tabs. */
         .rail-ico-active { color: #fff; background: rgb(var(--brand-500)); }
+        .rail-badge { position: absolute; top: -2px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 13px; line-height: 18px; }
         .panel-item {
             display: flex; align-items: center; gap: 0.625rem;
             padding: 0.5rem 0.625rem; border-radius: 0.5rem;
@@ -806,11 +943,6 @@
         .panel-primary[data-tone="sky"]   { border-color: rgb(14 165 233 / 0.50); box-shadow: 0 4px 22px rgb(14 165 233 / 0.12); }
         .panel-primary[data-tone="rose"]  { border-color: rgb(244 63 94 / 0.50);  box-shadow: 0 4px 22px rgb(244 63 94 / 0.12); }
 
-        .panel-ref { background: rgb(var(--surface-800) / 0.40); border: 1px solid rgb(var(--surface-600) / 0.60); border-radius: 0.75rem; }
-        .panel-ref > summary { cursor: pointer; list-style: none; }
-        .panel-ref > summary::-webkit-details-marker { display: none; }
-        .panel-ref > summary::details-marker { display: none; }
-        .panel-ref[open] { background: rgb(var(--surface-800) / 0.60); }
 
         /* ============================================================
            SEMANTIC STATUS PILLS + ALERTS — theme-aware.
@@ -823,7 +955,7 @@
         .pill {
             display: inline-flex; align-items: center; gap: 0.35em;
             padding: 0.15rem 0.55rem; border-radius: 9999px;
-            font-size: 11px; font-weight: 600; line-height: 1.5;
+            font-size: 13px; font-weight: 600; line-height: 1.4;
             letter-spacing: 0.02em; white-space: nowrap;
             border: 1px solid transparent;
         }
@@ -851,7 +983,7 @@
         .alert { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.75rem 0.9rem; border-radius: 0.75rem; border: 1px solid transparent; }
         .alert-icon { flex: 0 0 auto; width: 1.9rem; height: 1.9rem; border-radius: 0.6rem; display: grid; place-items: center; }
         .alert-title { font-size: 13px; font-weight: 600; line-height: 1.3; }
-        .alert-sub { font-size: 11px; line-height: 1.4; margin-top: 0.15rem; opacity: 0.8; }
+        .alert-sub { font-size: 13px; line-height: 1.4; margin-top: 0.15rem; opacity: 0.8; }
         .alert-spend { color: #553188; background: #EEE6F8; border-color: #CBB4E6; }
         .alert-spend .alert-icon { background: #DFD0F0; color: #6B43A0; }
         [data-theme="dark"] .alert-spend { color: #E4D4F7; background: rgb(150 110 220 / 0.16); border-color: rgb(176 134 232 / 0.42); }
@@ -868,6 +1000,9 @@
 {{/* === Rail-area icon defines (UI refresh 2026-06-08) ===
      Heroicons-style 24px line icons, one per nav area + destination.
      Rendered by navIconResolve in the rail/panel/drawer. */}}
+{{define "navIconAsk"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5h16v11H9l-5 4z"/></svg>{{end}}
+{{define "navIconManage"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>{{end}}
+{{define "navIconDiagnostics"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12h4l2-5 4 10 2-5h6"/></svg>{{end}}
 {{define "navIconOverview"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z"/></svg>{{end}}
 {{define "navIconOrchestration"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10"/></svg>{{end}}
 {{define "navIconSwarms"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path stroke-linecap="round" d="M12 7.2 6.5 15.8M12 7.2l5.5 8.6M7 18h10"/></svg>{{end}}
@@ -915,7 +1050,7 @@
 {{define "navIconProjects"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2 8.5A2.5 2.5 0 014.5 6H9l2 2h8.5A2.5 2.5 0 0122 10.5V17a2.5 2.5 0 01-2.5 2.5h-15A2.5 2.5 0 012 17V8.5z"/></svg>{{end}}
 {{/* navIconResolve maps an icon name (from navModel) to its define —
      Go templates can't call a template by dynamic name, so dispatch. */}}
-{{define "navIconResolve"}}{{if eq . "navIconProjects"}}{{template "navIconProjects"}}{{else if eq . "navIconOverview"}}{{template "navIconOverview"}}{{else if eq . "navIconOrchestration"}}{{template "navIconOrchestration"}}{{else if eq . "navIconSwarms"}}{{template "navIconSwarms"}}{{else if eq . "navIconWorkflows"}}{{template "navIconWorkflows"}}{{else if eq . "navIconExecutions"}}{{template "navIconExecutions"}}{{else if eq . "navIconTasks"}}{{template "navIconTasks"}}{{else if eq . "navIconMemory"}}{{template "navIconMemory"}}{{else if eq . "navIconReminders"}}{{template "navIconReminders"}}{{else if eq . "navIconInsight"}}{{template "navIconInsight"}}{{else if eq . "navIconSpend"}}{{template "navIconSpend"}}{{else if eq . "navIconGauge"}}{{template "navIconGauge"}}{{else if eq . "navIconScorecard"}}{{template "navIconScorecard"}}{{else if eq . "navIconTrading"}}{{template "navIconTrading"}}{{else if eq . "navIconAudit"}}{{template "navIconAudit"}}{{else if eq . "navIconMcp"}}{{template "navIconMcp"}}{{else if eq . "navIconAdmin"}}{{template "navIconAdmin"}}{{else if eq . "navIconKey"}}{{template "navIconKey"}}{{else if eq . "navIconUser"}}{{template "navIconUser"}}{{else if eq . "navIconUsers"}}{{template "navIconUsers"}}{{else if eq . "navIconRobot"}}{{template "navIconRobot"}}{{else if eq . "navIconSkill"}}{{template "navIconSkill"}}{{else if eq . "navIconControlPlane"}}{{template "navIconControlPlane"}}{{else if eq . "navIconSteer"}}{{template "navIconSteer"}}{{else if eq . "navIconLive"}}{{template "navIconLive"}}{{else if eq . "navIconInbox"}}{{template "navIconInbox"}}{{else if eq . "navIconIntegrations"}}{{template "navIconIntegrations"}}{{else if eq . "navIconAdoption"}}{{template "navIconAdoption"}}{{end}}{{end}}
+{{define "navIconResolve"}}{{if eq . "navIconProjects"}}{{template "navIconProjects"}}{{else if eq . "navIconOverview"}}{{template "navIconOverview"}}{{else if eq . "navIconOrchestration"}}{{template "navIconOrchestration"}}{{else if eq . "navIconSwarms"}}{{template "navIconSwarms"}}{{else if eq . "navIconWorkflows"}}{{template "navIconWorkflows"}}{{else if eq . "navIconExecutions"}}{{template "navIconExecutions"}}{{else if eq . "navIconTasks"}}{{template "navIconTasks"}}{{else if eq . "navIconMemory"}}{{template "navIconMemory"}}{{else if eq . "navIconReminders"}}{{template "navIconReminders"}}{{else if eq . "navIconInsight"}}{{template "navIconInsight"}}{{else if eq . "navIconSpend"}}{{template "navIconSpend"}}{{else if eq . "navIconGauge"}}{{template "navIconGauge"}}{{else if eq . "navIconScorecard"}}{{template "navIconScorecard"}}{{else if eq . "navIconTrading"}}{{template "navIconTrading"}}{{else if eq . "navIconAudit"}}{{template "navIconAudit"}}{{else if eq . "navIconMcp"}}{{template "navIconMcp"}}{{else if eq . "navIconAdmin"}}{{template "navIconAdmin"}}{{else if eq . "navIconKey"}}{{template "navIconKey"}}{{else if eq . "navIconUser"}}{{template "navIconUser"}}{{else if eq . "navIconUsers"}}{{template "navIconUsers"}}{{else if eq . "navIconRobot"}}{{template "navIconRobot"}}{{else if eq . "navIconSkill"}}{{template "navIconSkill"}}{{else if eq . "navIconControlPlane"}}{{template "navIconControlPlane"}}{{else if eq . "navIconSteer"}}{{template "navIconSteer"}}{{else if eq . "navIconLive"}}{{template "navIconLive"}}{{else if eq . "navIconInbox"}}{{template "navIconInbox"}}{{else if eq . "navIconIntegrations"}}{{template "navIconIntegrations"}}{{else if eq . "navIconAdoption"}}{{template "navIconAdoption"}}{{else if eq . "navIconAsk"}}{{template "navIconAsk"}}{{else if eq . "navIconManage"}}{{template "navIconManage"}}{{else if eq . "navIconDiagnostics"}}{{template "navIconDiagnostics"}}{{end}}{{end}}
 
 {{define "navLogo"}}
 <a href="/ui/" title="Vornik — Dashboard" aria-label="Vornik — Dashboard" class="flex items-center justify-center text-gray-100">
@@ -964,7 +1099,7 @@
      Sun + moon icons are stacked — CSS toggles which is visible by
      reading [data-theme] off <html>. No JS required for the icon
      swap, only for the actual theme write. */}}
-<button type="button" id="theme-toggle"
+<button type="button" id="theme-toggle" data-theme-toggle
         class="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500/10 transition-colors"
         aria-label="Toggle colour theme" title="Toggle colour theme">
     {{/* Both glyphs sit in the same slot; theme-aware CSS in the
@@ -987,9 +1122,11 @@
     // like a jarring repaint; removed after the transition runs to
     // avoid animating subsequent UI changes.
     (function () {
-        var btn = document.getElementById('theme-toggle');
-        if (!btn) return;
-        btn.addEventListener('click', function () {
+        // One delegated listener for every [data-theme-toggle]: the rail
+        // button and the phone More sheet's row (§18). Delegated because
+        // this script runs inside the rail, before the phone bar exists.
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest || !e.target.closest('[data-theme-toggle]')) return;
             var html = document.documentElement;
             var current = html.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
             var next = current === 'dark' ? 'light' : 'dark';
@@ -1040,12 +1177,16 @@
     {{template "navLogo" .}}
     <div class="flex-1 flex flex-col items-center gap-1 mt-2">
         {{range navModel .}}
+        <div class="relative">
         <a href="{{.Href}}" title="{{.Label}}" data-rail="{{.Key}}"
-           {{if .AdminOnly}}data-admin-link {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}rail-ico{{if eq $activeArea .Key}} rail-ico-active{{end}}"
+           {{if .AdminOnly}}data-admin-link {{end}}{{if .OwnerHref}}data-owner-href="{{.OwnerHref}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}rail-ico{{if eq $activeArea .Key}} rail-ico-active{{end}}"
            {{if eq $activeArea .Key}}aria-current="true"{{end}}>
             {{template "navIconResolve" .Icon}}
-            <span class="sr-only">{{.Label}}</span>
+            <span class="sr-only">{{.Label}}{{if gt .Badge 0}} ({{.Badge}}){{end}}</span>
         </a>
+        {{/* The Needs you count (#755), beside the icon link so the link stays icon-only. */}}
+        {{if gt .Badge 0}}<span class="v-badge rail-badge pointer-events-none" aria-hidden="true">{{.Badge}}</span>{{end}}
+        </div>
         {{end}}
     </div>
     <form method="POST" action="/ui/logout" data-signout class="{{if not (hasSessionFlag .)}}hidden{{end}}">
@@ -1060,17 +1201,17 @@
 {{/* === Contextual panels (md:+) — one per area, stacked in the same fixed
      slot. The ACTIVE area's panel is open by default (.panel-open); hovering
      another rail icon swaps which one shows (script below). === */}}
-{{range navModel .}}
+{{range $area := navModel .}}{{if .Dests}}
 <aside data-panel="{{.Key}}" class="contextual-panel fixed inset-y-0 left-14 z-40 w-52 p-3 glass border-r" aria-label="{{.Label}} section">
     <div class="font-display text-xs uppercase tracking-wider text-gray-500 px-2 mb-2 mt-1">{{.Label}}</div>
     {{range .Dests}}
-    <a href="{{.Href}}" {{if .AdminOnly}}data-admin-link {{end}}{{if .Cap}}data-cap="{{.Cap}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}panel-item{{if eq $.CurrentPage .Key}} panel-item-active{{end}}"
+    <a href="{{.Href}}" {{if .AdminOnly}}data-admin-link {{end}}{{template "navOwnerAttr" (navOwner $area .)}}{{if .Cap}}data-cap="{{.Cap}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}panel-item{{if eq $.CurrentPage .Key}} panel-item-active{{end}}"
        {{if eq $.CurrentPage .Key}}aria-current="page"{{end}}>
-        {{template "navIconResolve" .Icon}}<span>{{.Label}}{{if gt .Badge 0}} ({{.Badge}}){{end}}</span>
+        {{template "navIconResolve" .Icon}}<span>{{.Label}}</span>
     </a>
     {{end}}
 </aside>
-{{end}}
+{{end}}{{end}}
 {{/* Rail hover swaps the open panel; leaving reverts to the active area's.
      A short revert delay bridges the icon→panel gap so it doesn't flicker. */}}
 <script>
@@ -1101,61 +1242,92 @@
     })();
 </script>
 
-{{/* === Bottom nav (< md:) === */}}
-{{/* Reminders replaces Audit on mobile: Audit is an admin-leaning
-     surface (rarely needed on phone), while Reminders is the
-     operator's at-a-glance schedule view and was previously
-     unreachable on mobile entirely. Audit stays one tap away
-     via the desktop nav and the command palette. */}}
-{{/* === Bottom area-tab bar + contextual drawers (< md) — UI refresh ===
-     Top-level AREAS as tabs (from navModel); tapping a tab toggles a
-     glass drawer listing that area's destinations. Admin tab gated like
-     the rail; sign-out is the trailing data-signout control. */}}
+{{/* === Phone bar (< md): four tabs and More (ui-design-refresh-design.md §18) ===
+     Five cells for every audience, so each is ~78 pt wide on a 390 pt
+     iPhone (it was up to 8 cells, 48.75 pt each, 2026-11-14). The
+     PhoneTab areas (Home, Ask, Needs you, Results) are the tabs: a door is
+     a link, Results a button opening its drawer. Every other area is a
+     <details> group in the More drawer, with the same destinations and the
+     same gating attributes as the rail; then Theme, and, for a session, My
+     account and Sign out. */}}
 <nav class="md:hidden fixed bottom-0 left-0 right-0 z-50 glass menu-solid border-t safe-pb" role="navigation" aria-label="Primary">
     <div class="flex h-16">
-        {{/* Home/Dashboard — a direct link (no submenu). On desktop the logo
-             plays this role, but the mobile bar has no logo, so Dashboard
-             would otherwise be unreachable. Active when no area matches. */}}
-        <a href="/ui/" class="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 tap {{if eq $activeArea ""}}text-brand-300 font-semibold{{else}}text-gray-400{{end}}" aria-label="Dashboard">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 11.5 12 4l9 7.5M5.5 10v9h13v-9"/></svg>
-            <span class="text-[10px] leading-none max-w-full truncate px-0.5">Home</span>
-        </a>
-        {{range navModel .}}
-        {{/* MobileLabel, not Label (2026-07-10 overflow fix): up to 8
-             flex-1 cells share this bar, so long area labels
-             ("Orchestration", "Integrations") overflow their ~47px cell
-             on a phone. max-w-full+truncate is the belt-and-braces guard
-             for any future label that still ends up too wide. */}}
-        <button type="button" data-nav-tab="{{.Key}}"
-                {{if .AdminOnly}}data-admin-link {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 tap {{if eq $activeArea .Key}}text-brand-300 font-semibold{{else}}text-gray-400{{end}}"
+        {{range navModel .}}{{if .PhoneTab}}
+        {{if .Dests}}
+        <button type="button" data-nav-tab="{{.Key}}" aria-expanded="false" aria-controls="nav-drawer-{{.Key}}"
+                {{if .AdminOnly}}data-admin-link {{end}}{{if .OwnerHref}}data-owner-href="{{.OwnerHref}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 tap {{if eq $activeArea .Key}}text-brand-300 font-semibold{{else}}text-gray-400{{end}}"
                 aria-label="{{.Label}}">
             {{template "navIconResolve" .Icon}}
-            <span class="text-[10px] leading-none max-w-full truncate px-0.5">{{.MobileLabel}}</span>
+            <span class="text-xs leading-none max-w-full truncate px-0.5">{{.MobileLabel}}</span>
         </button>
+        {{else}}
+        {{/* A door (Home, Ask, Needs you; #755): a link, no drawer. */}}
+        <a href="{{.Href}}" data-nav-door="{{.Key}}" class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 tap {{if eq $activeArea .Key}}text-brand-300 font-semibold{{else}}text-gray-400{{end}}"
+           aria-label="{{.Label}}{{if gt .Badge 0}} ({{.Badge}}){{end}}"{{if eq $activeArea .Key}} aria-current="page"{{end}}>
+            {{template "navIconResolve" .Icon}}
+            <span class="text-xs leading-none max-w-full truncate px-0.5">{{.MobileLabel}}</span>
+            {{if gt .Badge 0}}<span class="v-badge rail-badge" aria-hidden="true">{{.Badge}}</span>{{end}}
+        </a>
         {{end}}
-        <form method="POST" action="/ui/logout" data-signout class="{{if not (hasSessionFlag .)}}hidden {{end}}flex-1 min-w-0" data-confirm="Sign out?">
-            <button type="submit" class="flex flex-col items-center justify-center gap-0.5 tap text-gray-400 w-full h-full" aria-label="Sign out">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
-                <span class="text-[10px] leading-none max-w-full truncate px-0.5">Sign out</span>
-            </button>
-        </form>
+        {{end}}{{end}}
+        <button type="button" data-nav-tab="more" aria-expanded="false" aria-controls="nav-drawer-more"
+                class="flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 tap {{if navInMore .CurrentPage}}text-brand-300 font-semibold{{else}}text-gray-400{{end}}"
+                aria-label="More">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <span class="text-xs leading-none max-w-full truncate px-0.5">More</span>
+        </button>
     </div>
-    {{/* Per-area contextual drawers — hidden until the matching tab is tapped. */}}
-    {{range navModel .}}
-    <div data-nav-drawer="{{.Key}}" class="hidden fixed inset-x-0 z-40 max-h-[60vh] overflow-y-auto glass menu-solid border-t p-3" role="menu" aria-label="{{.Label}}">
+    {{/* The tabs' drawers, hidden until their tab is tapped. */}}
+    {{range navModel .}}{{if and .PhoneTab .Dests}}{{$area := .}}
+    <div id="nav-drawer-{{.Key}}" data-nav-drawer="{{.Key}}" class="hidden fixed inset-x-0 z-40 max-h-[60vh] overflow-y-auto glass menu-solid border-t p-3" aria-label="{{.Label}}">
         <div class="text-xs uppercase tracking-wide text-gray-500 px-2 mb-2">{{.Label}}</div>
         {{range .Dests}}
-        <a href="{{.Href}}" {{if .AdminOnly}}data-admin-link {{end}}{{if .Cap}}data-cap="{{.Cap}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}panel-item{{if eq $.CurrentPage .Key}} panel-item-active{{end}}">{{template "navIconResolve" .Icon}}<span>{{.Label}}{{if gt .Badge 0}} ({{.Badge}}){{end}}</span></a>
+        <a href="{{.Href}}" {{if .AdminOnly}}data-admin-link {{end}}{{template "navOwnerAttr" (navOwner $area .)}}{{if .Cap}}data-cap="{{.Cap}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}panel-item{{if eq $.CurrentPage .Key}} panel-item-active{{end}}"{{if eq $.CurrentPage .Key}} aria-current="page"{{end}}>{{template "navIconResolve" .Icon}}<span>{{.Label}}</span></a>
         {{end}}
     </div>
-    {{end}}
+    {{end}}{{end}}
+    {{/* More: every other area as a group, then Theme, My account, Sign out. */}}
+    <div id="nav-drawer-more" data-nav-drawer="more" class="hidden fixed inset-x-0 z-40 max-h-[70vh] overflow-y-auto glass menu-solid border-t p-3" aria-label="More">
+        {{range navModel .}}{{if and .Dests (not .PhoneTab)}}{{$area := .}}
+        <details data-nav-more="{{.Key}}" {{if .AdminOnly}}data-admin-link {{end}}{{if .OwnerHref}}data-owner-href="{{.OwnerHref}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}mb-1"{{if eq $activeArea .Key}} open{{end}}>
+            <summary class="panel-item cursor-pointer{{if eq $activeArea .Key}} font-semibold{{end}}">{{template "navIconResolve" .Icon}}<span>{{.Label}}</span></summary>
+            <div class="pl-4">
+                {{range .Dests}}
+                <a href="{{.Href}}" {{if .AdminOnly}}data-admin-link {{end}}{{template "navOwnerAttr" (navOwner $area .)}}{{if .Cap}}data-cap="{{.Cap}}" {{end}}class="{{if and .AdminOnly (not (hasAdminFlag $))}}hidden {{end}}panel-item{{if eq $.CurrentPage .Key}} panel-item-active{{end}}"{{if eq $.CurrentPage .Key}} aria-current="page"{{end}}>{{template "navIconResolve" .Icon}}<span>{{.Label}}</span></a>
+                {{end}}
+            </div>
+        </details>
+        {{end}}{{end}}
+        <div class="border-t border-surface-600/60 mt-2 pt-2">
+            <button type="button" data-theme-toggle class="panel-item w-full" aria-label="Switch between light and dark theme">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 010 16z" fill="currentColor"/></svg>
+                <span>Theme</span>
+            </button>
+            <div data-signout class="{{if not (hasSessionFlag .)}}hidden{{end}}">
+                <a href="/ui/account" data-nav-account class="panel-item">{{template "navIconResolve" "navIconUser"}}<span>My account</span></a>
+                <form method="POST" action="/ui/logout" data-confirm="Sign out?">
+                    <button type="submit" class="panel-item w-full">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                        <span>Sign out</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
 </nav>
 {{/* Mobile drawer toggle — tap a tab to reveal/hide its destinations.
      Inline-script precedent: themeToggle / signout-gate. */}}
 <script>
     (function () {
+        function syncExpanded() {
+            document.querySelectorAll('[data-nav-tab]').forEach(function (b) {
+                var d = document.querySelector('[data-nav-drawer="' + b.getAttribute('data-nav-tab') + '"]');
+                b.setAttribute('aria-expanded', d && !d.classList.contains('hidden') ? 'true' : 'false');
+            });
+        }
         function closeDrawers() {
             document.querySelectorAll('[data-nav-drawer]').forEach(function (d) { d.classList.add('hidden'); });
+            syncExpanded();
         }
         document.querySelectorAll('[data-nav-tab]').forEach(function (btn) {
             btn.addEventListener('click', function (e) {
@@ -1168,6 +1340,7 @@
                         d.classList.add('hidden');
                     }
                 });
+                syncExpanded();
             });
         });
         // Auto-hide the drawer once a destination is chosen.
@@ -1181,8 +1354,7 @@
         });
     })();
 </script>
-{{/* Signout gate — unhides every [data-signout] control (and widens
-     the mobile grid to 7 columns) when the vornik_session_ui marker
+{{/* Signout gate — unhides every [data-signout] control when the vornik_session_ui marker
      cookie is present; marker value "admin" additionally unhides the
      [data-admin-link] nav item. The marker is set/cleared by the
      login flow and carries no secret — worst case a stale/spoofed
@@ -1191,7 +1363,7 @@
      precedent: themeToggle above. */}}
 <script>
     (function () {
-        var m = /(?:^|;\s*)vornik_session_ui=(1|admin)(?:;|$)/.exec(document.cookie);
+        var m = /(?:^|;\s*)vornik_session_ui=(1|admin|owner)(?:;|$)/.exec(document.cookie);
         if (!m) return;
         document.querySelectorAll('[data-signout]').forEach(function (el) {
             el.classList.remove('hidden');
@@ -1199,6 +1371,18 @@
         if (m[1] === 'admin') {
             document.querySelectorAll('[data-admin-link]').forEach(function (el) {
                 el.classList.remove('hidden');
+            });
+        }
+        // A managed instance's owner (GitHub #625 item 1): the Admin entries
+        // B3 grants, pointed at the page each opens; the rest of the area
+        // hidden. Decoration: every page still checks the session itself.
+        if (m[1] === 'owner') {
+            document.querySelectorAll('[data-owner-href]').forEach(function (el) {
+                el.classList.remove('hidden');
+                if (el.tagName === 'A') { el.setAttribute('href', el.getAttribute('data-owner-href')); }
+            });
+            document.querySelectorAll('[data-owner-hide]').forEach(function (el) {
+                el.classList.add('hidden');
             });
         }
     })();
@@ -1234,10 +1418,10 @@
         <input id="palette-input" type="search" autocomplete="off" placeholder="Search tasks, projects, actions…"
                aria-label="Search tasks, projects, actions"
                class="flex-1 bg-transparent text-base text-gray-100 placeholder-gray-500 focus:outline-none">
-        <kbd class="hidden md:inline-block px-1.5 py-0.5 text-[10px] text-gray-500 bg-dark-900 border border-dark-700 rounded">Esc</kbd>
+        <kbd class="hidden md:inline-block px-1.5 py-0.5 text-xs text-gray-500 bg-dark-900 border border-dark-700 rounded">Esc</kbd>
     </div>
     <ul id="palette-results" class="max-h-[60vh] overflow-y-auto py-1" role="listbox"></ul>
-    <div class="px-4 py-2 border-t border-dark-700 text-[10px] text-gray-500 flex items-center justify-between">
+    <div class="px-4 py-2 border-t border-dark-700 text-xs text-gray-500 flex items-center justify-between">
         <span><kbd class="px-1 bg-dark-900 border border-dark-700 rounded">↑↓</kbd> navigate · <kbd class="px-1 bg-dark-900 border border-dark-700 rounded">Enter</kbd> open</span>
         <span><kbd class="px-1 bg-dark-900 border border-dark-700 rounded">Cmd</kbd>+<kbd class="px-1 bg-dark-900 border border-dark-700 rounded">K</kbd></span>
     </div>
@@ -1269,7 +1453,7 @@
                 li.dataset.url = r.url;
                 li.className = 'palette-row px-4 py-2 cursor-pointer flex items-center gap-3';
                 var kindBadge = document.createElement('span');
-                kindBadge.className = 'text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ' +
+                kindBadge.className = 'text-xs uppercase tracking-wider px-1.5 py-0.5 rounded ' +
                     (r.kind === 'task' ? 'bg-brand-500/20 text-brand-300' :
                      r.kind === 'project' ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' :
                      'bg-gray-500/20 text-gray-300');
@@ -1527,12 +1711,12 @@ older rows without the column render cleanly.
 */}}
 {{define "taskOriginBadge"}}
 {{- $label := . -}}
-{{- if eq . "USER" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/30 uppercase tracking-wide" title="created by a user action (chat / API / CLI)">manual</span>
-{{- else if eq . "AUTONOMOUS" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 uppercase tracking-wide" title="created by the autonomy loop">autonomy</span>
-{{- else if eq . "DELEGATION" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/30 uppercase tracking-wide" title="delegated from a parent step">delegated</span>
-{{- else if eq . "ROUTE" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/30 uppercase tracking-wide" title="strict-adaptive routing handoff">routed</span>
-{{- else if eq . "CHECKPOINT" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/30 uppercase tracking-wide" title="executor split this off when the parent ran out of agent iterations">checkpoint</span>
-{{- else -}}<span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-500/15 text-gray-400 ring-1 ring-inset ring-gray-500/30 uppercase tracking-wide" title="origin not recorded">{{if $label}}{{$label}}{{else}}—{{end}}</span>
+{{- if eq . "USER" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/30 uppercase tracking-wide" title="created by a user action (chat / API / CLI)">manual</span>
+{{- else if eq . "AUTONOMOUS" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 uppercase tracking-wide" title="created by the autonomy loop">autonomy</span>
+{{- else if eq . "DELEGATION" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/30 uppercase tracking-wide" title="delegated from a parent step">delegated</span>
+{{- else if eq . "ROUTE" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 ring-1 ring-inset ring-cyan-500/30 uppercase tracking-wide" title="strict-adaptive routing handoff">routed</span>
+{{- else if eq . "CHECKPOINT" -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/30 uppercase tracking-wide" title="executor split this off when the parent ran out of agent iterations">checkpoint</span>
+{{- else -}}<span class="inline-flex items-center px-1.5 py-0.5 text-xs font-semibold rounded bg-gray-500/15 text-gray-400 ring-1 ring-inset ring-gray-500/30 uppercase tracking-wide" title="origin not recorded">{{if $label}}{{$label}}{{else}}—{{end}}</span>
 {{- end -}}
 {{end}}
 
@@ -1622,7 +1806,7 @@ Expects a dict:
    aria-current="{{if $isActive}}page{{else}}false{{end}}"
    aria-label="Filter to {{.Label}} ({{.Count}})"{{if .Title}} title="{{.Title}}"{{end}}>
     <div class="text-xl font-bold {{.CountColor}} tabular-nums">{{.Count}}</div>
-    <div class="text-[11px] {{if $isActive}}text-gray-200{{else}}text-gray-500{{end}} mt-0.5">{{.Label}}</div>
+    <div class="text-xs {{if $isActive}}text-gray-200{{else}}text-gray-500{{end}} mt-0.5">{{.Label}}</div>
 </a>
 {{end}}
 
@@ -1671,8 +1855,16 @@ scanner picks them up. Pass a dict:
    — 2026-11-01"). The argument is the button's accessible label; the text
    between the pair may hold template values. The tap goes through the
    console.js hint-toggle action (no inline handler, CSP). */}}
-{{define "hintOpen"}}<span class="vk-hint"><button type="button" class="vk-hint-btn" aria-label="{{.}}" aria-expanded="false" data-on-click="hint-toggle"><svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg></button><span class="vk-hint-pop" role="tooltip">{{end}}
+{{define "hintOpen"}}<span class="vk-hint"><button type="button" class="vk-hint-btn" aria-label="{{.}}" aria-expanded="false" data-on-click="hint-toggle"></button><span class="vk-hint-pop" role="tooltip">{{end}}
 {{define "hintClose"}}</span></span>{{end}}
+
+{{/* discOpen / discClose — the one disclosure (web-ui-design.md "Progressive
+     disclosure across the console — 2026-11-13 (#748)", B1). A native
+     <details>, so keyboard and screen readers need no script. Args (dict):
+     ID, Title, Summary (the current value in one line, optional), Open.
+     Fields inside a closed one still post with their form. */}}
+{{define "discOpen"}}<details class="vk-disc{{if .Row}} vk-disc-row{{end}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Open}} open{{end}}><summary class="vk-disc-sum">{{if .Row}}<span class="vk-disc-title">{{.Title}}</span>{{else}}<h2 class="vk-disc-title">{{.Title}}</h2>{{end}}{{if .Summary}}<span class="vk-disc-meta">{{.Summary}}</span>{{end}}</summary><div class="vk-disc-body">{{end}}
+{{define "discClose"}}</div></details>{{end}}
 
 {{define "sectionHeader"}}
 <div class="px-5 py-3.5 border-b border-surface-600/60 flex items-center justify-between gap-2 flex-wrap">
@@ -1702,7 +1894,7 @@ scanner picks them up. Pass a dict:
 <dl class="px-5 py-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 text-xs">
     {{range .Items}}
     <div>
-        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">{{.Label}}</dt>
+        <dt class="text-ink-500 uppercase tracking-wider text-xs">{{.Label}}</dt>
         <dd class="mt-0.5 text-sm text-ink-100 tabular-nums{{if .Mono}} font-mono{{end}}">{{.Value}}</dd>
     </div>
     {{end}}
@@ -1720,6 +1912,12 @@ scanner picks them up. Pass a dict:
 {{end}}
 {{end}}
 
+{{/* navOwnerAttr: the owner attribute of one Admin-area destination (GitHub
+     #625 item 1): data-owner-href where the owner may go, data-owner-hide on
+     the area's other non-AdminOnly entries (AdminOnly ones are already hidden
+     from a non-admin). Outside the AdminOnly area, nothing. */}}
+{{define "navOwnerAttr"}}{{if .Href}}data-owner-href="{{.Href}}" {{else if .Hide}}data-owner-hide {{end}}{{end}}
+
 {{/* keysAccessTabs: the two tabs of the Admin nav's "Keys & access" entry
      (operator, 2026-11-02): API keys (/ui/admin/keys, admin-only) and
      Credentials (/ui/credentials, GitHub #623, also for a managed instance's
@@ -1731,3 +1929,20 @@ scanner picks them up. Pass a dict:
     <a href="/ui/credentials" class="px-3 py-1.5 text-sm rounded-t-md {{if eq .Active "credentials"}}bg-dark-800 text-gray-100 border border-b-0 border-dark-700{{else}}text-gray-400 hover:text-gray-200{{end}}" {{if eq .Active "credentials"}}aria-current="page"{{end}}>Credentials</a>
 </nav>
 {{end}}
+
+{{/* barChart — the one bar chart (#757, design §12.2 E). Data: barChart
+     (internal/ui/chart.go). Scale on the left, gridlines at the max and the
+     half, the current bar in the accent colour, three dates, and the
+     answer sentence as both text and text alternative. */}}
+{{define "barChart"}}<svg viewBox="0 0 {{.Width}} {{.Height}}" width="100%" class="c-chart" role="img" aria-label="{{.Answer}}">
+<line class="c-grid" x1="{{.Left}}" x2="{{.PlotRight}}" y1="{{.Top}}" y2="{{.Top}}"/>
+<line class="c-grid" x1="{{.Left}}" x2="{{.PlotRight}}" y1="{{.MidY}}" y2="{{.MidY}}"/>
+<line class="c-axis" x1="{{.Left}}" x2="{{.PlotRight}}" y1="{{.Baseline}}" y2="{{.Baseline}}"/>
+<text x="{{.YLabelX}}" y="{{add .Top 4}}" text-anchor="end">{{.YMax}}</text>
+<text x="{{.YLabelX}}" y="{{add .MidY 4}}" text-anchor="end">{{.YMid}}</text>
+<text x="{{.YLabelX}}" y="{{add .Baseline 4}}" text-anchor="end">0</text>
+{{range .Bars}}<rect class="{{if .Current}}c-bar-now{{else}}c-bar{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="3"><title>{{.Tooltip}}</title></rect>
+{{end}}{{$y := .XLabelY}}{{range .XLabels}}<text x="{{.X}}" y="{{$y}}" text-anchor="{{.Anchor}}">{{.Text}}</text>
+{{end}}</svg>
+<p class="mt-2 text-sm text-gray-300">{{.Answer}}</p>{{end}}
+

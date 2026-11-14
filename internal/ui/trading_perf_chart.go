@@ -25,8 +25,12 @@ const (
 	// Axis gutters (px) reserved OUTSIDE the plot area for the Y-axis
 	// value labels: realized P&L on the left, equity on the right
 	// (2026-07-16). The plot area is shifted right by perfChartLeftGutter.
-	perfChartLeftGutter  = 48
-	perfChartRightGutter = 52
+	// Widened for 13px labels (#757: the 8px labels were below the type
+	// floor). The longest labels are eight characters ("+$999.9k",
+	// "$1052629"); at 13px a digit is at most 8px, so 64px plus the 6px
+	// inset and a margin. TestPerfChart_GutterHoldsLongestLabel_757 pins it.
+	perfChartLeftGutter  = 76
+	perfChartRightGutter = 80
 )
 
 // perfAxisTick is one Y-axis value label. Anchor is the SVG
@@ -170,7 +174,7 @@ func layoutPerfChart(daily []tradingpnl.DailyPoint) perfChartData {
 
 	ext := computePerfExtents(daily)
 	baseline := perfChartTop + perfChartH/2
-	labelY := perfChartTop + perfChartH + 16
+	labelY := perfChartTop + perfChartH + 20 // a 13px label below the bars (#757)
 	plotLeft := perfChartLeftGutter
 
 	points := make([]perfBarPoint, n)
@@ -201,7 +205,7 @@ func layoutPerfChart(daily []tradingpnl.DailyPoint) perfChartData {
 	return perfChartData{
 		Points:         points,
 		SVGWidth:       svgWidth,
-		SVGHeight:      perfChartTop + perfChartH + 22,
+		SVGHeight:      perfChartTop + perfChartH + 28,
 		PolylinePoints: strings.Join(polyParts, " "),
 		HasEquity:      ext.hasEquity,
 		HasBars:        ext.hasBars,

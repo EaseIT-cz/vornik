@@ -109,30 +109,30 @@
                             <tr class="hover:bg-dark-700/40 transition-colors align-top">
                                 <td class="px-4 py-2 text-xs text-gray-300 font-mono">
                                     <div>{{.Domain}} <span class="text-gray-600">/</span> {{.Scope}}</div>
-                                    <div class="text-[10px] text-gray-500 mt-0.5">{{if .ProjectID}}{{.ProjectID}}{{else}}<span class="italic text-gray-600">global</span>{{end}}</div>
-                                    <div class="text-[10px] text-gray-600 mt-0.5">{{.Source}}{{if .DistillModel}} · {{.DistillModel}}{{end}}</div>
+                                    <div class="text-xs text-gray-500 mt-0.5">{{if .ProjectID}}{{.ProjectID}}{{else}}<span class="italic text-gray-600">global</span>{{end}}</div>
+                                    <div class="text-xs text-gray-600 mt-0.5">{{.Source}}{{if .DistillModel}} · {{.DistillModel}}{{end}}</div>
                                 </td>
                                 <td class="px-4 py-2 text-xs text-gray-300 max-w-md">
                                     <div>{{.Action}}</div>
-                                    {{if .Trigger}}<div class="text-[10px] text-gray-500 font-mono mt-0.5 truncate" title="{{.Trigger}}">{{.Trigger}}</div>{{end}}
-                                    <div class="text-[10px] text-gray-700 font-mono mt-0.5">{{.ID}}</div>
+                                    {{if .Trigger}}<div class="text-xs text-gray-500 font-mono mt-0.5 truncate" title="{{.Trigger}}">{{.Trigger}}</div>{{end}}
+                                    <div class="text-xs text-gray-700 font-mono mt-0.5">{{.ID}}</div>
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap">
                                     <span class="font-mono {{.StatusBadge}}">{{.Status}}</span>
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap text-right text-xs text-gray-200 font-mono">{{.Confidence}}</td>
-                                <td class="px-4 py-2 whitespace-nowrap text-right text-[11px] font-mono">
+                                <td class="px-4 py-2 whitespace-nowrap text-right text-xs font-mono">
                                     <span class="text-emerald-700 dark:text-emerald-300">{{.SupportCount}}</span>
                                     <span class="text-gray-600">/</span>
                                     <span class="text-rose-700 dark:text-rose-300">{{.ContradictCount}}</span>
                                 </td>
-                                <td class="px-4 py-2 whitespace-nowrap text-right text-[11px] font-mono text-gray-300" title="{{.AppSucceeded}} succeeded · {{.AppFailed}} failed/rejected · {{.AppIgnored}} unresolved">{{.LiftSummary}}</td>
-                                <td class="px-4 py-2 whitespace-nowrap text-right text-[11px] font-mono" title="{{.TrueLiftDetail}}">
+                                <td class="px-4 py-2 whitespace-nowrap text-right text-xs font-mono text-gray-300" title="{{.AppSucceeded}} succeeded · {{.AppFailed}} failed/rejected · {{.AppIgnored}} unresolved">{{.LiftSummary}}</td>
+                                <td class="px-4 py-2 whitespace-nowrap text-right text-xs font-mono" title="{{.TrueLiftDetail}}">
                                     <span class="{{.TrueLiftBadge}}">{{.TrueLift}}</span>
                                 </td>
-                                <td class="px-4 py-2 whitespace-nowrap text-[11px] text-gray-400 font-mono" title="{{.LastSeenAt}}">
+                                <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-400 font-mono" title="{{.LastSeenAt}}">
                                     <div>{{.LastSeenAt}}</div>
-                                    <div class="text-[10px] text-gray-600">{{.LastSeenAgo}}</div>
+                                    <div class="text-xs text-gray-600">{{.LastSeenAgo}}</div>
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap text-right">
                                     {{if not .IsRetired}}
@@ -142,10 +142,10 @@
                                         <input type="hidden" name="filter_project" value="{{$.FilterProject}}">
                                         <input type="hidden" name="filter_status" value="{{$.FilterStatus}}">
                                         <input type="hidden" name="filter_min_confidence" value="{{$.FilterMinConf}}">
-                                        <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-rose-700/40 hover:bg-rose-700/60 text-rose-600 dark:text-rose-200 ring-1 ring-rose-700/40">Retire</button>
+                                        <button type="submit" class="text-xs font-medium px-2.5 py-1 rounded-md bg-rose-700/40 hover:bg-rose-700/60 text-rose-600 dark:text-rose-200 ring-1 ring-rose-700/40">Retire</button>
                                     </form>
                                     {{else}}
-                                    <span class="text-[11px] text-gray-600 italic">retired</span>
+                                    <span class="text-xs text-gray-600 italic">retired</span>
                                     {{end}}
                                 </td>
                             </tr>

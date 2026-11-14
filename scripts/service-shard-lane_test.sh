@@ -35,6 +35,9 @@ if [ -n "${GO_STUB_FAIL_ON:-}" ] && [[ "$*" == *"$GO_STUB_FAIL_ON"* ]]; then
   echo "stub: simulated failure ($GO_STUB_FAIL_ON)" >&2
   exit 1
 fi
+if [ "$1" = "test" ] && [[ "$*" != *"-run"* ]]; then
+  for i in 1 2 3 4 5 6; do echo "--- PASS: TestSweepOnly$i (0.00s)"; done
+fi
 if [ "$1" = "list" ]; then
   printf '%s\n' example.com/m/internal/service example.com/m/internal/other example.com/m/cmd/vornik
   exit 0
@@ -158,6 +161,13 @@ rc=$?
 [ "$rc" -eq 0 ] && pass "Example and Fuzz shard runs (exit 0)" || fail "example/fuzz: rc=$rc: $(cat "$TMP/out")"
 b=$(call_with 'ExampleThing'); b_re=${b##*-run }; b_re=${b_re%% *}
 [ "$b_re" = '^(ExampleThing|FuzzParse)$' ] && pass "shard b -run selects its Example and Fuzz functions" || fail "example/fuzz -run: '$b_re'"
+
+# --- 10. a passing sweep's full output reaches the log (gate stamp 7134fb2c5) --
+setup
+tdef "$TMP/tree/internal/service/a1_test.go" TestAlpha
+run_driver
+n=$(grep -c 'TestSweepOnly' "$TMP/out" || true)
+[ "$n" -eq 6 ] && pass "the passing sweep's output is printed, not a five-line tail" || fail "sweep output on success: $n marker line(s): $(cat "$TMP/out")"
 
 echo
 if [ "$fails" -gt 0 ]; then echo "service-shard-lane_test: $fails FAILURE(S)"; exit 1; fi

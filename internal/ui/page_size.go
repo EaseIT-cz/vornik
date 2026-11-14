@@ -70,6 +70,19 @@ func parsePageSize(raw string) int {
 // that came from parsePageSize / PageSizeOptions max = 100).
 const DefaultEpochsLimit = 500
 
+// EpochsLimitOptions is the Epochs selector's own option set: the shared
+// PageSizeOptions plus the 500 default, so the selector shows the limit in
+// force (#748 G). The shared lists keep 10 to 100: 200 and 500 were
+// rejected for them on payload grounds (PageSizeOptions); the rollback
+// picker is the exception DefaultEpochsLimit already makes. Shared by
+// every render: never append to it.
+var EpochsLimitOptions = []int{10, 20, 50, 100, DefaultEpochsLimit}
+
+// EpochsShownOpen is how many of the newest epochs the Epochs table shows
+// at first glance; the rest render inside a closed disclosure, still
+// rollback targets (#748 G).
+const EpochsShownOpen = 20
+
 // MaxEpochsLimit is the hard ceiling for epochs_limit, kept in sync
 // with the GET /api/v1/projects/{id}/memory/epochs?limit= API cap so
 // the two surfaces honour the same invariant.

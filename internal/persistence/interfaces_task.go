@@ -574,6 +574,13 @@ type ExecutionRepository interface {
 	// Projects with no terminal executions in the window are omitted.
 	FailedRateByProject(ctx context.Context, since time.Time) (map[string]ExecFailedRate, error)
 
+	// CountCompletedByProject returns, per project, the COMPLETED executions
+	// with completed_at in [since, until). The Results page's jobs done
+	// (ui-design-refresh-design.md §15.2, #757): by completion time, so a
+	// job created before the window and finished in it counts. Projects
+	// with none are omitted.
+	CountCompletedByProject(ctx context.Context, since, until time.Time) (map[string]int64, error)
+
 	// LatencyP95ByProject returns, per project, the p95 wall-clock duration
 	// (seconds) of COMPLETED executions finished at/after `since` (those with
 	// both started_at and completed_at). Powers the Tune detector's latency

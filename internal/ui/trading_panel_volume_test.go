@@ -95,7 +95,7 @@ func TestBuildTradingPanel_VolumeFromFillsRepoWhenWired(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		MCP: registry.ProjectMCP{
-			Servers: []registry.MCPServerConfig{{Name: "broker", URL: broker.URL}},
+			Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: broker.URL}},
 		},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)
@@ -130,7 +130,7 @@ func TestBuildTradingPanel_VolumeFallbackWhenFillRepoNil(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		MCP: registry.ProjectMCP{
-			Servers: []registry.MCPServerConfig{{Name: "broker", URL: broker.URL}},
+			Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: broker.URL}},
 		},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)

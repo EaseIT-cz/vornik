@@ -79,19 +79,19 @@
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-400 font-mono" title="{{.CreatedAt}}">
                                     <div>{{.CreatedAt}}</div>
-                                    <div class="text-[10px] text-gray-600">{{.CreatedAgo}}</div>
+                                    <div class="text-xs text-gray-600">{{.CreatedAgo}}</div>
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-400 font-mono" title="{{.LastUsedAt}}">
                                     {{if .LastUsedAt}}
                                     <div>{{.LastUsedAt}}</div>
-                                    <div class="text-[10px] text-gray-600">{{.LastUsedAgo}}</div>
+                                    <div class="text-xs text-gray-600">{{.LastUsedAgo}}</div>
                                     {{else}}
                                     <span class="text-gray-600 italic">{{.LastUsedAgo}}</span>
                                     {{end}}
                                 </td>
                                 <td class="px-4 py-2 text-xs text-gray-400 font-mono whitespace-nowrap">{{.RateLimitLabel}}</td>
                                 <td class="px-4 py-2">
-                                    <form method="POST" action="/ui/admin/keys" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-300">
+                                    <form method="POST" action="/ui/admin/keys" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-300">
                                         <input type="hidden" name="id" value="{{.ID}}">
                                         <label class="inline-flex items-center gap-1"><input type="checkbox" name="memory_read" {{if .MemoryRead}}checked{{end}} class="accent-brand-500"> mem&nbsp;r</label>
                                         <label class="inline-flex items-center gap-1"><input type="checkbox" name="memory_write" {{if .MemoryWrite}}checked{{end}} class="accent-brand-500"> mem&nbsp;w</label>
@@ -102,7 +102,7 @@
                                     </form>
                                 </td>
                                 <td class="px-4 py-2 text-right">
-                                    <a href="/ui/projects/{{.ProjectID}}/keys" class="text-[11px] text-brand-400 hover:text-brand-300">Manage →</a>
+                                    <a href="/ui/projects/{{.ProjectID}}/keys" class="text-xs text-brand-400 hover:text-brand-300">Manage →</a>
                                 </td>
                             </tr>
                             {{end}}

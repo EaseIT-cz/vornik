@@ -529,6 +529,8 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		mux.HandleFunc("/api/v1/setup/session/", server.operatorOnly(SurfaceSetupSessionRouter, server.setupSessionRouter))
 		// Managed setup (GitHub #582 P2): binds the customer, idempotently.
 		mux.HandleFunc("/api/v1/setup/managed", server.operatorOnly(SurfaceSetupManaged, server.SetupManaged))
+		// GitHub #758: one restart, done by the daemon, when idle and supervised.
+		mux.HandleFunc("/api/v1/setup/apply", server.operatorOnly(SurfaceSetupApply, server.SetupApply))
 		mux.HandleFunc("/api/v1/memory/backfill-titles", server.MemoryBackfillTitles)
 		mux.HandleFunc("/api/v1/memory/reclassify-llm", server.MemoryReclassifyLLM)
 		// KG re-flag — operator-driven backfill of isolated entities.

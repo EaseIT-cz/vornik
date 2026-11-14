@@ -18,38 +18,49 @@ func TestNavHelpersRegistered(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	out := sb.String()
-	if !strings.HasPrefix(out, "orchestration|") {
+	if !strings.HasPrefix(out, "diagnostics|") { // swarms live under Diagnostics since #755
 		t.Errorf("navAreaForPage not wired: %q", out)
 	}
-	if !strings.Contains(out, "orchestration") || !strings.Contains(out, "admin") {
+	if !strings.Contains(out, "manage") || !strings.Contains(out, "operator") {
 		t.Errorf("navModel not wired: %q", out)
 	}
 }
 
 func TestNavAreaForPage(t *testing.T) {
+	// Navigation v2 (design §13.2, #755): every page maps to its new area.
 	cases := map[string]string{
-		"projects":     "orchestration",
-		"swarms":       "orchestration",
-		"workflows":    "orchestration",
-		"tasks":        "orchestration",
-		"executions":   "orchestration", // restored as a dest with the cross-task Executions list (IA completion)
-		"memory":       "memory",
-		"reminders":    "memory",
-		"integrations": "admin", // moved beside Control plane, 2026-10-03 (operator: declutter)
-		"spend":        "insight",
-		"trading":      "insight",
-		"audit":        "insight",
-		"admin":        "admin",
-		// Admin sub-destinations with dedicated panel items must map to the
-		// admin area (2026-07-08 highlight fix — handlers previously passed
-		// the generic "admin" token so these items never lit up).
-		"admin-skills":        "admin",
-		"admin-keys":          "admin",
-		"admin-control-plane": "admin",
-		"dashboard":           "", // reached via the logo; no area/panel
-		"mcp":                 "", // removed from nav (2026-07-08 dedupe → hub MCP tab); no longer an area
-		"":                    "", // unknown → no area (no stale panel)
-		"nonsense":            "",
+		"manage-overview":      "manage",
+		"projects":             "manage",
+		"integrations":         "manage",
+		"admin-keys":           "manage",
+		"admin-agents":         "manage",
+		"admin-skills":         "manage",
+		"reminders":            "manage",
+		"insights":             "manage",
+		"trading":              "manage",
+		"my-account":           "manage",
+		"spend":                "results",
+		"results":              "results",
+		"trends":               "results",
+		"adoption":             "results",
+		"live":                 "diagnostics",
+		"diagnostics-overview": "diagnostics",
+		"tasks":                "diagnostics",
+		"executions":           "diagnostics",
+		"swarms":               "diagnostics",
+		"workflows":            "diagnostics",
+		"memory":               "diagnostics",
+		"quality":              "diagnostics",
+		"audit":                "diagnostics",
+		"admin":                "operator",
+		"operator":             "operator",
+		"regulatory":           "operator",
+		"admin-control-plane":  "operator",
+		"dashboard":            "home",  // the Home door highlights on its page (#755)
+		"inbox":                "needs", // the Needs you door
+		"mcp":                  "",      // removed from nav (2026-07-08 dedupe → hub MCP tab)
+		"":                     "",
+		"nonsense":             "",
 	}
 	for page, want := range cases {
 		if got := navAreaForPage(page); got != want {
@@ -60,93 +71,39 @@ func TestNavAreaForPage(t *testing.T) {
 
 func TestNavModelContract(t *testing.T) {
 	m := navModel()
-	// Areas in display order.
-	wantAreas := []string{"steer", "orchestration", "memory", "insight", "admin"}
-	if len(m) != len(wantAreas) {
-		t.Fatalf("navModel has %d areas, want %d", len(m), len(wantAreas))
-	}
-	for i, a := range m {
-		if a.Key != wantAreas[i] {
-			t.Errorf("area %d = %q, want %q", i, a.Key, wantAreas[i])
-		}
-	}
-	// Swarms & Workflows are first-class under orchestration.
-	var orch navAreaDef
+	byKey := map[string]navAreaDef{}
 	for _, a := range m {
-		if a.Key == "orchestration" {
-			orch = a
+		byKey[a.Key] = a
+	}
+	order := func(area string, want ...string) {
+		t.Helper()
+		var got []string
+		for _, d := range byKey[area].Dests {
+			got = append(got, d.Key)
+			if d.Href == "" || d.Label == "" || d.Icon == "" {
+				t.Errorf("%s dest %q missing Href/Label/Icon", area, d.Key)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s dests = %v, want %v", area, got, want)
 		}
 	}
-	// Tasks is the default (top) destination — it's where the operator
-	// most often works. Executions follows Workflows: with a real
-	// cross-task Executions list (IA completion) it's a first-class
-	// destination again.
-	wantDests := []string{"tasks", "projects", "swarms", "workflows", "executions"}
-	if len(orch.Dests) != len(wantDests) {
-		t.Fatalf("orchestration has %d dests, want %d", len(orch.Dests), len(wantDests))
+	order("results", "results", "spend", "trends", "adoption")
+	order("manage", "manage-overview", "projects", "integrations", "admin-keys", "admin-agents", "admin-skills", "reminders", "insights", "trading", "my-account")
+	order("diagnostics", "diagnostics-overview", "live", "tasks", "executions", "swarms", "workflows", "memory", "quality", "audit")
+	order("operator", "admin", "operator", "regulatory", "admin-control-plane")
+	// Diagnostics lands on its overview (#756).
+	if byKey["diagnostics"].Href != "/ui/diagnostics" {
+		t.Errorf("diagnostics Href = %q, want /ui/diagnostics", byKey["diagnostics"].Href)
 	}
-	for i, d := range orch.Dests {
-		if d.Key != wantDests[i] {
-			t.Errorf("orchestration dest %d = %q, want %q", i, d.Key, wantDests[i])
+	if !byKey["operator"].AdminOnly {
+		t.Error("the operator console must be AdminOnly")
+	}
+	// Trading is wired under Manage (it is an assistant's settings).
+	for _, d := range byKey["manage"].Dests {
+		if d.Key == "trading" && (d.Href != "/ui/trading" || d.Icon != "navIconTrading" || d.Cap != "trading") {
+			t.Errorf("trading dest mis-wired: %+v", d)
 		}
-		if d.Href == "" || d.Label == "" {
-			t.Errorf("orchestration dest %q missing Href/Label", d.Key)
-		}
-	}
-	// Steer is the live-control area: Live + Needs-you, leading the rail —
-	// plus My account, added 2026-09-14. It sits here because it is the third
-	// PERSONAL surface ("what is mine"), beside My requests, rather than an
-	// operator one: it shows every identity that resolves to the signed-in
-	// user and lets them unlink one. See oidc-identity-permissions-design
-	// §5.5.
-	var steer navAreaDef
-	for _, a := range m {
-		if a.Key == "steer" {
-			steer = a
-		}
-	}
-	steerDests := []string{"live", "inbox"}
-	if len(steer.Dests) != len(steerDests) {
-		t.Fatalf("steer has %d dests, want %d", len(steer.Dests), len(steerDests))
-	}
-	for i, d := range steer.Dests {
-		if d.Key != steerDests[i] {
-			t.Errorf("steer dest %d = %q, want %q", i, d.Key, steerDests[i])
-		}
-	}
-	if steer.Href != "/ui/live" {
-		t.Errorf("steer area Href = %q, want /ui/live", steer.Href)
-	}
-	// The rail icon's primary target follows the default destination
-	// (tasks), not projects.
-	if orch.Href != "/ui/tasks" {
-		t.Errorf("orchestration area Href = %q, want /ui/tasks (the default destination)", orch.Href)
-	}
-	// Admin area is flagged admin-only.
-	for _, a := range m {
-		if a.Key == "admin" && !a.AdminOnly {
-			t.Error("admin area must be AdminOnly")
-		}
-	}
-	// Trading is a first-class destination under Insight with a wired
-	// Href/Label/Icon (the dashboard restored after the UI refactor).
-	var insight navAreaDef
-	for _, a := range m {
-		if a.Key == "insight" {
-			insight = a
-		}
-	}
-	var trading navDest
-	for _, d := range insight.Dests {
-		if d.Key == "trading" {
-			trading = d
-		}
-	}
-	if trading.Key != "trading" {
-		t.Fatal("insight area must include a trading destination")
-	}
-	if trading.Href != "/ui/trading" || trading.Label == "" || trading.Icon != "navIconTrading" {
-		t.Errorf("trading dest mis-wired: %+v", trading)
 	}
 }
 
@@ -212,26 +169,19 @@ func TestNavModelCommunityHidesTrading(t *testing.T) {
 // (design §5.7): the "Needs you" nav destination becomes "My requests"
 // now that the inbox is the non-admin default home and carries the
 // broader "Your requests" list, not just what needs attention.
-func TestNavModel_InboxRelabelledMyRequests(t *testing.T) {
-	var steer navAreaDef
+// The inbox is the Needs you door since #755 (it was the "My requests"
+// destination under Steer), and the attention badge rides on the door.
+func TestNavModel_InboxIsTheNeedsYouDoor(t *testing.T) {
 	for _, a := range navModel() {
-		if a.Key == "steer" {
-			steer = a
+		if a.Key == "needs" {
+			if a.Href != "/ui/inbox" || a.Label != "Needs you" {
+				t.Errorf("needs door = %+v", a)
+			}
+			return
 		}
 	}
-	var inbox navDest
-	for _, d := range steer.Dests {
-		if d.Key == "inbox" {
-			inbox = d
-		}
-	}
-	if inbox.Label != "My requests" {
-		t.Errorf("inbox dest Label = %q, want %q", inbox.Label, "My requests")
-	}
+	t.Fatal("no Needs you door")
 }
-
-// --- navModelForPage: the per-request "My requests (N)" badge (task
-// 4.4, design §5.7 Q4) ---
 
 // fakeNavCounter is a minimal navAttentionCounter for testing
 // navModelForPage without depending on InboxData.
@@ -239,64 +189,42 @@ type fakeNavCounter struct{ n int }
 
 func (f fakeNavCounter) NavAttentionCount() int { return f.n }
 
-func TestNavModelForPage_BadgesInboxWhenCounterPositive(t *testing.T) {
-	m := navModelForPage(navGate(true))(fakeNavCounter{n: 3})
-	var got int
-	found := false
+func needsBadge(m []navAreaDef) int {
 	for _, a := range m {
-		for _, d := range a.Dests {
-			if d.Key == "inbox" {
-				got = d.Badge
-				found = true
-			}
+		if a.Key == "needs" {
+			return a.Badge
 		}
 	}
-	if !found {
-		t.Fatal("inbox dest not found")
-	}
-	if got != 3 {
-		t.Errorf("inbox dest Badge = %d, want 3", got)
+	return -1
+}
+
+func TestNavModelForPage_BadgesNeedsYouWhenCounterPositive(t *testing.T) {
+	if got := needsBadge(navModelForPage(navGate(true))(fakeNavCounter{n: 3})); got != 3 {
+		t.Errorf("Needs you Badge = %d, want 3", got)
 	}
 }
 
-// TestNavModelForPage_NoCounterNoBadge — a page whose Data doesn't
-// implement navAttentionCounter (every page except InboxData, as of
-// task 4.4) renders no badge — "keep it simple" per the design's hedge.
+// A page whose Data doesn't implement navAttentionCounter renders no badge.
 func TestNavModelForPage_NoCounterNoBadge(t *testing.T) {
 	for _, data := range []any{nil, "a plain string", struct{ Foo string }{Foo: "bar"}} {
-		m := navModelForPage(navGate(true))(data)
-		for _, a := range m {
-			for _, d := range a.Dests {
-				if d.Key == "inbox" && d.Badge != 0 {
-					t.Errorf("data=%#v: inbox dest Badge = %d, want 0 (no counter implemented)", data, d.Badge)
-				}
-			}
+		if got := needsBadge(navModelForPage(navGate(true))(data)); got != 0 {
+			t.Errorf("data=%#v: Needs you Badge = %d, want 0", data, got)
 		}
 	}
 }
 
-// TestNavModelForPage_ZeroCounterNoBadge — an implementer reporting 0
-// (or negative) attention items must not render "(0)".
+// A zero (or negative) count must not render "(0)".
 func TestNavModelForPage_ZeroCounterNoBadge(t *testing.T) {
-	m := navModelForPage(navGate(true))(fakeNavCounter{n: 0})
-	for _, a := range m {
-		for _, d := range a.Dests {
-			if d.Key == "inbox" && d.Badge != 0 {
-				t.Errorf("inbox dest Badge = %d, want 0 for a zero count", d.Badge)
-			}
-		}
+	if got := needsBadge(navModelForPage(navGate(true))(fakeNavCounter{n: 0})); got != 0 {
+		t.Errorf("Needs you Badge = %d, want 0 for a zero count", got)
 	}
 }
 
-// TestNavModelForPage_OnlyInboxDestBadged — the counter must never leak
-// onto an unrelated destination (e.g. "tasks").
-func TestNavModelForPage_OnlyInboxDestBadged(t *testing.T) {
-	m := navModelForPage(navGate(true))(fakeNavCounter{n: 5})
-	for _, a := range m {
-		for _, d := range a.Dests {
-			if d.Key != "inbox" && d.Badge != 0 {
-				t.Errorf("dest %q got Badge = %d, want 0 (only inbox should badge)", d.Key, d.Badge)
-			}
+// The counter must never leak onto another area or destination.
+func TestNavModelForPage_OnlyNeedsYouBadged(t *testing.T) {
+	for _, a := range navModelForPage(navGate(true))(fakeNavCounter{n: 5}) {
+		if a.Key != "needs" && a.Badge != 0 {
+			t.Errorf("area %q got Badge %d", a.Key, a.Badge)
 		}
 	}
 }
@@ -362,35 +290,26 @@ func TestNavAreaDef_MobileLabelFallsBackToLabel(t *testing.T) {
 // one-entry top-level area (the rail's "Integrations", the mobile bar's
 // "Connect") and sits in the Admin area directly after Control plane. The
 // URL is unchanged; only the grouping moves.
-func TestNav_IntegrationsLivesBesideControlPlane(t *testing.T) {
+func TestNav_IntegrationsLivesInManage(t *testing.T) {
 	m := navModel()
 	for _, a := range m {
 		if a.Key == "integrations" || a.MobileLabel() == "Connect" {
 			t.Errorf("the Connect/Integrations area still exists (%q) — it should be gone", a.Key)
 		}
 	}
-	area := navDestArea(t, "integrations")
-	if area.Key != "admin" {
-		t.Fatalf("Integrations is in the %q area, want %q (beside Control plane)", area.Key, "admin")
-	}
-	if cp := navDestArea(t, "admin-control-plane"); cp.Key != area.Key {
-		t.Errorf("Control plane is in %q but Integrations is in %q", cp.Key, area.Key)
-	}
-	for i, d := range area.Dests {
-		if d.Key != "admin-control-plane" {
-			continue
-		}
-		if i+1 >= len(area.Dests) || area.Dests[i+1].Key != "integrations" {
-			t.Errorf("Integrations must directly follow Control plane in the Admin panel")
-		}
+	// Since #755 Integrations sits in Manage (connections an owner
+	// configures), not beside Control plane in the operator console.
+	if area := navDestArea(t, "integrations"); area.Key != "manage" {
+		t.Fatalf("Integrations is in the %q area, want manage", area.Key)
 	}
 	d := navDestByKey(t, "integrations")
 	if d.Href != "/ui/integrations" || d.Label != "Integrations" || d.Icon != "navIconIntegrations" {
 		t.Errorf("integrations dest mis-wired: %+v", d)
 	}
-	// Not dest-flagged: the catalog is scope-filtered for project users
-	// (integrations-hub-design §5.8), so the area gate alone decides.
-	if d.AdminOnly {
-		t.Error("integrations dest must not be AdminOnly; the hub's scope filter is the gate")
+	// AdminOnly since #755: before it the admin-only Admin area hid it from
+	// project users and the owner; Manage is not admin-only, so the entry
+	// carries the flag itself (design §13.2) and no audience's nav changes.
+	if !d.AdminOnly {
+		t.Error("integrations dest must be AdminOnly in Manage")
 	}
 }

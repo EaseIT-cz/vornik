@@ -23,7 +23,7 @@
                        placeholder="Filter visible tasks by id, project, or summary text…"
                        data-on-input="filterTaskRows"
                        class="flex-1 bg-transparent border-none text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-0">
-                <span id="task-filter-count" class="text-[11px] text-gray-500"></span>
+                <span id="task-filter-count" class="text-xs text-gray-500"></span>
             </div>
 
             <div id="task-content" class="space-y-4"
@@ -56,7 +56,7 @@
                         <svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
                         Status
                     </h2>
-                    <span class="text-[11px] text-gray-500">tap a cell to filter</span>
+                    <span class="text-xs text-gray-500">tap a cell to filter</span>
                 </div>
                 {{/* 2026-05-26 status bucketing (refactor G): 11 raw
                      statuses overwhelmed operators ("what's the
@@ -76,7 +76,7 @@
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                         <div>
-                            <div class="text-[10px] uppercase tracking-wider text-accent-400 mb-1.5 px-1">In flight · running through the swarm</div>
+                            <div class="text-xs uppercase tracking-wider text-accent-400 mb-1.5 px-1">In flight · running through the swarm</div>
                             <div class="grid grid-cols-2 gap-2">
                                 {{template "statusFilterCell" (dict "Label" "Queued"    "Status" "QUEUED"               "Active" $active "Count" (index .StatusCounts "QUEUED")               "CountColor" "text-amber-800 dark:text-amber-400"  "ActiveBg" "bg-amber-500/20 ring-amber-400" "FlatQS" $flatQS "LimitQS" $limitQS)}}
                                 {{template "statusFilterCell" (dict "Label" "Running"   "Status" "RUNNING"              "Active" $active "Count" (index .StatusCounts "RUNNING")              "CountColor" "text-accent-400" "ActiveBg" "bg-accent-500/20 ring-accent-400" "FlatQS" $flatQS "LimitQS" $limitQS)}}
@@ -85,7 +85,7 @@
                             </div>
                         </div>
                         <div>
-                            <div class="text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300 mb-1.5 px-1">Blocked · needs you or a deadline</div>
+                            <div class="text-xs uppercase tracking-wider text-amber-700 dark:text-amber-300 mb-1.5 px-1">Blocked · needs you or a deadline</div>
                             <div class="grid grid-cols-2 gap-2">
                                 {{template "statusFilterCell" (dict "Label" "Awaiting approval" "Status" "AWAITING_APPROVAL"    "Active" $active "Count" (index .StatusCounts "AWAITING_APPROVAL")    "CountColor" "text-sky-700 dark:text-sky-300"    "ActiveBg" "bg-sky-500/25 ring-sky-300" "FlatQS" $flatQS "LimitQS" $limitQS)}}
                                 {{template "statusFilterCell" (dict "Label" "Awaiting input"    "Status" "AWAITING_INPUT"       "Active" $active "Count" (index .StatusCounts "AWAITING_INPUT")       "CountColor" "text-amber-700 dark:text-amber-300"  "ActiveBg" "bg-amber-500/25 ring-amber-300" "FlatQS" $flatQS "LimitQS" $limitQS)}}
@@ -95,7 +95,7 @@
                             </div>
                         </div>
                         <div>
-                            <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5 px-1">Done · terminal — no more work</div>
+                            <div class="text-xs uppercase tracking-wider text-gray-500 mb-1.5 px-1">Done · terminal — no more work</div>
                             <div class="grid grid-cols-2 gap-2">
                                 {{template "statusFilterCell" (dict "Label" "Completed" "Status" "COMPLETED" "Active" $active "Count" (index .StatusCounts "COMPLETED") "CountColor" "text-emerald-800 dark:text-emerald-400" "ActiveBg" "bg-emerald-500/20 ring-emerald-400" "FlatQS" $flatQS "LimitQS" $limitQS)}}
                                 {{template "statusFilterCell" (dict "Label" "Failed"    "Status" "FAILED"    "Active" $active "Count" (index .StatusCounts "FAILED")    "CountColor" "text-rose-800 dark:text-rose-400"    "ActiveBg" "bg-rose-500/20 ring-rose-400"    "FlatQS" $flatQS "LimitQS" $limitQS)}}
@@ -126,7 +126,7 @@
                  page-local is said here too. */}}
             {{template "pagination" .Paginator}}
             {{if or .Query .SortLocal}}
-            <p class="text-[11px] text-gray-500">
+            <p class="text-xs text-gray-500">
                 {{if .Query}}{{.QueryMatches}} of these match “{{.Query}}” (the search covers this page only).{{end}}
                 {{if .SortLocal}}Rows are sorted within this page; the pages follow creation time, newest first.{{end}}
             </p>
@@ -154,12 +154,12 @@
                         {{statusDot (printf "%s" .Status)}}
                         <span class="font-mono text-sm text-brand-300" title="{{.ID}}">{{shortID .ID}}</span>
                         {{statusPill (printf "%s" .Status)}}
-                        {{if gt $meta.ChildCount 0}}<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-violet-900/40 text-violet-700 dark:text-violet-300 ring-1 ring-violet-700/40" title="{{$meta.ChildCount}} subtask(s)">+{{$meta.ChildCount}}</span>{{end}}
+                        {{if gt $meta.ChildCount 0}}<span class="inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium bg-violet-900/40 text-violet-700 dark:text-violet-300 ring-1 ring-violet-700/40" title="{{$meta.ChildCount}} subtask(s)">+{{$meta.ChildCount}}</span>{{end}}
                         {{/* Off-page parent (2026-07-12 missing-arrow fix):
                              the card itself is an <a>, so the parent
                              reference is plain text here — the desktop
                              table renders it as a real link. */}}
-                        {{if $meta.OffPageParent}}<span class="text-[10px] text-gray-500 truncate" title="{{$meta.OffPageParent}}">subtask of {{shortID $meta.OffPageParent}}</span>{{end}}
+                        {{if $meta.OffPageParent}}<span class="text-xs text-gray-500 truncate" title="{{$meta.OffPageParent}}">subtask of {{shortID $meta.OffPageParent}}</span>{{end}}
                     </div>
                     {{/* Phone card — show the prompt excerpt as the
                          primary visible line so operators can scan
@@ -261,10 +261,10 @@
                                 <td class="px-5 py-3 whitespace-nowrap" style="{{indentStyle $meta.Depth}}">
                                     {{if or (gt $meta.Depth 0) $meta.OffPageParent}}<span class="text-gray-500 mr-1" aria-hidden="true">↳</span>{{end}}
                                     <a href="/ui/tasks/{{.ID}}" class="text-brand-400 hover:text-brand-300 font-mono text-sm" title="{{.ID}}">{{shortID .ID}}</a>
-                                    {{if gt $meta.ChildCount 0}}<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-violet-900/40 text-violet-700 dark:text-violet-300 ring-1 ring-violet-700/40" title="{{$meta.ChildCount}} subtask(s)">+{{$meta.ChildCount}}</span>{{end}}
+                                    {{if gt $meta.ChildCount 0}}<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium bg-violet-900/40 text-violet-700 dark:text-violet-300 ring-1 ring-violet-700/40" title="{{$meta.ChildCount}} subtask(s)">+{{$meta.ChildCount}}</span>{{end}}
                                     {{/* Off-page parent (2026-07-12 missing-arrow fix): link
                                          to the parent the indent can't show. */}}
-                                    {{if $meta.OffPageParent}}<a href="/ui/tasks/{{$meta.OffPageParent}}" class="ml-1.5 text-[10px] text-gray-500 hover:text-gray-300" title="{{$meta.OffPageParent}}">subtask of {{shortID $meta.OffPageParent}}</a>{{end}}
+                                    {{if $meta.OffPageParent}}<a href="/ui/tasks/{{$meta.OffPageParent}}" class="ml-1.5 text-xs text-gray-500 hover:text-gray-300" title="{{$meta.OffPageParent}}">subtask of {{shortID $meta.OffPageParent}}</a>{{end}}
                                 </td>
                                 <td class="px-5 py-3 whitespace-nowrap text-sm text-gray-300"><a href="/ui/projects/{{.ProjectID}}" class="hover:text-gray-100">{{.ProjectID}}</a></td>
                                 <td class="px-5 py-3 whitespace-nowrap">{{template "taskStatusBadge" .Status}}</td>

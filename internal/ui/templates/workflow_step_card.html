@@ -12,7 +12,7 @@
     <details class="rounded-lg border border-dark-700/60" {{if not .Advanced}}open{{end}}>
         <summary class="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-300">{{.Title}}{{if .Advanced}} <span class="text-gray-500">(advanced)</span>{{end}}</summary>
         <div class="px-3 pb-3 pt-1 space-y-3">
-            {{if .Help}}<p class="text-[11px] text-gray-400">{{.Help}}</p>{{end}}
+            {{if .Help}}<p class="text-xs text-gray-400">{{.Help}}</p>{{end}}
             {{range .Rows}}{{template "schemaRow" .}}{{end}}
         </div>
     </details>

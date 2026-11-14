@@ -44,6 +44,7 @@
 
             <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-4 space-y-3">
                 <h2 class="text-sm font-semibold text-gray-200">Create a new key</h2>
+                <p class="text-sm text-gray-400" data-key-scope>A full key for this project, until revoked. It can do anything a member of this project can, except manage keys. The secret is shown once.</p>
                 <form method="POST" action="/ui/projects/{{.ProjectID}}/keys" class="flex flex-wrap items-end gap-3">
                     <input type="hidden" name="action" value="create"/>
                     <div class="flex-1 min-w-[16rem]">
@@ -53,7 +54,7 @@
                                class="w-full rounded-md border border-control bg-dark-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"/>
                     </div>
                     <button type="submit"
-                            class="rounded-md bg-brand-500 hover:bg-brand-500 text-white text-sm font-medium px-4 py-2 transition-colors">
+                            class="v-btn v-btn--primary">
                         Mint key
                     </button>
                 </form>
@@ -80,6 +81,7 @@
                                 <th scope="col" class="px-4 py-2 font-medium">Name</th>
                                 <th scope="col" class="px-4 py-2 font-medium">Prefix</th>
                                 <th scope="col" class="px-4 py-2 font-medium">Created</th>
+                                <th scope="col" class="px-4 py-2 font-medium">Created by</th>
                                 <th scope="col" class="px-4 py-2 font-medium">Last used</th>
                                 <th scope="col" class="px-4 py-2 font-medium">Expires</th>
                                 <th scope="col" class="px-4 py-2 font-medium" title="Configured per-API-key throttle from the api_keys row. Buckets are leaky tokens at the configured RPS rate, capped at the burst.">Limit</th>
@@ -95,6 +97,7 @@
                                 <td class="px-4 py-2 whitespace-nowrap">{{.Name}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap">{{.Prefix}}…</td>
                                 <td class="px-4 py-2 whitespace-nowrap">{{.Created}}</td>
+                                <td class="px-4 py-2 whitespace-nowrap">{{.CreatedBy}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap">{{.LastUsed}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap">{{.Expires}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap">
@@ -136,7 +139,7 @@
                                         <input type="hidden" name="action" value="disable-push"/>
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
-                                                class="text-xs text-sky-700 dark:text-sky-300 hover:text-sky-600 dark:text-sky-200 px-2 py-1 rounded transition-colors"
+                                                class="v-btn v-btn--quiet"
                                                 title="Make this key read-only (clone/fetch only; push refused)">
                                             Disable push
                                         </button>
@@ -146,7 +149,7 @@
                                         <input type="hidden" name="action" value="enable-push"/>
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
-                                                class="text-xs text-sky-700 dark:text-sky-300 hover:text-sky-600 dark:text-sky-200 px-2 py-1 rounded transition-colors"
+                                                class="v-btn v-btn--quiet"
                                                 title="Allow this key to push to the git-over-HTTPS workspace">
                                             Enable push
                                         </button>
@@ -156,7 +159,7 @@
                                         <input type="hidden" name="action" value="rotate"/>
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
-                                                class="text-xs text-amber-700 dark:text-amber-300 hover:text-amber-600 dark:text-amber-200 px-2 py-1 rounded transition-colors"
+                                                class="v-btn v-btn--quiet"
                                                 data-confirm="Rotate {{.Name}}? The old key will be revoked.">
                                             rotate
                                         </button>
@@ -165,7 +168,7 @@
                                         <input type="hidden" name="action" value="revoke"/>
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
-                                                class="text-xs text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200 px-2 py-1 rounded transition-colors"
+                                                class="v-btn v-btn--danger"
                                                 data-confirm="Revoke {{.Name}}? Cannot be undone.">
                                             revoke
                                         </button>

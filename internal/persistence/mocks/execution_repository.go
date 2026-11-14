@@ -24,6 +24,9 @@ type MockExecutionRepository struct {
 
 	ListFunc func(ctx context.Context, filter persistence.ExecutionFilter) ([]*persistence.Execution, error)
 
+	// CountCompletedByProjectFunc scripts the Results page's per-project
+	// jobs-done count (#757).
+	CountCompletedByProjectFunc func(ctx context.Context, since, until time.Time) (map[string]int64, error)
 	// CountFunc lets tests script the total-count return.
 	CountFunc func(ctx context.Context, filter persistence.ExecutionFilter) (int64, error)
 
@@ -272,6 +275,14 @@ func (m *MockExecutionRepository) CountByStatus(ctx context.Context, projectID s
 // FailedRateByProject implements ExecutionRepository.
 func (m *MockExecutionRepository) FailedRateByProject(_ context.Context, _ time.Time) (map[string]persistence.ExecFailedRate, error) {
 	return map[string]persistence.ExecFailedRate{}, nil
+}
+
+// CountCompletedByProject implements ExecutionRepository; scriptable.
+func (m *MockExecutionRepository) CountCompletedByProject(ctx context.Context, since, until time.Time) (map[string]int64, error) {
+	if m.CountCompletedByProjectFunc != nil {
+		return m.CountCompletedByProjectFunc(ctx, since, until)
+	}
+	return map[string]int64{}, nil
 }
 
 // LatencyP95ByProject implements ExecutionRepository.

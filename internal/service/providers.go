@@ -378,6 +378,12 @@ func WithBootProvenance(p *config.Provenance) ContainerOption {
 // Gating was never affected — registration reads c.providers, not Edition() —
 // but the logs contradicted the banner for anyone diagnosing whether EE
 // features were live.
+// WithRestartRequest gives the container the function that asks Run to stop
+// for a restart (#758 W1); the API's setup apply route calls it.
+func WithRestartRequest(fn func()) ContainerOption {
+	return func(c *Container) { c.restartRequest = fn }
+}
+
 func WithEdition(e string) ContainerOption {
 	return func(c *Container) { c.SetEdition(e) }
 }

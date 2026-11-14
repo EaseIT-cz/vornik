@@ -139,3 +139,24 @@ func TestHasTradingProject(t *testing.T) {
 		t.Error("project with broker: want true")
 	}
 }
+
+// A settings-form save writes the broker as a name-only subscription (no
+// transport, no url); the daemon supplies the connection. The nav must still
+// see a trading project (trading-broker-design.md, amendment 2026-11-13).
+// Found at: production, 2026-11-13: the Trading entry vanished after a save.
+func TestTradingNav_ShownForANameOnlyBrokerSubscription(t *testing.T) {
+	dir := t.TempDir()
+	reg := navTradingRegistry(t, dir, false)
+	if err := os.WriteFile(filepath.Join(dir, "projects", "p1.yaml"), []byte("projectId: p1\ndisplayName: p1\nswarmId: swarm-1\ndefaultWorkflowId: wf-1\nmcp:\n  servers:\n    - name: broker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	registry.SetDaemonMCPURLs(map[string]string{"broker": "http://127.0.0.1:8788"})
+	t.Cleanup(func() { registry.SetDaemonMCPURLs(nil) })
+	s := NewServer(WithTradingEnabled(), WithProjectRegistry(reg))
+	if html := navHTML(t, s); !strings.Contains(html, "/ui/trading") {
+		t.Error("nav must keep Trading for a project subscribed to the daemon's broker by name")
+	}
+}

@@ -54,9 +54,10 @@ func learningTileHTML(t *testing.T, body string) string {
 // layout mismatch that a rendered-body content check cannot see: a page with a
 // hole in it returns 200 and contains every string you would think to assert.
 func TestDashboardHealthRowFillsItsGrid(t *testing.T) {
-	src, err := templatesFS.ReadFile("templates/dashboard.html")
+	// The row moved to the Diagnostics overview in #756.
+	src, err := templatesFS.ReadFile("templates/diagnostics_overview.html")
 	if err != nil {
-		t.Fatalf("read dashboard.html: %v", err)
+		t.Fatalf("read diagnostics_overview.html: %v", err)
 	}
 	body := renderDashboardBody(t)
 
@@ -77,7 +78,7 @@ func TestDashboardHealthRowFillsItsGrid(t *testing.T) {
 	// this test for something that isn't its business.
 	rowStart := strings.Index(string(src), healthRowAnchor)
 	if rowStart < 0 {
-		t.Fatalf("dashboard.html no longer has the %q row comment — this test's anchor is gone", healthRowAnchor)
+		t.Fatalf("diagnostics_overview.html no longer has the %q row comment — this test's anchor is gone", healthRowAnchor)
 	}
 	rowOpen := string(src)[rowStart:]
 	if next := strings.Index(rowOpen, nextRowAnchor); next > 0 {
@@ -250,7 +251,7 @@ func TestDashboardLearningTile_ScopedSessionSeesNoCounts(t *testing.T) {
 		WithSkillRepository(seedLearningSkills(t)),
 		WithOnboardingDetector(alreadyOnboardedDetector()),
 	)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family"))
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)

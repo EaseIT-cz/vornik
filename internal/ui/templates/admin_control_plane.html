@@ -14,7 +14,7 @@
             </div>
 
             {{if .Flash}}<div class="rounded-md bg-dark-800 border border-dark-700 px-3 py-2 text-xs text-brand-300">{{.Flash}}</div>{{end}}
-            {{if .Error}}<div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-300">{{.Error}}</div>{{end}}
+            {{if .Error}}<div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-700 dark:text-red-300">{{.Error}}</div>{{end}}
 
             {{if not .Available}}
                 <div class="text-sm text-gray-400">The proposal ledger is not wired on this daemon.</div>
@@ -27,7 +27,7 @@
                         {{.Label}}
                     </a>
                     {{end}}
-                    {{if .DiagnoseLocked}}<span class="px-3 py-1 text-[11px] text-gray-600">Diagnosis &amp; self-healing are Enterprise features.</span>{{end}}
+                    {{if .DiagnoseLocked}}<span class="px-3 py-1 text-xs text-gray-600">Diagnosis &amp; self-healing are Enterprise features.</span>{{end}}
                 </div>
 
                 {{if eq .Section "overview"}}
@@ -40,11 +40,11 @@
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div class="rounded-lg bg-dark-800 border border-dark-700 p-4">
                         <div class="text-2xl font-semibold text-gray-100">{{.OpenTotal}}</div>
-                        <div class="text-[11px] text-gray-500 mt-1">open proposals awaiting review</div>
+                        <div class="text-xs text-gray-500 mt-1">open proposals awaiting review</div>
                     </div>
                     <div class="rounded-lg bg-dark-800 border border-dark-700 p-4">
                         <div class="text-2xl font-semibold text-gray-100">{{len .OpenIncidents}}</div>
-                        <div class="text-[11px] text-gray-500 mt-1">open self-heal incidents</div>
+                        <div class="text-xs text-gray-500 mt-1">open self-heal incidents</div>
                     </div>
                     <div class="rounded-lg bg-dark-800 border border-dark-700 p-4 flex flex-col justify-center gap-1">
                         <a href="/ui/admin/control-plane?section=proposals" class="text-xs text-brand-400 hover:text-brand-300">Review proposals →</a>
@@ -74,9 +74,9 @@
                         <div class="rounded-lg bg-dark-800 border border-dark-700 p-3">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <div class="text-xs font-mono text-gray-100">{{.Title}}</div>
-                                <code class="text-[10px] text-gray-400">{{if .ProjectID}}{{.ProjectID}}{{else}}(daemon){{end}}</code>
+                                <code class="text-xs text-gray-400">{{if .ProjectID}}{{.ProjectID}}{{else}}(daemon){{end}}</code>
                             </div>
-                            {{if .RootCause}}<div class="text-[11px] text-gray-400 mt-1">{{.RootCause}}</div>{{end}}
+                            {{if .RootCause}}<div class="text-xs text-gray-400 mt-1">{{.RootCause}}</div>{{end}}
                         </div>
                         {{end}}
                     </div>
@@ -99,21 +99,21 @@
                             <div class="min-w-0">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <a href="/ui/admin/blackbox/triggers/{{.ID}}" class="text-xs font-mono text-gray-100 hover:text-brand-300">{{.WorkflowID}}</a>
-                                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-700 text-gray-300">{{.Class}}</span>
-                                    <code class="text-[10px] text-gray-400">{{.ProjectID}}</code>
+                                    <span class="text-xs px-1.5 py-0.5 rounded bg-dark-700 text-gray-300">{{.Class}}</span>
+                                    <code class="text-xs text-gray-400">{{.ProjectID}}</code>
                                 </div>
-                                <div class="text-[11px] text-gray-400 mt-1">{{.MetricName}}: {{printf "%.2f" .ComparisonValue}} vs baseline {{printf "%.2f" .BaselineValue}} ({{printf "%+.0f" .DeltaPct}}%)</div>
+                                <div class="text-xs text-gray-400 mt-1">{{.MetricName}}: {{printf "%.2f" .ComparisonValue}} vs baseline {{printf "%.2f" .BaselineValue}} ({{printf "%+.0f" .DeltaPct}}%)</div>
                             </div>
                             <div class="flex items-center gap-2 shrink-0">
                                 {{if $.TriggerGenerateWired}}
                                 <form method="POST" action="/ui/admin/blackbox/triggers/{{.ID}}/generate-candidate">
                                     <input type="hidden" name="return_to" value="control-plane">
-                                    <button type="submit" class="px-2.5 py-1 text-[11px] rounded bg-brand-600 hover:bg-brand-500 text-white">Generate candidate</button>
+                                    <button type="submit" class="px-2.5 py-1 text-xs rounded bg-brand-600 hover:bg-brand-500 text-white">Generate candidate</button>
                                 </form>
                                 {{end}}
                                 <form method="POST" action="/ui/admin/blackbox/triggers/{{.ID}}/dismiss" data-confirm="Dismiss this trigger?">
                                     <input type="hidden" name="return_to" value="control-plane">
-                                    <button type="submit" class="px-2.5 py-1 text-[11px] rounded bg-dark-700 hover:bg-dark-600 text-gray-300">Dismiss</button>
+                                    <button type="submit" class="px-2.5 py-1 text-xs rounded bg-dark-700 hover:bg-dark-600 text-gray-300">Dismiss</button>
                                 </form>
                             </div>
                         </div>
@@ -141,10 +141,10 @@
                 </div>
                 {{if .SourceTabs}}
                 <div class="flex flex-wrap items-center gap-1.5">
-                    <span class="text-[11px] text-gray-500 mr-1">source:</span>
+                    <span class="text-xs text-gray-500 mr-1">source:</span>
                     {{range .SourceTabs}}
                     <a href="/ui/admin/control-plane?section=proposals{{if $.Filter}}&status={{$.Filter}}{{end}}{{if .Key}}&source={{.Key}}{{end}}"
-                       class="px-2 py-0.5 text-[11px] rounded {{if .Active}}bg-brand-600 text-white{{else}}bg-dark-800 text-gray-400 hover:bg-dark-700{{end}}">
+                       class="px-2 py-0.5 text-xs rounded {{if .Active}}bg-brand-600 text-white{{else}}bg-dark-800 text-gray-400 hover:bg-dark-700{{end}}">
                         {{.Label}} <span class="opacity-70">{{.Count}}</span>
                     </a>
                     {{end}}
@@ -158,7 +158,7 @@
                 </div>
                 {{end}}
                 {{if .FocusMissing}}
-                    <div class="text-sm text-amber-300">Proposal <span class="font-mono">{{.FocusProposal}}</span> was not found. It may have been removed, or the link may be stale.</div>
+                    <div class="text-sm text-amber-700 dark:text-amber-300">Proposal <span class="font-mono">{{.FocusProposal}}</span> was not found. It may have been removed, or the link may be stale.</div>
                 {{else if not .Rows}}
                     <div class="text-sm text-gray-400">No proposals in this view.</div>
                 {{else}}
@@ -169,41 +169,41 @@
                             <div class="min-w-0 flex-1">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <div class="font-mono text-sm text-gray-100">{{.Title}}</div>
-                                    <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded
+                                    <span class="px-1.5 py-0.5 text-xs font-semibold rounded
                                         {{if eq .Status "APPLIED"}}bg-green-700/30 text-green-300 border border-green-700
                                         {{else if eq .Status "APPROVED"}}bg-emerald-600/30 text-emerald-300 border border-emerald-700
                                         {{else if eq .Status "DRAFT"}}bg-sky-700/30 text-sky-300 border border-sky-700
                                         {{else if eq .Status "REGRESSED"}}bg-amber-600/30 text-amber-300 border border-amber-700
                                         {{else}}bg-dark-700 text-gray-400 border border-dark-600{{end}}">{{.Status}}</span>
-                                    {{if .Source}}<span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-violet-700/30 text-violet-300 border border-violet-700">{{.Source}}</span>{{end}}
-                                    {{if .IsDaemon}}<span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-600/30 text-amber-300 border border-amber-700">DAEMON</span>{{end}}
-                                    {{if .LiveApply}}<span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-green-700/30 text-green-300 border border-green-700" title="Applies live — skips the busy gate, no idle window needed">LIVE-APPLY</span>{{end}}
+                                    {{if .Source}}<span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-violet-700/30 text-violet-300 border border-violet-700">{{.Source}}</span>{{end}}
+                                    {{if .IsDaemon}}<span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-600/30 text-amber-700 border border-amber-700 dark:text-amber-300">DAEMON</span>{{end}}
+                                    {{if .LiveApply}}<span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-green-700/30 text-green-700 border border-green-700 dark:text-green-300" title="Applies live — skips the busy gate, no idle window needed">LIVE-APPLY</span>{{end}}
                                 </div>
-                                {{if .IsDaemon}}<div class="text-[11px] text-amber-400 mt-1">⚠ Daemon-scope — affects every project.</div>{{end}}
-                                {{if .Regressed}}<div class="text-[11px] text-amber-400 mt-1">⚠ Regressed after apply — review it on the detail page (re-propose / rollback happen there).</div>{{end}}
-                                {{if .LiveApply}}<div class="text-[11px] text-green-400 mt-1">↻ Applies live — no idle window needed (non-disruptive to running tasks).</div>{{end}}
+                                {{if .IsDaemon}}<div class="text-xs text-amber-700 mt-1 dark:text-amber-400">⚠ Daemon-scope — affects every project.</div>{{end}}
+                                {{if .Regressed}}<div class="text-xs text-amber-700 mt-1 dark:text-amber-400">⚠ Regressed after apply — review it on the detail page (re-propose / rollback happen there).</div>{{end}}
+                                {{if .LiveApply}}<div class="text-xs text-green-700 mt-1 dark:text-green-400">↻ Applies live — no idle window needed (non-disruptive to running tasks).</div>{{end}}
                                 {{if .Source}}
-                                <div class="text-[11px] text-gray-500 mt-1">
+                                <div class="text-xs text-gray-500 mt-1">
                                     {{if .Kind}}{{.Kind}} · {{end}}workflow <code class="text-gray-400">{{.WorkflowID}}</code>
                                     · confidence <code class="text-gray-400">{{.Confidence}}</code>
                                     · by <code class="text-gray-400">{{.ProposedBy}}</code>
                                 </div>
-                                {{if .TrialVerdict}}<div class="text-[11px] text-gray-400 mt-1">trial: {{.TrialVerdict}}</div>{{end}}
+                                {{if .TrialVerdict}}<div class="text-xs text-gray-400 mt-1">trial: {{.TrialVerdict}}</div>{{end}}
                                 {{else}}
-                                <div class="text-[11px] text-gray-500 mt-1">
+                                <div class="text-xs text-gray-500 mt-1">
                                     {{.Kind}} · scope <code class="text-gray-400">{{.BlastRadius}}</code>
                                     · project <code class="text-gray-400">{{if .ProjectID}}{{.ProjectID}}{{else}}(daemon){{end}}</code>
                                     · by <code class="text-gray-400">{{.ProposedBy}}</code>
                                     {{if .Approver}} · approved by <code class="text-gray-400">{{.Approver}}</code>{{end}}
                                     {{if .AppliedBy}} · applied by <code class="text-gray-400">{{.AppliedBy}}</code>{{end}}
-                                    {{if .RollbackSuperseded}}<span class="ml-2 px-1.5 py-0.5 text-[10px] rounded bg-dark-700 text-gray-400 border border-dark-600">superseded — rollback unavailable</span>{{end}}
-                                    {{if .AutoRetired}}<span class="ml-2 px-1.5 py-0.5 text-[10px] rounded bg-dark-700 text-amber-400/80 border border-dark-600">auto-retired (stale)</span>{{end}}
+                                    {{if .RollbackSuperseded}}<span class="ml-2 px-1.5 py-0.5 text-xs rounded bg-dark-700 text-gray-400 border border-dark-600">superseded — rollback unavailable</span>{{end}}
+                                    {{if .AutoRetired}}<span class="ml-2 px-1.5 py-0.5 text-xs rounded bg-dark-700 text-amber-400/80 border border-dark-600">auto-retired (stale)</span>{{end}}
                                 </div>
                                 {{end}}
                                 {{if .Rationale}}<div class="text-xs text-gray-400 mt-2">{{.Rationale}}</div>{{end}}
-                                {{if .DiffPreview}}<pre class="mt-2 whitespace-pre-wrap text-[11px] text-gray-400 bg-dark-900 rounded p-2 max-h-40 overflow-auto">{{.DiffPreview}}</pre>{{end}}
-                                {{if .ReviewOnly}}<div class="text-[11px] text-gray-500 mt-1">Review-only — no applyable change; action it by hand.</div>{{end}}
-                                {{if .DiagnoseHref}}<div class="text-[11px] mt-1"><a href="{{.DiagnoseHref}}" class="text-brand-400 hover:text-brand-300" title="Open the Diagnose tab pre-filled with this project">Diagnose ↗</a></div>{{end}}
+                                {{if .DiffPreview}}<pre class="mt-2 whitespace-pre-wrap text-xs text-gray-400 bg-dark-900 rounded p-2 max-h-40 overflow-auto">{{.DiffPreview}}</pre>{{end}}
+                                {{if .ReviewOnly}}<div class="text-xs text-gray-500 mt-1">Review-only — no applyable change; action it by hand.</div>{{end}}
+                                {{if .DiagnoseHref}}<div class="text-xs mt-1"><a href="{{.DiagnoseHref}}" class="text-brand-400 hover:text-brand-300" title="Open the Diagnose tab pre-filled with this project">Diagnose ↗</a></div>{{end}}
                             </div>
                             <div class="flex flex-col gap-2 shrink-0">
                                 {{if eq .Source "architect"}}
@@ -236,7 +236,7 @@
                                     <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-dark-700 hover:bg-dark-600 text-gray-200 border border-dark-600">↩ Rollback</button>
                                 </form>
                                 {{end}}
-                                <a href="{{.DetailHref}}" class="text-[11px] text-brand-400 hover:text-brand-300">View details →</a>
+                                <a href="{{.DetailHref}}" class="text-xs text-brand-400 hover:text-brand-300">View details →</a>
                                 {{else if eq .Source "healing"}}
                                 {{/* Healing rows drive the candidate lifecycle via
                                      the EXISTING blackbox endpoints; promote is
@@ -252,7 +252,7 @@
                                 {{if .CanRunTrial}}
                                 <form method="POST" action="/ui/admin/blackbox/candidates/{{.CandidateID}}/run-trial" class="flex items-center gap-1.5">
                                     <input type="hidden" name="return_to" value="control-plane">
-                                    <select name="mode" aria-label="Trial mode" class="bg-dark-700 border border-control text-gray-300 text-[11px] rounded-md px-1.5 py-1 font-mono">
+                                    <select name="mode" aria-label="Trial mode" class="bg-dark-700 border border-control text-gray-300 text-xs rounded-md px-1.5 py-1 font-mono">
                                         <option value="static">static — shape check</option>
                                         <option value="replay">replay — gates promotion</option>
                                     </select>
@@ -271,7 +271,7 @@
                                     <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-red-800 hover:bg-red-700 text-white">❌ Reject</button>
                                 </form>
                                 {{end}}
-                                <a href="{{.DetailHref}}" class="text-[11px] text-brand-400 hover:text-brand-300">View details →</a>
+                                <a href="{{.DetailHref}}" class="text-xs text-brand-400 hover:text-brand-300">View details →</a>
                                 {{else}}
                                 {{if .CanApprove}}
                                 <form method="POST" action="/ui/admin/control-plane">
@@ -281,7 +281,7 @@
                                     <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-green-700 hover:bg-green-600 text-white">✅ Approve</button>
                                 </form>
                                 {{end}}
-                                {{if .IsObservation}}<div class="text-[11px] text-gray-500 max-w-[13rem]">Observation — informational. Nothing to approve; dismiss it once read.</div>{{end}}
+                                {{if .IsObservation}}<div class="text-xs text-gray-500 max-w-[13rem]">Observation — informational. Nothing to approve; dismiss it once read.</div>{{end}}
                                 {{if .CanReject}}
                                 <form method="POST" action="/ui/admin/control-plane">
                                     <input type="hidden" name="id" value="{{.ID}}">
@@ -295,7 +295,7 @@
                                     <input type="hidden" name="id" value="{{.ID}}">
                                     <input type="hidden" name="status" value="{{$.Filter}}">
                                     <input type="hidden" name="action" value="apply">
-                                    {{if .NeedsAck}}<label class="text-[10px] text-amber-300 flex items-center gap-1"><input type="checkbox" name="ackDaemon"> {{.AckLabel}}</label>{{end}}
+                                    {{if .NeedsAck}}<label class="text-xs text-amber-700 flex items-center gap-1 dark:text-amber-300"><input type="checkbox" name="ackDaemon"> {{.AckLabel}}</label>{{end}}
                                     <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-brand-600 hover:bg-brand-500 text-white">▶ Apply</button>
                                 </form>
                                 {{end}}
@@ -344,7 +344,7 @@
 
                 {{with .Diagnose}}
                     {{if .Err}}
-                    <div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-300 max-w-2xl">{{.Err}}</div>
+                    <div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-700 max-w-2xl dark:text-red-300">{{.Err}}</div>
                     {{else if .Ran}}
                     <div class="rounded-lg bg-dark-800 border border-dark-700 p-4 space-y-2 max-w-2xl">
                         <div class="text-sm text-gray-100"><span class="text-gray-500">root cause:</span> {{.RootCause}}</div>
@@ -384,6 +384,16 @@
                 </div>
                 {{end}}
 
+                {{if .MCPRefused}}
+                <div class="rounded-xl border border-red-800 bg-red-900/20 p-3 text-sm" role="status" data-mcp-refused>
+                    <p class="text-red-700 dark:text-red-200 font-medium">Refused at registration</p>
+                    <p class="text-xs text-gray-400 mb-1">The daemon did not register these servers and does not retry them. Fix the configuration and reload.</p>
+                    <ul class="text-xs text-gray-300 space-y-0.5">
+                        {{range .MCPRefused}}<li data-refused="{{if .Scope}}{{.Scope}}{{else}}daemon{{end}}/{{.Server}}"><span class="font-mono">{{.Server}}</span> <span class="text-gray-500">({{if .Scope}}project {{.Scope}}{{else}}daemon catalogue{{end}})</span> — {{.Reason}}</li>{{end}}
+                    </ul>
+                </div>
+                {{end}}
+
                 {{if .MCPRows}}
                 <div class="space-y-2">
                     {{range .MCPRows}}
@@ -391,33 +401,33 @@
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <div class="font-mono text-sm text-gray-100">{{.Name}}</div>
-                                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded {{if .Reachable}}bg-green-700/30 text-green-300 border border-green-700{{else if .NotDialled}}bg-amber-900/30 text-amber-300 border border-amber-800{{else if .NeverChecked}}bg-dark-700 text-gray-400 border border-dark-600{{else if .AuthChallenged}}bg-amber-900/30 text-amber-300 border border-amber-800{{else}}bg-red-900/30 text-red-300 border border-red-800{{end}}">{{if .Reachable}}reachable{{else if .NotDialled}}not connected, no grant{{else if .NeverChecked}}checking…{{else if .AuthChallenged}}needs authentication{{else}}unreachable{{end}}</span>
-                                <span class="text-[10px] text-gray-500">{{.Transport}} · {{.ToolCount}} tools</span>
+                                <span class="px-1.5 py-0.5 text-xs font-semibold rounded {{if .Reachable}}bg-green-700/30 text-green-700 border border-green-700{{else if .NotDialled}}bg-amber-900/30 text-amber-700 border border-amber-800{{else if .NeverChecked}}bg-dark-700 text-gray-400 border border-dark-600{{else if .AuthChallenged}}bg-amber-900/30 text-amber-700 border border-amber-800{{else}}bg-red-900/30 text-red-700 border border-red-800{{end}} dark:text-green-300 dark:text-amber-300 dark:text-amber-300 dark:text-red-300">{{if .Reachable}}reachable{{else if .NotDialled}}not connected, no grant{{else if .NeverChecked}}checking…{{else if .AuthChallenged}}needs authentication{{else}}unreachable{{end}}</span>
+                                <span class="text-xs text-gray-500">{{.Transport}} · {{.ToolCount}} tools</span>
                                 {{/* The reachability badge above is AUTH-BLIND: a server that 401s on
                                      every call still reads "reachable". These two chips are what let an
                                      operator tell reachable from authorized. */}}
                                 {{if .AuthMode}}
                                 {{if ne .AuthMode "none"}}
-                                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-dark-700 text-gray-300 border border-dark-600">auth: {{.AuthMode}}</span>
+                                <span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-dark-700 text-gray-300 border border-dark-600">auth: {{.AuthMode}}</span>
                                 {{end}}
                                 {{if eq .AuthMode "oauth"}}
                                 {{if .NeedsReconnect}}
-                                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-900/30 text-amber-300 border border-amber-800">needs reconnect</span>
+                                <span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-900/30 text-amber-700 border border-amber-800 dark:text-amber-300">needs reconnect</span>
                                 {{else if .Connected}}
-                                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-green-700/30 text-green-300 border border-green-700">connected</span>
+                                <span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-green-700/30 text-green-700 border border-green-700 dark:text-green-300">connected</span>
                                 {{else}}
-                                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-700/30 text-gray-400 border border-dark-600">not connected</span>
+                                <span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-gray-700/30 text-gray-400 border border-dark-600">not connected</span>
                                 {{end}}
                                 {{end}}
                                 {{end}}
                             </div>
-                            {{if .Endpoint}}<div class="text-[11px] text-gray-500 mt-1 font-mono truncate">{{.Endpoint}}</div>{{end}}
+                            {{if .Endpoint}}<div class="text-xs text-gray-500 mt-1 font-mono truncate">{{.Endpoint}}</div>{{end}}
                             {{/* "not yet refreshed" is the registry's placeholder, not a fault, so it
                                  must not render in fault red alongside a "checking…" badge. */}}
-                            {{if .Error}}<div class="text-[11px] mt-1 {{if or .NeverChecked .NotDialled}}text-gray-500{{else}}text-red-400{{end}}">{{.Error}}</div>{{end}}
-                            {{if .Connected}}<div class="text-[10px] text-gray-500 mt-1">consented by {{.ConnectedBy}}{{if .TokenExpiresAt}} · token expires {{.TokenExpiresAt}}{{end}}</div>{{end}}
-                            {{if .ConnectBlockedReason}}<div class="text-[11px] text-amber-400 mt-1">{{.ConnectBlockedReason}}</div>{{end}}
-                            {{if .LastCheck}}<div class="text-[10px] text-gray-600 mt-1">last checked {{.LastCheck}}</div>{{end}}
+                            {{if .Error}}<div class="text-xs mt-1 {{if or .NeverChecked .NotDialled}}text-gray-500{{else}}text-red-400{{end}}">{{.Error}}</div>{{end}}
+                            {{if .Connected}}<div class="text-xs text-gray-500 mt-1">consented by {{.ConnectedBy}}{{if .TokenExpiresAt}} · token expires {{.TokenExpiresAt}}{{end}}</div>{{end}}
+                            {{if .ConnectBlockedReason}}<div class="text-xs text-amber-700 mt-1 dark:text-amber-400">{{.ConnectBlockedReason}}</div>{{end}}
+                            {{if .LastCheck}}<div class="text-xs text-gray-600 mt-1">last checked {{.LastCheck}}</div>{{end}}
                         </div>
                         {{/* Connect/Disconnect are ACTIONS on an already-applied server, not config
                              mutations — an authorization code lives seconds to minutes, so gating
@@ -481,7 +491,7 @@
                             <input type="text" name="command" placeholder="/usr/bin/some-mcp-server"
                                    class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 focus:border-brand-500 focus:outline-none">
                         </div>
-                        <p class="text-[11px] text-gray-500">Secrets: use a <code>${ENV_VAR}</code> placeholder in the URL/command — never a literal token.</p>
+                        <p class="text-xs text-gray-500">Secrets: use a <code>${ENV_VAR}</code> placeholder in the URL/command — never a literal token.</p>
 
                         {{/* Authentication (MCP server authentication design §4). Every credential
                              field takes a `secret://<name>` REFERENCE, never a value — that is what
@@ -498,7 +508,7 @@
                                     <option value="oauth">oauth — OAuth 2.1 consent flow, sse + streamable-http</option>
                                     <option value="env">env — credentials into a stdio subprocess</option>
                                 </select>
-                                <p class="text-[11px] text-gray-500 mt-1">Credential fields take a <code>secret://NAME</code> reference — the value lives in the secret store and never enters config or the proposal diff. A literal is rejected.</p>
+                                <p class="text-xs text-gray-500 mt-1">Credential fields take a <code>secret://NAME</code> reference — the value lives in the secret store and never enters config or the proposal diff. A literal is rejected.</p>
                             </div>
 
                             <div data-mcp-auth="static" class="hidden space-y-3">
@@ -551,14 +561,14 @@
                                     <input type="text" id="mcp-auth-token-endpoint" name="auth_token_endpoint" placeholder="https://api.intercom.io/auth/eagle/token"
                                            class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 focus:border-brand-500 focus:outline-none">
                                 </div>
-                                <p class="text-[11px] text-gray-500">After the change is applied, use this server's <strong>Connect</strong> button (or <code>vornikctl mcp connect</code>) to grant consent. Needs <code>server.public_base_url</code> set to an https:// origin.</p>
+                                <p class="text-xs text-gray-500">After the change is applied, use this server's <strong>Connect</strong> button (or <code>vornikctl mcp connect</code>) to grant consent. Needs <code>server.public_base_url</code> set to an https:// origin.</p>
                             </div>
 
                             <div data-mcp-auth="env" class="hidden">
                                 <label class="block text-xs text-gray-400 mb-1" for="mcp-auth-env-from">Environment credentials <span class="text-gray-600">(stdio only — one <code>NAME=secret://ref</code> per line)</span></label>
                                 <textarea id="mcp-auth-env-from" name="auth_env_from" rows="3" placeholder="REDDIT_CLIENT_ID=secret://REDDIT_CLIENT_ID&#10;REDDIT_CLIENT_SECRET=secret://REDDIT_CLIENT_SECRET"
                                           class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 font-mono focus:border-brand-500 focus:outline-none"></textarea>
-                                <p class="text-[11px] text-gray-500 mt-1">Prefer this over the legacy <code>env:</code> map for anything secret: <code>env_from</code> resolves through the secret store and is checked against the project's granted secrets.</p>
+                                <p class="text-xs text-gray-500 mt-1">Prefer this over the legacy <code>env:</code> map for anything secret: <code>env_from</code> resolves through the secret store and is checked against the project's granted secrets.</p>
                             </div>
                         </div>
 

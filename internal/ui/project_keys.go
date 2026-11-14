@@ -1,13 +1,18 @@
 package ui
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/admin"
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/apikey"
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -23,9 +28,10 @@ import (
 //   - Revoke / rotate post to the action paths; success refreshes
 //     the list (the new secret again rides back via `NewSecret`).
 //
-// IDOR / auth concerns are delegated to the AuthMiddleware that
-// wraps the UI subtree (service container wires the same DB-keys
-// auth as the API path). This handler trusts the auth context.
+// Authorisation: projectRouter's scope gate decides who may open the page
+// (the GET list); projectKeysMayMutate is the POST authority (admins and,
+// since #754, the managed instance's owner); rotate, revoke and the push
+// toggles also check the key belongs to the URL's project (the IDOR guard).
 
 // ProjectKeysData backs project_keys.html.
 type ProjectKeysData struct {
@@ -90,6 +96,17 @@ func (s *Server) ProjectKeys(w http.ResponseWriter, r *http.Request, projectID s
 		http.Error(w, "project id required", http.StatusBadRequest)
 		return
 	}
+	// K3 (#754): the page can carry a just-minted secret, so no response,
+	// refusals included, is stored or leaks a referrer.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPost:
+	default:
+		w.Header().Set("Allow", "GET, HEAD, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.apiKeyRepo == nil {
 		http.Error(w, "api-key surface not configured", http.StatusServiceUnavailable)
 		return
@@ -104,10 +121,11 @@ func (s *Server) ProjectKeys(w http.ResponseWriter, r *http.Request, projectID s
 	if r.Method == http.MethodPost {
 		// D2 (audit 2026-06-10): minting/rotating/revoking project API
 		// keys issues long-lived bearer credentials that survive session
-		// revocation — a credential-issuer privilege. Restrict the
-		// mutating POST actions to admin scope; the read-only GET list
-		// (values already redacted) stays available to project members.
-		if !s.uiRequireAdminMutation(w, r) {
+		// revocation — a credential-issuer privilege. The mutating POST
+		// actions are for admins and, since #754, the managed instance's
+		// owner; the read-only GET list (values already redacted) stays
+		// available to project members.
+		if !s.projectKeysMayMutate(w, r) {
 			return
 		}
 		if err := r.ParseForm(); err != nil {
@@ -175,13 +193,17 @@ func (s *Server) handleProjectKeysAction(r *http.Request, data *ProjectKeysData,
 			KeyHash:   apikey.Hash(secret),
 			KeyPrefix: apikey.DisplayPrefix(secret),
 			CreatedAt: time.Now().UTC(),
-			CreatedBy: "ui",
+			CreatedBy: keysActor(r),
 		}
 		if err := s.apiKeyRepo.Create(r.Context(), row); err != nil {
 			data.Error = "failed to create key: " + err.Error()
 			return
 		}
+		auditErr := s.auditKeyAction(r, "key.create", row.ID, map[string]any{"project": projectID})
 		data.Success = "Created key " + row.Name + "."
+		if auditErr != nil {
+			data.Error = keysAuditNotRecorded
+		}
 		data.NewSecret = secret
 		data.NewSecretID = row.ID
 	case "rotate":
@@ -223,17 +245,34 @@ func (s *Server) handleProjectKeysAction(r *http.Request, data *ProjectKeysData,
 			persistence.GenerateID("akey"),
 			apikey.Hash(secret),
 			apikey.DisplayPrefix(secret),
-			"ui",
+			keysActor(r),
 			time.Now().UTC(),
 		)
 		if err := s.apiKeyRepo.Create(r.Context(), fresh); err != nil {
 			data.Error = "failed to mint rotated key: " + err.Error()
 			return
 		}
-		_ = s.revokeKeyAndSessions(r, prior.ID)
-		data.Success = "Rotated key " + prior.Name + "."
+		// K4b (#754): the new key works whatever happens next, so show it;
+		// never report the old key revoked when it is not.
+		revokeErr := s.revokeKeyAndSessions(r, prior.ID, projectID)
+		revokeAuditFailed := errors.Is(revokeErr, errKeyAuditNotRecorded)
+		if revokeAuditFailed {
+			revokeErr = nil
+		}
+		auditErr := s.auditKeyAction(r, "key.rotate", prior.ID, map[string]any{
+			"project": projectID, "new_key_id": fresh.ID, "old_key_revoked": revokeErr == nil,
+		})
 		data.NewSecret = secret
 		data.NewSecretID = fresh.ID
+		if revokeErr != nil {
+			s.logger.Warn().Err(revokeErr).Str("key_id", prior.ID).Msg("keys page: rotate minted the new key but could not revoke the old one")
+			data.Error = "Rotated key " + prior.Name + ", but the old key is still live: revoke it below."
+			return
+		}
+		data.Success = "Rotated key " + prior.Name + "."
+		if auditErr != nil || revokeAuditFailed {
+			data.Error = keysAuditNotRecorded
+		}
 	case "revoke":
 		keyID := r.FormValue("key_id")
 		if keyID == "" {
@@ -257,7 +296,11 @@ func (s *Server) handleProjectKeysAction(r *http.Request, data *ProjectKeysData,
 			data.Error = "key not found in this project"
 			return
 		}
-		if err := s.revokeKeyAndSessions(r, keyID); err != nil {
+		if err := s.revokeKeyAndSessions(r, keyID, projectID); errors.Is(err, errKeyAuditNotRecorded) {
+			data.Success = "Revoked key " + keyID + "."
+			data.Error = keysAuditNotRecorded
+			return
+		} else if err != nil {
 			data.Error = "failed to revoke: " + err.Error()
 			return
 		}
@@ -289,6 +332,13 @@ func (s *Server) handleProjectKeysAction(r *http.Request, data *ProjectKeysData,
 		if err := s.apiKeyRepo.UpdateAllowPush(r.Context(), keyID, allow); err != nil {
 			data.Error = "failed to update push permission: " + err.Error()
 			return
+		}
+		action := "key.push.disable"
+		if allow {
+			action = "key.push.enable"
+		}
+		if err := s.auditKeyAction(r, action, keyID, map[string]any{"project": projectID}); err != nil {
+			data.Error = keysAuditNotRecorded
 		}
 		if allow {
 			data.Success = "Enabled git push for key " + keyID + "."
@@ -440,10 +490,83 @@ func relativeShort(d time.Duration) string {
 // Falls back to the bare repository revoke when no accounts service is wired:
 // a deployment with no identity core has no sessions to end, and refusing to
 // revoke a key there would be a regression dressed as a safety check.
-func (s *Server) revokeKeyAndSessions(r *http.Request, keyID string) error {
+func (s *Server) revokeKeyAndSessions(r *http.Request, keyID, projectID string) error {
 	if s.accounts == nil {
-		return s.apiKeyRepo.Revoke(r.Context(), keyID)
+		// No accounts service to write credential.revoke: write it here,
+		// so a revoke is never the one unaudited action (#754, K4).
+		if err := s.apiKeyRepo.Revoke(r.Context(), keyID); err != nil {
+			return err
+		}
+		if err := s.auditKeyAction(r, "credential.revoke", keyID, map[string]any{"project": projectID}); err != nil {
+			return errKeyAuditNotRecorded
+		}
+		return nil
 	}
-	actor := authz.Actor{Principal: adminPrincipal(r), Source: "ui", IP: clientIP(r), UserAgent: r.UserAgent()}
+	actor := authz.Actor{Principal: keysActor(r), Source: "ui", IP: clientIP(r), UserAgent: r.UserAgent()}
 	return s.accounts.RevokeCredential(r.Context(), keyID, actor)
 }
+
+// projectKeysMayMutate is the keys page's one POST gate (#754, K2): the
+// callers uiRequireAdminMutation admitted (auth off, an admin key or
+// session), plus the managed instance's owner through the project_keys
+// surface. Every other caller gets the page's 403; the gate's 404 is not
+// used, because a project member already sees the page on GET.
+func (s *Server) projectKeysMayMutate(w http.ResponseWriter, r *http.Request) bool {
+	allowed := admin.IsAdminFromContext(r.Context()) ||
+		api.OperatorSurfaceAccessFor(r, s.isAdminKeyForSurface, api.SurfaceProjectKeys) == api.OperatorSurfaceAllowed
+	if api.SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
+		outcome := "refused"
+		if allowed {
+			outcome = "allowed"
+		}
+		s.logger.Info().Str("surface", string(api.SurfaceProjectKeys)).Str("outcome", outcome).Str("path", r.URL.Path).
+			Msg("operator surface: tenant_admin " + outcome)
+	}
+	if !allowed {
+		http.Error(w, "admin scope required", http.StatusForbidden)
+	}
+	return allowed
+}
+
+// keysActor names the console caller on a key row and its audit rows:
+// console:<user id> for a session, the bare admin principal otherwise.
+func keysActor(r *http.Request) string {
+	if id := api.IdentityFromContext(r.Context()); id != nil {
+		if uid, _ := id.Extra[auth.ExtraSessionUserID].(string); uid != "" {
+			return "console:" + uid
+		}
+	}
+	return adminPrincipal(r)
+}
+
+// auditKeyAction writes one admin_audit row for a keys-page mutation. The
+// detail never carries the secret, its hash or its prefix. It reports a
+// failed write so the page can say the action was not recorded (#754 code
+// review cd08 F1); with no audit repository wired there is nothing to say.
+func (s *Server) auditKeyAction(r *http.Request, action, keyID string, detail map[string]any) error {
+	if s.adminAuditRepo == nil {
+		return nil
+	}
+	entry := &persistence.AdminAuditEntry{
+		ID: persistence.GenerateID("admaud"), Principal: keysActor(r), Source: "ui",
+		Action: action, Target: keyID, IP: clientIP(r), UserAgent: r.UserAgent(),
+	}
+	if detail != nil {
+		if b, err := json.Marshal(detail); err == nil {
+			entry.After = string(b)
+		}
+	}
+	if err := s.adminAuditRepo.Insert(r.Context(), entry); err != nil {
+		s.logger.Warn().Err(err).Str("action", action).Str("key_id", keyID).Msg("keys page: audit write failed")
+		return err
+	}
+	return nil
+}
+
+// errKeyAuditNotRecorded: the key was revoked, but its audit row could not
+// be written. Callers treat the key as revoked and say the record failed.
+var errKeyAuditNotRecorded = errors.New("revoked, but the audit record could not be written")
+
+// keysAuditNotRecorded is the page's sentence when a mutation succeeded but
+// its audit row could not be written.
+const keysAuditNotRecorded = "The change was made, but its audit record could not be written; tell your operator."

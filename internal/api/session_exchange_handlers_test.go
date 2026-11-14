@@ -241,6 +241,11 @@ func TestNavMarker(t *testing.T) {
 	if got := navMarker("user"); got != "1" {
 		t.Fatalf("navMarker(user) = %q", got)
 	}
+	// GitHub #625 item 1: the managed instance's owner gets its own marker,
+	// which shows the Admin entries B3 grants (LLD 18, amendment 2026-11-12).
+	if got := navMarker("tenant_admin"); got != "owner" {
+		t.Fatalf("navMarker(tenant_admin) = %q, want owner", got)
+	}
 }
 
 func TestSessionExchange_MintFailureDoesNotSetCookies(t *testing.T) {

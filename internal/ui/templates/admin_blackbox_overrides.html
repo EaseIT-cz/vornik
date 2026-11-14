@@ -10,7 +10,7 @@
             <div class="flex items-center gap-3">
                 <a href="/ui/admin/blackbox" class="text-xs text-brand-400 hover:text-brand-300">← Black Box</a>
                 <h1 class="text-xl font-semibold text-gray-100">Trigger overrides</h1>
-                <span class="text-[10px] text-gray-600 ml-auto">per-(project, workflow, class)</span>
+                <span class="text-xs text-gray-600 ml-auto">per-(project, workflow, class)</span>
             </div>
 
             <p class="text-xs text-gray-500 max-w-3xl">
@@ -75,7 +75,7 @@
                     <textarea name="notes" rows="2" placeholder="Why is this override in place?" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono"></textarea>
                 </label>
                 <div class="flex justify-end">
-                    <button type="submit" class="bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium px-4 py-2 rounded-md">
+                    <button type="submit" class="v-btn v-btn--primary">
                         Save override
                     </button>
                 </div>
@@ -84,19 +84,19 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-4 py-2.5 border-b border-dark-700/60 flex items-center gap-3">
                     <div class="text-xs uppercase tracking-wider text-gray-500">Active overrides</div>
-                    <span class="text-[10px] text-gray-600">newest-updated first</span>
+                    <span class="text-xs text-gray-600">newest-updated first</span>
                 </div>
                 {{if .Rows}}
                 <div class="overflow-x-auto">
                     <table class="min-w-full">
                         <thead><tr class="border-b border-dark-700/60">
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Project / Workflow</th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Class</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Threshold</th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Mute</th>
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Notes</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Updated</th>
-                            <th scope="col" class="px-4 py-2 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider"><span class="sr-only">Delete</span></th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project / Workflow</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Class</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Threshold</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mute</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Updated</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"><span class="sr-only">Delete</span></th>
                         </tr></thead>
                         <tbody class="divide-y divide-dark-700/40">
                             {{range .Rows}}
@@ -112,14 +112,14 @@
                                 <td class="px-4 py-2 text-xs font-mono text-right text-gray-300">{{.ThresholdDisplay}}</td>
                                 <td class="px-4 py-2 text-xs font-mono">
                                     {{if .MutedActive}}
-                                    <span class="px-1.5 py-0.5 text-[10px] rounded ring-1 ring-amber-700/50 bg-amber-900/30 text-amber-600 dark:text-amber-200">muted</span>
+                                    <span class="px-1.5 py-0.5 text-xs rounded ring-1 ring-amber-700/50 bg-amber-900/30 text-amber-600 dark:text-amber-200">muted</span>
                                     <span class="text-gray-500 ml-1">until {{.MutedUntilDisplay}}</span>
                                     {{else}}
                                     <span class="text-gray-500">{{.MutedUntilDisplay}}</span>
                                     {{end}}
                                 </td>
                                 <td class="px-4 py-2 text-xs text-gray-300 max-w-xs truncate" title="{{.Notes}}">{{.Notes}}</td>
-                                <td class="px-4 py-2 text-[10px] font-mono text-right text-gray-500">{{.UpdatedAt}}{{if .CreatedBy}} <span class="text-gray-600">by {{.CreatedBy}}</span>{{end}}</td>
+                                <td class="px-4 py-2 text-xs font-mono text-right text-gray-500">{{.UpdatedAt}}{{if .CreatedBy}} <span class="text-gray-600">by {{.CreatedBy}}</span>{{end}}</td>
                                 <td class="px-4 py-2 text-right">
                                     <form method="post" action="/ui/admin/blackbox/overrides/delete" class="inline" data-confirm="Delete this override?">
                                         <input type="hidden" name="project" value="{{.ProjectID}}">

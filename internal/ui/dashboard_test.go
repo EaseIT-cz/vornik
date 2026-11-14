@@ -112,7 +112,7 @@ func renderDashboardBody(t *testing.T, opts ...ServerOption) string {
 	t.Helper()
 	all := append([]ServerOption{WithOnboardingDetector(alreadyOnboardedDetector())}, opts...)
 	srv := NewServer(all...)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != 200 {
@@ -131,7 +131,7 @@ func TestDashboardUsesPrimitivesAndSemanticTokens(t *testing.T) {
 	if !strings.Contains(body, stripGrid) {
 		t.Errorf("dashboard body missing statStrip grid %q:\n%s", stripGrid, body)
 	}
-	assertNoLegacyTokens(t, "dashboard.html")
+	assertNoLegacyTokens(t, "diagnostics_overview.html")
 }
 
 // TestDashboardRendersWithSpend reproduces the regression where the
@@ -151,7 +151,7 @@ func TestDashboardRendersWithSpend(t *testing.T) {
 	}
 	srv := NewServer(WithLLMUsageRepository(repo), WithOnboardingDetector(alreadyOnboardedDetector()))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 
@@ -201,7 +201,7 @@ func TestDashboard_LeaderboardWindowsPreloadForInstantSwitch(t *testing.T) {
 	srv := NewServer(WithLLMUsageRepository(repo), WithOnboardingDetector(alreadyOnboardedDetector()))
 
 	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/?window=30d", nil))
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/diagnostics?window=30d", nil))
 	if rr.Code != 200 {
 		t.Fatalf("dashboard returned %d, body: %s", rr.Code, rr.Body.String())
 	}
@@ -264,7 +264,7 @@ func TestDashboard_CacheTileVisibleWhenHitsExist(t *testing.T) {
 		},
 	}
 	srv := NewServer(WithResponseCacheStatsSource(cache), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/diagnostics", nil)
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != 200 {

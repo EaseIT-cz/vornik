@@ -5,9 +5,9 @@ sources:
     - path: internal/dispatcher/tools.go
       sha256: e1b110dedef605e12558d667ea75fed7be95f6c35abe8834f6049544b37204f9
     - path: internal/dispatcher/agent.go
-      sha256: b2b8994172ee9815c2180cc1b7708484867aa6e568aa70e05df9fc62893a7171
+      sha256: b54aca7996eadb1347b7360c3cabec2231d8ffc9e8e614a6307effe7c7d719d2
     - path: internal/email/channel.go
-      sha256: ecebe120876ddafbec3ffe8f8ca45d36382e9db8c3c8da554c0b084b4203a143
+      sha256: 426714d11c7cf274c3c4bb54885798b3bfa7e5f1e0c256f1a68249221a01b9aa
     - path: internal/slack/voice.go
       sha256: 1836b2db7a8a16253a0ebba29de188423fa5f6ec62713e37f541daffacd626f0
     - path: internal/reminders/completion_notifier.go
@@ -155,6 +155,9 @@ File delivery is bound to the channel the conversation started on:
   **50 MiB** per file).
 - **Email** — delivered as an attachment on a reply in the same thread
   (`multipart/mixed`, with the body always listing the files produced).
+- **Web chat** — not yet. A task started from the web chat does not report
+  back into the chat; its result and files are on the task's page, and the
+  assistant points you there.
 
 Task-kind scheduled updates use the same channel binding. When a successful
 scheduled task publishes OUTPUT artifacts, Vornik automatically attaches them

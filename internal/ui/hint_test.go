@@ -51,7 +51,7 @@ var moved = []struct{ file, opening string }{
 	{"admin_health_runtime.html", "STT (Whisper) + TTS (Piper) + ffmpeg. A row's re"},
 	{"admin_health_runtime.html", "Active FileBackend for artifact blob I/O — picke"},
 	{"admin_memory_audit.html", "Per-call audit trail for memory-search retrieval"},
-	{"dashboard.html", "Calls Vornik answered itself, with no provider c"},
+	{"diagnostics_overview.html", "Calls Vornik answered itself, with no provider c"}, // the cache tile moved in #756
 	{"insights_adoption.html", "From memory_retrieval_audit and task_llm_usage,"},
 	{"insights_adoption.html", "Scored on distinct capabilities used, not event"},
 	{"insights_adoption.html", "A capability no team has used is one the custome"},
@@ -140,7 +140,7 @@ func TestStandingExplanationsSitBehindAHint(t *testing.T) {
 }
 
 func TestOverviewCacheTileHasAHint(t *testing.T) {
-	src := flatSource(t, "dashboard.html")
+	src := flatSource(t, "diagnostics_overview.html")
 	i := strings.Index(src, "Calls Vornik answered itself")
 	if i < 0 || !insideHint(src, i) {
 		t.Fatal("the cache tile's explanation is not behind an ⓘ")

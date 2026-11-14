@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"vornik.io/vornik/internal/auth"
@@ -121,4 +122,24 @@ func (s *Server) DaemonInflight(w http.ResponseWriter, r *http.Request) {
 	}
 	n := s.InflightChatProxy()
 	respondJSON(w, http.StatusOK, daemonInflightResponse{ChatProxy: n, Total: n, Draining: s.draining.Load()})
+}
+
+// TrackLongWork counts work that outlives its HTTP request, today a web chat
+// turn (web-chat-design.md §2.3), in the same in-flight count the deploy idle
+// gate waits on. It counts first and reads the drain bit second, as
+// trackLongRequest does (§8.5a); on a drain it releases the count it just
+// took and returns ok=false, so the caller refuses the work. done is
+// idempotent and must be called when the work ends.
+// see LLD § https://docs.vornik.io §8.5a
+func (s *Server) TrackLongWork() (done func(), ok bool) {
+	s.inflight.chatProxy.Add(1)
+	if s.inflight.admitSeam != nil {
+		s.inflight.admitSeam()
+	}
+	if s.draining.Load() {
+		s.inflight.chatProxy.Add(-1)
+		return nil, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { s.inflight.chatProxy.Add(-1) }) }, true
 }

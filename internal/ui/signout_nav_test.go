@@ -40,7 +40,7 @@ func TestSignout_RenderedOnEveryNavPage(t *testing.T) {
 	if strings.Count(body, "hidden") < 2 {
 		t.Error("signout controls must default to hidden without IsSession")
 	}
-	if !strings.Contains(body, "vornik_session_ui=(1|admin)") {
+	if !strings.Contains(body, "vornik_session_ui=(1|admin|owner)") {
 		t.Error("signout gate script missing (marker-cookie test)")
 	}
 	// UI refresh 2026-06-08: mobile nav is now area-tabs + drawers (no
@@ -97,7 +97,7 @@ func TestAdminLink_GatedOnEveryNavPage(t *testing.T) {
 		t.Error("Admin link must default to hidden without server-side IsAdmin")
 	}
 	// The gate script must recognise both marker values and the admin hook.
-	for _, frag := range []string{`vornik_session_ui=(1|admin)`, `[data-admin-link]`} {
+	for _, frag := range []string{`vornik_session_ui=(1|admin|owner)`, `[data-admin-link]`} {
 		if !strings.Contains(body, frag) {
 			t.Errorf("gate script missing %q", frag)
 		}

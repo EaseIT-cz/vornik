@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 
 	"vornik.io/vornik/internal/chatorigin"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
+	"vornik.io/vornik/internal/webchat"
 )
 
 // turnStatusReporter routes the dispatcher's in-flight progress to the originating
@@ -24,6 +26,24 @@ import (
 // shows the line above its streamed reply.
 type turnStatusReporter struct {
 	resolver chatorigin.ChannelResolver
+	// webChat is the UI's sink for web chat turns (web-chat-design.md §2.3).
+	// Web chat builds a channel per turn and registers none, so its lines
+	// go here, never through the resolver, whose other callers (reminder
+	// and completion delivery) keep resolving web chat to nothing. Set once
+	// the UI server exists; until then a web chat line is dropped.
+	webChat atomic.Pointer[webChatSinkBox]
+}
+
+// webChatTurnStatusSink is what *ui.Server implements for web chat turns.
+type webChatTurnStatusSink interface {
+	SetWebChatTurnStatus(historyKey, line string)
+}
+
+type webChatSinkBox struct{ sink webChatTurnStatusSink }
+
+// setWebChatSink binds the UI's sink; the reporter is built before the UI.
+func (r *turnStatusReporter) setWebChatSink(s webChatTurnStatusSink) {
+	r.webChat.Store(&webChatSinkBox{sink: s})
 }
 
 // ReportTurnStatus implements dispatcher.TurnStatusReporter.
@@ -32,7 +52,17 @@ type turnStatusReporter struct {
 // a slow or failing status update must never add latency to the very turn it is
 // reporting on.
 func (r *turnStatusReporter) ReportTurnStatus(ctx context.Context, channelName, sessionID, status string) {
-	if r == nil || r.resolver == nil || channelName == "" || sessionID == "" {
+	if r == nil || channelName == "" || sessionID == "" {
+		return
+	}
+	if channelName == webchat.ChannelName {
+		// The web chat's session id is its history key (web-chat-design.md §2.3).
+		if b := r.webChat.Load(); b != nil {
+			b.sink.SetWebChatTurnStatus(sessionID, status)
+		}
+		return
+	}
+	if r.resolver == nil {
 		return
 	}
 	ch := r.resolver.ResolveChannel(channelName)

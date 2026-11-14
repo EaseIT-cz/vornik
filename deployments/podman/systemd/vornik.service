@@ -55,6 +55,10 @@ EnvironmentFile=-%h/.config/vornik/vornik.env
 # escape for a literal `$`, so the shell — not systemd — expands these.
 ExecStartPre=/bin/bash -c 'for _ in $$(seq 1 "$$VORNIK_DB_WAIT_SECONDS"); do (exec 3<>"/dev/tcp/$$VORNIK_DB_WAIT_HOST/$$VORNIK_DB_WAIT_PORT") 2>/dev/null && exit 0; sleep 1; done; echo "vornik: database $$VORNIK_DB_WAIT_HOST:$$VORNIK_DB_WAIT_PORT unreachable after $${VORNIK_DB_WAIT_SECONDS}s - is the deps stack up? (podman compose -f deps.compose.yaml up -d)" >&2; exit 1'
 Restart=on-failure
+# The daemon may restart itself once, when idle, to apply first-run setup
+# (POST /api/v1/setup/apply, #758): it exits 75 and this unit starts it
+# again. The variable says so; keep it beside Restart=on-failure.
+Environment=VORNIK_RESTART_ON_EXIT=1
 RestartSec=3
 # Must exceed VORNIK_DB_WAIT_SECONDS: TimeoutStartSec covers ExecStartPre and
 # ExecStart together, so a short value would kill the gate mid-wait and leave

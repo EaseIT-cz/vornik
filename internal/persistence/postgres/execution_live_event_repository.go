@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"sync"
 	"time"
 
+	"github.com/lib/pq"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -14,13 +17,31 @@ import (
 // persistence.ExecutionLiveEventRepository against PostgreSQL.
 //
 // Append computes the next per-execution seq via
-// `SELECT COALESCE(MAX(seq) + 1, 0)` inside the INSERT. Leader
-// election ensures only one replica is running a given execution
-// at a time, so concurrent Append on the same execution_id is
-// rare — but the (execution_id, seq) unique index is the
-// backstop: a duplicate raises an error, the caller retries.
+// `SELECT COALESCE(MAX(seq) + 1, 0)` inside the INSERT. Two appends for one
+// execution at once (one process publishes narration and step events
+// concurrently) can read the same MAX; the (execution_id, seq) unique index
+// refuses the second, and Append retries it with a fresh MAX (GitHub #662;
+// the publisher's fallback does not persist, so the caller cannot be the one
+// to retry). Appends for one execution are also serialised in-process
+// (appendLocks): one daemon publishes an execution's events from several
+// goroutines. 16 concurrent writers starved an 8-try retry in the integration
+// test. The retry stays as the backstop across processes. The lock is held
+// across the INSERT, which is safe because the repository is built once per
+// daemon over the connection pool (storage.Build(c.instrumentedDB())), never
+// over a caller's transaction; a second instance would have its own stripes.
 type ExecutionLiveEventRepository struct {
-	db DBTX
+	db          DBTX
+	appendLocks [liveEventAppendStripes]sync.Mutex
+}
+
+// liveEventAppendStripes is how many mutexes the per-execution append lock is
+// striped over; two executions share a stripe only by hash.
+const liveEventAppendStripes = 64
+
+func (r *ExecutionLiveEventRepository) appendLock(executionID string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(executionID))
+	return &r.appendLocks[h.Sum32()%liveEventAppendStripes]
 }
 
 // NewExecutionLiveEventRepository constructs the repo over db.
@@ -44,11 +65,33 @@ RETURNING seq`
 	if len(payload) == 0 {
 		arg = nil
 	}
+	mu := r.appendLock(executionID)
+	mu.Lock()
+	defer mu.Unlock()
 	var seq int64
-	if err := r.db.QueryRowContext(ctx, q, executionID, kind, arg).Scan(&seq); err != nil {
-		return 0, fmt.Errorf("live_event: append: %w", err)
+	var err error
+	for attempt := 1; attempt <= liveEventSeqAttempts; attempt++ {
+		err = r.db.QueryRowContext(ctx, q, executionID, kind, arg).Scan(&seq)
+		if err == nil {
+			return seq, nil
+		}
+		if !isLiveEventSeqClash(err) {
+			break
+		}
 	}
-	return seq, nil
+	return 0, fmt.Errorf("live_event: append: %w", err)
+}
+
+// liveEventSeqAttempts bounds Append's retries of a seq clash. Each retry
+// re-reads MAX(seq), so it fails again only when yet another append won that
+// race too.
+const liveEventSeqAttempts = 8
+
+// isLiveEventSeqClash reports a duplicate on idx_live_events_execution_seq,
+// the only error Append retries.
+func isLiveEventSeqClash(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "idx_live_events_execution_seq"
 }
 
 // ListSince returns events with seq >= fromSeq, ordered ascending.

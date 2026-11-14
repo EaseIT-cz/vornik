@@ -40,6 +40,9 @@ var wrappedControls = map[string]bool{
 	"swarms.html#ia-filter":        true,
 	"workflows.html#ia-filter":     true,
 	"_partials.html#palette-input": true,
+	// The web chat composer: a borderless textarea inside the rounded
+	// composer box, which carries the boundary (web-chat-design.md §2.1).
+	"chat.html#prompt": true,
 }
 
 // stripNonMarkup blanks template comments, HTML comments and script bodies,

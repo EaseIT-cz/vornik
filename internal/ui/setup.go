@@ -26,6 +26,8 @@ type SetupPageData struct {
 	// editable without exposing env-placeholder secrets.
 	Prefill       onboarding.ChatConfigProposal
 	MemoryPrefill onboarding.MemoryConfigProposal
+	// UseCases backs step 2, "Choose what it is for" (#758 W2).
+	UseCases []SetupUseCase
 }
 
 type SetupProjectOption struct {
@@ -51,7 +53,7 @@ func (s *Server) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.setupStatus(r)
 	data := SetupPageData{
-		Title:         "Setup guide",
+		Title:         "Set up Vornik",
 		CurrentPage:   "setup",
 		Status:        status,
 		Prefill:       s.setupPrefill(r),
@@ -62,6 +64,7 @@ func (s *Server) Setup(w http.ResponseWriter, r *http.Request) {
 		data.DispatcherProjectID = s.sayHelloProjectID(strings.TrimSpace(cfg.Telegram.DispatcherProjectID))
 	}
 	data.ProjectOptions = s.setupProjectOptions()
+	data.UseCases = s.setupUseCases(data.DispatcherProjectID)
 	s.render(w, "setup.html", data)
 }
 

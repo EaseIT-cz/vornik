@@ -218,7 +218,11 @@ connected assistants, and upstream services.
   it can be presented in, before routing, serves no metrics, and treats an
   administrator's browser session there as the instance owner, who may use a
   short, closed list of operator surfaces (the project wizard, the template
-  gallery, MCP OAuth connections, the operator audit) and no other;
+  gallery, MCP OAuth connections, the operator audit, the Credentials page,
+  and creating, rotating and revoking keys on a project's Keys page) and no
+  other. Each key action is audited and the key list shows who made each key;
+  a key the owner makes is a full key for its project, which cannot manage
+  keys, until revoked;
   administrator access exists only on the operations listener, which must
   bind a loopback or private address. Managed mode refuses to start with authentication off.
   It also requires the per-IP request limit and a narrow trusted-proxy list,
@@ -339,6 +343,12 @@ connected assistants, and upstream services.
   status tools.
 - Every AI-generated chat reply carries the EU AI Act Art 50(1) disclosure
   for its channel; a turn whose disclosure cannot be delivered is refused.
+- **The web chat shows exchanges, never tool results.** A reply runs in the
+  background, bound to the browser session that asked (its chat cookie and
+  whether it is an operator view) and to the project: another browser, view
+  or project asking for that reply gets "not found". The page renders model
+  text only through the server's escaping and a markdown renderer that
+  drops raw HTML; the deploy gate waits for a running reply.
 
 ### Approvals and approver devices
 
@@ -674,4 +684,4 @@ connected assistants, and upstream services.
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.4 -->
+<!-- summary-reviewed-through: 2026.11.5 -->

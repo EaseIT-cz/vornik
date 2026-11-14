@@ -176,7 +176,7 @@ func TestLayoutSpendTrend_TotalsAndGeometry(t *testing.T) {
 	assert.Equal(t, "$3.00", s.Buckets[3].CostLabel)
 	assert.True(t, s.HasData)
 	// Tallest bar is the max-cost day.
-	assert.Greater(t, s.Buckets[3].BarH, s.Buckets[1].BarH)
+	assert.Greater(t, s.Chart.Bars[3].H, s.Chart.Bars[1].H) // the shared chart (#757)
 }
 
 func TestLayoutSpendTrend_ZeroHasNoData(t *testing.T) {

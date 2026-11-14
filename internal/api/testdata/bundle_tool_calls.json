@@ -316,7 +316,7 @@
     {
       "bundle": "claude-code",
       "file": "contrib/claude-code-companion/commands/upload.md",
-      "line": 263,
+      "line": 271,
       "tool": "delegate",
       "arguments": {
         "workflow": "companion-architectural-review",

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/controlplane"
+	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -207,7 +208,10 @@ type AdminControlPlaneData struct {
 	// MCPWaiting lists the un-namespaced credentials the configuration
 	// references that resolve nowhere: their servers are refused at
 	// registration and so absent from MCPRows (GitHub #623).
-	MCPWaiting  []CredentialRow
+	MCPWaiting []CredentialRow
+	// MCPRefused lists the servers the daemon refused to register, with the
+	// reason, daemon catalogue first (GitHub #625 item 5).
+	MCPRefused  []mcp.Refusal
 	MCPWritable bool
 	Flash       string
 	Error       string

@@ -117,7 +117,7 @@ What the defaults mean:
   set `tool_audit_floor_override: true` and say which in
   `tool_audit_floor_override_basis`; an override without a basis is ignored.
   The record of a connected assistant's refused calls (shown on its page
-  under **Admin → Assistants**) is kept for the same time, and so is the
+  under **Manage → Coding agents**) is kept for the same time, and so is the
   memory recall audit: the text of each memory search and which records it
   returned. Before 2026.11.3 the recall audit was never pruned.
 

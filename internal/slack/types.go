@@ -503,6 +503,10 @@ func New(cfg Config) (*Channel, error) {
 // ChannelMessage.Source.
 func (c *Channel) Name() string { return channelName }
 
+// CanDeliverLater reports true: a finished task reaches this channel through the chat-completion notifier (chatCompletionChannels)
+// (web-chat-design.md §4.2; the service's parity test checks the pairing).
+func (c *Channel) CanDeliverLater() bool { return true }
+
 // Logger returns the channel's logger. Exposed so the wiring that
 // constructs the channel can assert it actually handed one over — a
 // zero-value zerolog.Logger discards silently, which once left every

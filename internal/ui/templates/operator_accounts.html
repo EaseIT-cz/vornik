@@ -72,7 +72,7 @@
                                 */}}
                                 {{if eq .Channel "api_key"}}
                                     <span class="text-gray-300">api key: <span class="font-medium">{{if .Display}}{{.Display}}{{else}}{{.ExternalID}}{{end}}</span></span>
-                                    {{if .Display}}<span class="font-mono text-gray-600 text-[11px]">{{.ExternalID}}</span>{{end}}
+                                    {{if .Display}}<span class="font-mono text-gray-600 text-xs">{{.ExternalID}}</span>{{end}}
                                 {{else}}
                                 <span class="font-mono text-gray-300">{{.Channel}}:{{if .Display}}{{.Display}}{{else}}{{.ExternalID}}{{end}}</span>
                                 {{end}}

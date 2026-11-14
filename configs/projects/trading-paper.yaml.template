@@ -76,7 +76,7 @@ budget:
 # from a project_context.md file in the project workspace.
 autonomy:
   enabled: true
-  interval: "15m"
+  pollInterval: "15m"
   duplicateWindow: "0s"
   allowedTaskTypes:
     - "trading"

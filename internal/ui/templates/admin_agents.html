@@ -55,7 +55,7 @@
             <section class="glass rounded-xl border border-dark-700 p-4 text-sm">
                 <h2 class="text-sm font-semibold text-gray-200 mb-1">Remote models approved for this assistant</h2>
                 <p class="text-xs text-gray-500 mb-2">A role on a model that goes to one of these runs without asking again. Withdrawing one stops such roles before their next attempt; the assistant must ask the phone again.</p>
-                <ul class="space-y-1">{{range .Models}}<li class="flex flex-wrap items-center gap-2"><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if eq .Status "approved"}}<form method="post" action="/ui/admin/agents/{{$ns}}/models/withdraw" class="inline"><input type="hidden" name="destination" value="{{.Name}}"><button type="submit" class="text-xs text-rose-400 hover:text-rose-300">Withdraw</button></form>{{end}}</li>{{end}}</ul>
+                <ul class="space-y-1">{{range .Models}}<li class="flex flex-wrap items-center gap-2"><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if eq .Status "approved"}}<form method="post" action="/ui/admin/agents/{{$ns}}/models/withdraw" class="inline"><input type="hidden" name="destination" value="{{.Name}}"><button type="submit" class="text-xs text-rose-700 hover:text-rose-300 dark:text-rose-400">Withdraw</button></form>{{end}}</li>{{end}}</ul>
             </section>
             {{end}}
 
@@ -100,7 +100,7 @@
             <section class="glass rounded-xl border border-dark-700 p-4 text-sm space-y-2">
                 <h2 class="text-sm font-semibold text-gray-200">Refused calls</h2>
                 {{if .Unavailable}}
-                <p class="text-amber-400">Refusals unavailable: the refusal ledger could not be read just now. Reload to try again; the daemon log has the error.</p>
+                <p class="text-amber-700 dark:text-amber-400">Refusals unavailable: the refusal ledger could not be read just now. Reload to try again; the daemon log has the error.</p>
                 {{else if .Total}}
                 <p class="text-gray-300">{{.Total}} in the last 7 days, by rule:</p>
                 <ul class="flex flex-wrap gap-x-4 gap-y-1">{{range .ByRule}}<li><span class="font-mono">{{.Rule}}</span> {{.Count}}</li>{{end}}</ul>
@@ -108,7 +108,7 @@
                 <p class="text-gray-400">No refusal in the last 7 days.</p>
                 {{end}}
                 {{if .Unwritten}}
-                <p class="text-xs text-amber-400">{{.Unwritten}} more refusal(s) since the daemon started were counted but not written (at most 60 rows are written per hour, or the write failed). This count restarts with the daemon.</p>
+                <p class="text-xs text-amber-700 dark:text-amber-400">{{.Unwritten}} more refusal(s) since the daemon started were counted but not written (at most 60 rows are written per hour, or the write failed). This count restarts with the daemon.</p>
                 {{end}}
                 {{if .Recent}}
                 <table class="min-w-full text-xs">
@@ -144,7 +144,7 @@
                             <td class="px-4 py-2">{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="text-gray-500">never</span>{{end}}</td>
                             <td class="px-4 py-2 text-right">{{.Projects}}</td>
                             <td class="px-4 py-2 text-right">{{.Pending}}</td>
-                            <td class="px-4 py-2 text-right">{{if .RefusedUnavailable}}<span class="text-amber-400">refusals unavailable</span>{{else}}{{.Refused7d}}{{end}}</td>
+                            <td class="px-4 py-2 text-right">{{if .RefusedUnavailable}}<span class="text-amber-700 dark:text-amber-400">refusals unavailable</span>{{else}}{{.Refused7d}}{{end}}</td>
                         </tr>
                         {{end}}
                     </tbody>

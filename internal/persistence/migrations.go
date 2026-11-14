@@ -357,8 +357,16 @@ func pendingMigrations(applied map[int]bool, all []Migration) []Migration {
 }
 
 // applyMigration executes a single migration.
+//
+// The Tx is begun on a context that never ends by itself (GitHub #741): when
+// a Tx's own context ends, database/sql rolls it back on a watcher goroutine
+// with a discard, which closes the lock's *sql.Conn while
+// releaseMigrationConn may be using it, and Conn.grabConn can then hand out a
+// nil driver connection (a panic, seen once under -race). The statements
+// below still run on ctx, so Run's deadline still cancels them, and the
+// deferred Rollback runs here, on this goroutine.
 func (r *MigrationRunner) applyMigration(ctx context.Context, q migrationDB, m Migration) error {
-	tx, err := q.BeginTx(ctx, nil)
+	tx, err := q.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}

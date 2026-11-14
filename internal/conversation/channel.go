@@ -80,6 +80,16 @@ type Channel interface {
 	ResolveSpeaker(ctx context.Context, channelSpeakerID string) (Speaker, error)
 }
 
+// LaterDeliveryChannel is the optional interface of a channel that can send
+// the person a message after the current reply: a finished task's result,
+// or a resumed conversation (web-chat-design.md §4.2). Closed by default: a
+// channel that does not implement it, or returns false, is treated as unable
+// to, and the dispatcher is told not to promise a follow-up there (the
+// 2026-07-30 Slack incident was a channel assumed to have one).
+type LaterDeliveryChannel interface {
+	CanDeliverLater() bool
+}
+
 // StreamingChannel is the optional interface streaming-capable
 // channels (Telegram message edits, Slack chat.update, the web
 // chat SSE surface) implement on top of Channel. The dispatcher

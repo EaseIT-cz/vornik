@@ -64,19 +64,19 @@
                             <tr class="border-b border-dark-700/50 text-gray-200 hover:bg-dark-700/30 transition-colors">
                                 <td class="px-4 py-2">
                                     <a href="{{.DetailURL}}" class="text-brand-300 hover:text-brand-200">{{if .Title}}{{.Title}}{{else}}<span class="text-gray-500 italic">untitled</span>{{end}}</a>
-                                    <div class="text-[10px] text-gray-500 font-mono mt-0.5" title="{{.SourceArtifactID}}">{{shortID .SourceArtifactID}}</div>
+                                    <div class="text-xs text-gray-500 font-mono mt-0.5" title="{{.SourceArtifactID}}">{{shortID .SourceArtifactID}}</div>
                                 </td>
                                 <td class="px-4 py-2 text-gray-300">{{if .Author}}{{.Author}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
                                 <td class="px-4 py-2 tabular-nums">{{.SectionCount}}</td>
                                 <td class="px-4 py-2 tabular-nums text-gray-400">{{humanizeSize .TotalTextBytes}}</td>
-                                <td class="px-4 py-2 text-gray-400 font-mono text-[10px]">
+                                <td class="px-4 py-2 text-gray-400 font-mono text-xs">
                                     {{.ExtractorName}}<br>
                                     <span class="text-gray-600">v{{.ExtractorVersion}}</span>
                                 </td>
                                 <td class="px-4 py-2">
-                                    {{if eq .Status "OK"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/40">OK</span>
-                                    {{else if eq .Status "PARTIAL"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-600/40">PARTIAL</span>
-                                    {{else if eq .Status "FAILED"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-600/40">FAILED</span>
+                                    {{if eq .Status "OK"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-inset ring-emerald-600/40">OK</span>
+                                    {{else if eq .Status "PARTIAL"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-600/40">PARTIAL</span>
+                                    {{else if eq .Status "FAILED"}}<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-600/40">FAILED</span>
                                     {{else}}<span class="text-gray-500">{{.Status}}</span>{{end}}
                                 </td>
                                 <td class="px-4 py-2 text-gray-400 whitespace-nowrap" title="{{.ExtractedAtAbsolute}}">{{.ExtractedAtDisplay}}</td>

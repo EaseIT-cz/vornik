@@ -25,7 +25,7 @@ func TestSetupPage_Renders(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Installation setup") {
+	if !strings.Contains(rec.Body.String(), "Set up Vornik") {
 		t.Fatalf("setup page missing expected heading, body=%s", rec.Body.String())
 	}
 }
@@ -84,7 +84,7 @@ func TestSetupPage_AdminCanAccess(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for admin on /ui/setup", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Installation setup") {
+	if !strings.Contains(rec.Body.String(), "Set up Vornik") {
 		t.Fatalf("setup page missing expected heading for admin")
 	}
 }
@@ -103,7 +103,6 @@ func TestSetupPage_RendersChatForm(t *testing.T) {
 		`id="fetch-models-btn"`,
 		`id="save-continue-btn"`,
 		`id="test-conn-btn"`,
-		"restart-banner",
 		`fetch('/api/v1/setup/models'`,
 		`/api/v1/setup/session/`,
 	} {
@@ -209,18 +208,17 @@ func TestSetupPage_FreshDefaultsAreNotConfigured(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	body := rec.Body.String()
 	for _, want := range []string{
-		"Setup state",
+		"Setup details",
 		"Chat backend",
 		"Memory / RAG",
 		"Not configured",
-		"Step 2 — Configure chat",
-		"Step 3 — Configure memory / RAG",
-		"Step 4 — Configure dispatcher project",
+		"1. Connect a model",
+		"2. Choose what it is for",
+		"3. Say hello",
 		`id="mem-test-btn" disabled`,
 		`id="mem-save-btn" disabled`,
-		"Create assistant project",
-		`href="/ui/integrations"`,
-		"Connect a channel",
+		// #758 W2: before a model is connected the use cases cannot be chosen.
+		`data-use-case="assistant"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("fresh setup page missing marker %q", want)
@@ -228,6 +226,9 @@ func TestSetupPage_FreshDefaultsAreNotConfigured(t *testing.T) {
 	}
 	if strings.Contains(body, `href="/ui/projects/new?slug=personal-assistant"`) {
 		t.Error("fresh setup page should not enable assistant project creation before chat and memory are configured")
+	}
+	if !useCaseDisabled(body, "assistant") {
+		t.Error("the use cases must stay disabled until a model is connected")
 	}
 }
 
@@ -246,7 +247,7 @@ func TestSetupPage_RendersMemoryStep(t *testing.T) {
 		`id="mem-model"`,
 		`/memory/validate`,
 		`/memory/commit`,
-		"Step 3 — Configure memory",
+		"Long-term memory",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("setup page missing memory-step marker %q", want)
@@ -324,30 +325,30 @@ func TestSetupPage_CompletedChatAndMemoryAdvanceToDispatcher(t *testing.T) {
 
 	for _, bad := range []string{
 		`/ui/projects/new/wizard`,
-		`id="dispatcher-save-btn" disabled`,
 	} {
 		if strings.Contains(body, bad) {
 			t.Errorf("setup page should not render completed/broken setup affordance %q", bad)
 		}
 	}
 	for _, want := range []string{
-		"Setup state",
+		"Setup details",
 		`id="chat-config-form"`,
-		"Step 3 — Configure memory",
+		"Long-term memory",
 		`id="mem-enabled" checked`,
-		"Step 4 — Configure dispatcher project",
-		`id="dispatcher-project-id"`,
-		`id="dispatcher-save-btn"`,
-		`fetch('/api/v1/setup/dispatcher'`,
-		`value="assistant"`,
-		`href="/ui/projects/new?slug=personal-assistant"`,
-		"telegram.dispatcher_project_id",
-		`href="/ui/integrations"`,
-		"Connect a channel",
+		"2. Choose what it is for",
+		// #758 W2: the use case makes its project the dispatcher, then applies.
+		`data-project="assistant"`,
+		`data-loaded="1"`,
+		`'/api/v1/projects/from-template'`,
+		`'/api/v1/setup/dispatcher'`,
+		`'/api/v1/setup/apply'`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("setup page missing dispatcher-next marker %q", want)
+			t.Errorf("setup page missing use-case marker %q", want)
 		}
+	}
+	if useCaseDisabled(body, "assistant") {
+		t.Error("with a model connected, the use cases must be enabled")
 	}
 }
 
@@ -378,11 +379,8 @@ func TestSetupPage_MemoryOptOutStillUnlocksDispatcher(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	body := rec.Body.String()
 
-	if strings.Contains(body, `id="dispatcher-save-btn" disabled`) {
-		t.Error("dispatcher save button must not be disabled when chat is configured and memory is opted out")
-	}
-	if !strings.Contains(body, `href="/ui/projects/new?slug=personal-assistant"`) {
-		t.Error("create-assistant-project CTA must be enabled when chat is configured and memory is opted out")
+	if useCaseDisabled(body, "assistant") {
+		t.Error("the use cases must be enabled when chat is configured and memory is opted out")
 	}
 	// The memory step must present itself as skippable, not a hard gate.
 	if !strings.Contains(body, "Optional") {
@@ -428,8 +426,10 @@ func TestSetupPage_SayHelloStepClosesTheLoop(t *testing.T) {
 	if !strings.Contains(body, "Say hello") {
 		t.Error("setup page missing the final say-hello step")
 	}
-	if !strings.Contains(body, `href="/ui/projects/assistant/chat"`) {
-		t.Error("say-hello step must deep-link into the dispatcher project's chat")
+	// #758: Say hello opens the dispatcher's chat through /ui/ask with a
+	// starter question filled in (#756), visible once the dispatcher is set.
+	if !strings.Contains(body, `href="/ui/ask?q=Hello%21%20What%20can%20you%20help%20me%20with%3F" class="v-btn v-btn--primary">`) {
+		t.Error("say-hello step must link to the dispatcher's chat with a starter question")
 	}
 
 	// Before the dispatcher is pinned there is nothing to link to yet — the
@@ -514,4 +514,15 @@ func TestSetupPage_StatesHttpProviderOnlyScope(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "router") {
 		t.Error("setup page should mention router is out of scope / advanced")
 	}
+}
+
+// useCaseDisabled reports whether the use-case button for key renders with
+// the disabled attribute.
+func useCaseDisabled(body, key string) bool {
+	i := strings.Index(body, `data-use-case="`+key+`"`)
+	if i < 0 {
+		return false
+	}
+	end := strings.Index(body[i:], ">")
+	return strings.Contains(body[i:i+end], " disabled")
 }

@@ -29,10 +29,10 @@
                 {{range .Rows}}
                 <a href="/ui/workflows/{{.ID}}/edit" class="tap block glass rounded-xl border border-dark-700 px-4 py-3 hover:border-dark-600 transition-colors">
                     <div class="text-sm font-medium text-gray-100">{{.Label}}</div>
-                    <div class="text-[11px] text-gray-500 mt-1 font-mono">{{.ID}}</div>
+                    <div class="text-xs text-gray-500 mt-1 font-mono">{{.ID}}</div>
                     {{if .Description}}<div class="text-xs text-gray-400 mt-1">{{.Description}}</div>{{end}}
                     <div class="text-xs text-gray-400 mt-1">{{.StepCount}} step{{if ne .StepCount 1}}s{{end}} · {{.TerminalCount}} terminal{{if ne .TerminalCount 1}}s{{end}}{{if .Entrypoint}} · entry: {{.Entrypoint}}{{end}}</div>
-                    <div class="text-[11px] text-gray-500 mt-1">used by: {{if .UsedBy}}{{range $i, $p := .UsedBy}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}—{{end}}</div>
+                    <div class="text-xs text-gray-500 mt-1">used by: {{if .UsedBy}}{{range $i, $p := .UsedBy}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}—{{end}}</div>
                 </a>
                 {{end}}
             </div>
@@ -41,7 +41,7 @@
             <div class="hidden md:block glass rounded-xl border border-dark-700 overflow-hidden">
                 <table class="min-w-full divide-y divide-dark-700">
                     <thead class="bg-dark-800/60">
-                        <tr class="text-left text-[11px] uppercase tracking-wider text-gray-500">
+                        <tr class="text-left text-xs uppercase tracking-wider text-gray-500">
                             <th class="px-5 py-2.5 font-medium">Workflow</th>
                             <th class="px-5 py-2.5 font-medium">Steps</th>
                             <th class="px-5 py-2.5 font-medium">Terminals</th>
@@ -54,7 +54,7 @@
                         <tr class="hover:bg-dark-800/50 transition-colors cursor-pointer" data-on-click="navigate" data-href="/ui/workflows/{{.ID}}/edit">
                             <td class="px-5 py-3">
                                 <div class="text-sm font-medium text-gray-100">{{.Label}}</div>
-                                <div class="text-[11px] text-gray-500 font-mono">{{.ID}}</div>
+                                <div class="text-xs text-gray-500 font-mono">{{.ID}}</div>
                             </td>
                             <td class="px-5 py-3 text-sm text-gray-300">{{.StepCount}}</td>
                             <td class="px-5 py-3 text-sm text-gray-300">{{.TerminalCount}}</td>

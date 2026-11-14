@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -62,7 +64,9 @@ type navFixture struct {
 
 func TestDesktopNavRendersRailAndPanel(t *testing.T) {
 	html := renderTemplateString(t, "nav", navFixture{CurrentPage: "workflows", IsAdmin: true, IsSession: true})
-	for _, label := range []string{"Orchestration", "Memory", "Insight", "Admin"} {
+	// Navigation v2 (#755): the doors, then Manage, Diagnostics and the
+	// operator console.
+	for _, label := range []string{"Home", "Ask", "Needs you", "Results &amp; cost", "Manage", "Diagnostics", "Operator console"} {
 		if !strings.Contains(html, label) {
 			t.Errorf("rail missing area %q", label)
 		}
@@ -113,7 +117,7 @@ func TestMobileNavTabsAndDrawer(t *testing.T) {
 	if !strings.Contains(html, "md:hidden") {
 		t.Error("mobile bottom bar missing")
 	}
-	for _, label := range []string{"Orchestration", "Memory", "Insight"} {
+	for _, label := range []string{"Home", "Ask", "Needs you", "Manage", "Diagnostics"} {
 		if !strings.Contains(html, label) {
 			t.Errorf("mobile tabs missing area %q", label)
 		}
@@ -282,24 +286,57 @@ func TestPageHeadNoJSBodyChromeIsThemed(t *testing.T) {
 	}
 }
 
-func TestPageHeadHasGlassTokensAndDarkDefault(t *testing.T) {
+func TestPageHeadHasGlassTokensAndLightDefault(t *testing.T) {
 	html := renderTemplateString(t, "pageHead", map[string]any{"Title": "Test"})
-	// Glass tokens defined.
-	for _, tok := range []string{"--glass-bg", "--glass-border", "--glass-blur"} {
+	// Glass tokens: the opaque card's fill and border (#753 part D). The
+	// blur, shadow and highlight tokens went with the translucency.
+	for _, tok := range []string{"--glass-bg", "--glass-border"} {
 		if !strings.Contains(html, tok) {
 			t.Errorf("pageHead missing glass token %s", tok)
 		}
 	}
-	// Reduced-transparency + backdrop-filter fallbacks present.
-	if !strings.Contains(html, "prefers-reduced-transparency") {
-		t.Error("pageHead missing prefers-reduced-transparency fallback")
+	for _, tok := range []string{"--glass-blur", "--glass-shadow", "--glass-inner"} {
+		if strings.Contains(html, tok) {
+			t.Errorf("pageHead still defines %s; .glass is flat since #753 part D", tok)
+		}
 	}
-	if !strings.Contains(html, "@supports not (backdrop-filter") {
-		t.Error("pageHead missing backdrop-filter @supports fallback")
+	// .glass is opaque since #753 part D, so the reduced-transparency and
+	// no-backdrop-filter fallbacks are gone (they were required before).
+	if strings.Contains(html, "prefers-reduced-transparency") || strings.Contains(html, "@supports not (backdrop-filter") {
+		t.Error("pageHead still carries a glass fallback; .glass is opaque since #753 part D")
 	}
-	// Dark is the default: the early-paint resolver queries for an explicit
-	// LIGHT preference and falls through to dark (was: query dark → light).
-	if !strings.Contains(html, "(prefers-color-scheme: light)") {
-		t.Error("early-paint resolver should default to dark (query prefers-color-scheme: light)")
+	// Light is the default (design §12 part A, #753, decided 2026-11-13): the
+	// early-paint resolver asks for an explicit dark preference and falls
+	// through to light. The JS and no-JS renders then agree. Before #753 it
+	// asked for light and fell through to dark (the June 2026 dark default).
+	if !strings.Contains(html, "'(prefers-color-scheme: dark)').matches ? 'dark' : 'light'") {
+		t.Error("early-paint resolver should fall back to light: query (prefers-color-scheme: dark) and answer 'dark' : 'light'")
+	}
+	if strings.Contains(html, "(prefers-color-scheme: light)').matches ? 'light' : 'dark'") {
+		t.Error("early-paint resolver still falls back to dark (queries light, defaults to 'dark')")
+	}
+	// The address-bar tint before the resolver runs is the light page colour.
+	if !strings.Contains(html, `<meta name="theme-color" content="#F6F4EF">`) {
+		t.Error("initial theme-color meta should be the light page colour #F6F4EF")
+	}
+}
+
+// TestConsoleManifestIsLight_753 pins the installed console PWA's chrome to
+// the light theme (design §12 part A). Before #753 both colours were the dark
+// page #10141A, so a light-default console opened on a dark splash.
+func TestConsoleManifestIsLight_753(t *testing.T) {
+	raw, err := os.ReadFile("static/manifest.webmanifest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Theme string `json:"theme_color"`
+		Bg    string `json:"background_color"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(m.Theme, "#F6F4EF") || !strings.EqualFold(m.Bg, "#F6F4EF") {
+		t.Errorf("manifest theme_color/background_color = %s/%s, want #F6F4EF/#F6F4EF", m.Theme, m.Bg)
 	}
 }

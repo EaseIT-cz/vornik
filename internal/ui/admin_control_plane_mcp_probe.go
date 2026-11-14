@@ -270,8 +270,8 @@ func (s *Server) writeMCPProbeAudit(r *http.Request, a probeAudit) {
 func (s *Server) renderMCPProbeAuthRequired(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(
-		`<div class="text-xs text-amber-400">✓ reachable — authentication required</div>` +
-			`<div class="text-[11px] text-gray-500 mt-1">The server answered with an OAuth challenge, ` +
+		`<div class="text-xs text-amber-700 dark:text-amber-400">✓ reachable — authentication required</div>` +
+			`<div class="text-xs text-gray-500 mt-1">The server answered with an OAuth challenge, ` +
 			`which is the expected first step. Tools cannot be listed until consent is granted: ` +
 			`apply this change, then use <strong>Connect</strong> on the server's row.</div>`))
 }
@@ -281,18 +281,18 @@ func (s *Server) renderMCPProbe(w http.ResponseWriter, reachable bool, errMsg st
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var b strings.Builder
 	if reachable {
-		fmt.Fprintf(&b, `<div class="text-xs text-emerald-400">✓ reachable — %d tool(s)</div>`, len(tools))
+		fmt.Fprintf(&b, `<div class="text-xs text-emerald-700 dark:text-emerald-400">✓ reachable — %d tool(s)</div>`, len(tools))
 		if len(tools) > 0 {
 			b.WriteString(`<div class="mt-1 flex flex-wrap gap-1">`)
 			for _, name := range tools {
-				fmt.Fprintf(&b, `<span class="px-1.5 py-0.5 text-[10px] rounded bg-dark-800 text-gray-300 font-mono">%s</span>`, html.EscapeString(name))
+				fmt.Fprintf(&b, `<span class="px-1.5 py-0.5 text-xs rounded bg-dark-800 text-gray-300 font-mono">%s</span>`, html.EscapeString(name))
 			}
 			b.WriteString(`</div>`)
 		} else {
-			b.WriteString(`<div class="text-[11px] text-gray-500 mt-1">Connected, but the server advertised no tools.</div>`)
+			b.WriteString(`<div class="text-xs text-gray-500 mt-1">Connected, but the server advertised no tools.</div>`)
 		}
 	} else {
-		fmt.Fprintf(&b, `<div class="text-xs text-rose-400">✗ not reachable — %s</div>`, html.EscapeString(errMsg))
+		fmt.Fprintf(&b, `<div class="text-xs text-rose-700 dark:text-rose-400">✗ not reachable — %s</div>`, html.EscapeString(errMsg))
 	}
 	_, _ = w.Write([]byte(b.String()))
 }

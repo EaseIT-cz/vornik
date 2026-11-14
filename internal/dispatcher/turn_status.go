@@ -98,11 +98,24 @@ func (p *turnProgress) note(toolName string) string {
 }
 
 func (p *turnProgress) noteAt(toolName string, now time.Time) string {
+	phrase := p.add(toolName)
+	elapsed := now.Sub(p.start).Round(time.Second)
+	return fmt.Sprintf("⏳ %s · %s · so far: %s", phrase, elapsed, strings.Join(p.parts(), ", "))
+}
+
+// add records one tool call and returns its phrase.
+func (p *turnProgress) add(toolName string) string {
 	phrase := strings.TrimSuffix(toolStatusLine(toolName), "…")
 	if p.counts[phrase] == 0 {
 		p.order = append(p.order, phrase)
 	}
 	p.counts[phrase]++
+	return phrase
+}
+
+// parts is every activity so far, in first-seen order, with a count when it
+// ran more than once.
+func (p *turnProgress) parts() []string {
 	parts := make([]string, 0, len(p.order))
 	for _, ph := range p.order {
 		if n := p.counts[ph]; n > 1 {
@@ -111,8 +124,19 @@ func (p *turnProgress) noteAt(toolName string, now time.Time) string {
 			parts = append(parts, ph)
 		}
 	}
-	elapsed := now.Sub(p.start).Round(time.Second)
-	return fmt.Sprintf("⏳ %s · %s · so far: %s", phrase, elapsed, strings.Join(parts, ", "))
+	return parts
+}
+
+// StepsSummary is the web chat's "Steps" line for a finished turn
+// (web-chat-design.md §2.1): the tools it called, by the same friendly
+// phrases and counts as the turn status line, joined with " · ". Empty when
+// the turn called no tool.
+func StepsSummary(toolNames []string) string {
+	p := newTurnProgress(time.Time{})
+	for _, name := range toolNames {
+		p.add(name)
+	}
+	return strings.Join(p.parts(), " · ")
 }
 
 // friendlyToolPhrases covers the built-in dispatcher tools. An unlisted tool is

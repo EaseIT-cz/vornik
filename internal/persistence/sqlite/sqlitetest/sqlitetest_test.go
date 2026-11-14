@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/testutil/testwait"
 )
 
 // SQLite fixture flake (storage-abstraction design, "SQLite test fixtures",
@@ -137,8 +138,10 @@ func TestContext_CarriesTheFixtureBoundAndEndsWithTheTest(t *testing.T) {
 		if !ok {
 			t.Fatal("no deadline: a storage open would fall back to the daemon's 5 s")
 		}
-		if left := time.Until(d); left < sqlite.FixtureConnectTimeout-5*time.Second || left > sqlite.FixtureConnectTimeout {
-			t.Fatalf("deadline %s away, want about %s", left, sqlite.FixtureConnectTimeout)
+		// #469: at least the fixture bound, and no later than the binary's
+		// own outcome budget allows.
+		if left := time.Until(d); left < sqlite.FixtureConnectTimeout-5*time.Second || left > max(testwait.ForOutcome(t), sqlite.FixtureConnectTimeout)+time.Second {
+			t.Fatalf("deadline %s away, want between %s and the binary's outcome budget", left, sqlite.FixtureConnectTimeout)
 		}
 		if ctx.Err() != nil {
 			t.Fatalf("live context already done: %v", ctx.Err())
@@ -146,5 +149,35 @@ func TestContext_CarriesTheFixtureBoundAndEndsWithTheTest(t *testing.T) {
 	})
 	if ctx.Err() == nil {
 		t.Fatal("the context outlived its test")
+	}
+}
+
+type deadline469 struct {
+	at time.Time
+	ok bool
+}
+
+func (d deadline469) Deadline() (time.Time, bool) { return d.at, d.ok }
+
+// GitHub #469 (storage-abstraction design, "storage.Open in tests", amendment
+// 2026-11-12): two storage tests failed at the fixed 60 s bound under host
+// load (lane W15-AC, 2026-10-17 and 2026-10-21). The bound now follows the
+// test binary's deadline and never drops below 60 s.
+// Found at: unit (make test lane). Regression test at: unit.
+func TestContext469_FollowsTheBinaryDeadline(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		d        any
+		min, max time.Duration
+	}{
+		"ten minutes left: beyond 60 s":   {deadline469{now.Add(10 * time.Minute), true}, 8 * time.Minute, 10 * time.Minute},
+		"30 s left: still the 60 s floor": {deadline469{now.Add(30 * time.Second), true}, sqlite.FixtureConnectTimeout, sqlite.FixtureConnectTimeout},
+		"no deadline (-timeout 0): 60 s":  {deadline469{}, sqlite.FixtureConnectTimeout, sqlite.FixtureConnectTimeout},
+		"no Deadline method: 60 s":        {struct{}{}, sqlite.FixtureConnectTimeout, sqlite.FixtureConnectTimeout},
+	} {
+		got := contextBound(tc.d)
+		if got < tc.min || got > tc.max {
+			t.Errorf("%s: bound %s, want between %s and %s", name, got, tc.min, tc.max)
+		}
 	}
 }

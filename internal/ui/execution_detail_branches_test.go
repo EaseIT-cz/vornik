@@ -118,7 +118,7 @@ func TestExecutionDetailTiering(t *testing.T) {
 	// 2: Result panel — panel-ref presence and open/closed state.
 	// The first occurrence of "panel-ref" in the body is the CSS definition
 	// in the <style> block. We search for the HTML element pattern
-	// `<details class="panel-ref` which appears only in the page body.
+	// `<details class="vk-disc` which appears only in the page body.
 	t.Run("ResultPanelIsRef_Completed", func(t *testing.T) {
 		body := renderExecutionDetail(t, &persistence.Execution{
 			ID:        "exec-tier-3",
@@ -134,9 +134,9 @@ func TestExecutionDetailTiering(t *testing.T) {
 		if ridx == -1 {
 			t.Fatalf("Result panel sectionHeader not found in body (len=%d)", len(body))
 		}
-		dStart := strings.LastIndex(body[:ridx], `<details class="panel-ref`)
+		dStart := strings.LastIndex(body[:ridx], `<details class="vk-disc`)
 		if dStart == -1 {
-			t.Fatal("Result title must sit inside a <details class=\"panel-ref\">")
+			t.Fatal("Result title must sit inside a <details class=\"vk-disc\"> (#748 K)")
 		}
 		tag := body[dStart : dStart+strings.Index(body[dStart:], ">")+1]
 		assert.Contains(t, tag, "open",
@@ -157,9 +157,9 @@ func TestExecutionDetailTiering(t *testing.T) {
 		if ridx == -1 {
 			t.Fatal("Result panel should render when Result is set")
 		}
-		dStart := strings.LastIndex(body[:ridx], `<details class="panel-ref`)
+		dStart := strings.LastIndex(body[:ridx], `<details class="vk-disc`)
 		if dStart == -1 {
-			t.Fatal("Result title must sit inside a <details class=\"panel-ref\">")
+			t.Fatal("Result title must sit inside a <details class=\"vk-disc\"> (#748 K)")
 		}
 		tag := body[dStart : dStart+strings.Index(body[dStart:], ">")+1]
 		assert.NotContains(t, tag, ` open`,
@@ -259,9 +259,9 @@ func TestCrossPrimitiveRender(t *testing.T) {
 	if ridx == -1 {
 		t.Fatalf("Result panel sectionHeader not found in COMPLETED execution body")
 	}
-	dStart := strings.LastIndex(body[:ridx], `<details class="panel-ref`)
+	dStart := strings.LastIndex(body[:ridx], `<details class="vk-disc`)
 	if dStart == -1 {
-		t.Fatal("Result title must sit inside a <details class=\"panel-ref\">")
+		t.Fatal("Result title must sit inside a <details class=\"vk-disc\"> (#748 K)")
 	}
 	tag := body[dStart : dStart+strings.Index(body[dStart:], ">")+1]
 	if !strings.Contains(tag, "open") {
@@ -269,12 +269,12 @@ func TestCrossPrimitiveRender(t *testing.T) {
 	}
 }
 
-// TestPanelRefHasSummary asserts that every <details class="panel-ref"
+// TestDisclosureHasSummary asserts that every <details class="vk-disc"
 // element in the rendered task_detail and execution pages carries a
 // <summary> within the first ~200 characters of content. The summary
 // holds the sectionHeader which is the only disclosure affordance (the
 // CSS-hidden chevron isn't enough for screen readers).
-func TestPanelRefHasSummary(t *testing.T) {
+func TestDisclosureHasSummary(t *testing.T) {
 	tests := []struct {
 		name string
 		body func(t *testing.T) string
@@ -310,7 +310,12 @@ func TestPanelRefHasSummary(t *testing.T) {
 			// Find every <details class="panel-ref occurrence and assert
 			// a <summary appears within the next 200 chars of the tag.
 			search := body
-			const marker = `<details class="panel-ref`
+			const marker = `<details class="vk-disc`
+			// Fail rather than pass on a page with none: the old marker
+			// (panel-ref) became vacuous once #748 K retired it.
+			if !strings.Contains(search, marker) {
+				t.Fatalf("no %s disclosure on the page; the check examined nothing", marker)
+			}
 			for {
 				idx := strings.Index(search, marker)
 				if idx == -1 {

@@ -201,6 +201,7 @@ SOFT_LIMIT_BYTES = 600 * 1024
 
 files = []
 total_bytes = 0
+seen_names = {}
 for p in paths:
     p_abs = os.path.abspath(os.path.expanduser(p))
     if not os.path.exists(p_abs):
@@ -216,8 +217,15 @@ for p in paths:
         print(f"error: cannot read {p}: {e}")
         sys.exit(1)
     total_bytes += len(data)
+    # Two files with one basename would land on one path in the agent's
+    # workspace, and the daemon refuses that (GitHub #678): prefix the parent
+    # directory of the second, as /rag-ingest does.
+    base = os.path.basename(p_abs)
+    if base in seen_names:
+        base = os.path.basename(os.path.dirname(p_abs)) + "__" + base
+    seen_names[base] = True
     files.append({
-        "name": os.path.basename(p_abs),
+        "name": base,
         "content": base64.b64encode(data).decode("ascii"),
     })
 
@@ -265,7 +273,7 @@ body = {
 # The plugin names itself: Cloudflare (error 1010) refuses Python's default
 # "Python-urllib" signature, which blocked every call behind it (GitHub #628).
 # Keep the version equal to plugin.json; scripts/user_agent_test.sh checks it.
-VORNIK_UA = "vornik-companion/0.50.10 (claude-code)"
+VORNIK_UA = "vornik-companion/0.50.11 (claude-code)"
 req = urllib.request.Request(
     url,
     data=json.dumps(body).encode("utf-8"),

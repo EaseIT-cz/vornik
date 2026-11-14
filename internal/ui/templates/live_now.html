@@ -11,7 +11,7 @@
                 {{template "navIconLive"}}
                 <h1 class="text-xl font-semibold text-gray-100">Now Running</h1>
                 <span class="text-xs text-gray-500">{{.Count}}</span>
-                <span class="ml-auto text-[11px] text-gray-500 flex items-center gap-1">
+                <span class="ml-auto text-xs text-gray-500 flex items-center gap-1">
                     <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                     live fleet · refreshing
                 </span>
@@ -37,12 +37,12 @@
                         <div class="flex items-center gap-2">
                             <span class="inline-block w-2 h-2 rounded-full {{if .Stale}}bg-amber-500{{else}}bg-emerald-500 animate-pulse{{end}}"></span>
                             <span class="text-xs font-medium uppercase tracking-wide {{if eq .Status "PAUSED"}}text-amber-800 dark:text-amber-400{{else if eq .Status "RUNNING"}}text-emerald-800 dark:text-emerald-400{{else}}text-gray-400{{end}}">{{.Status}}</span>
-                            <span class="ml-auto text-[11px] text-gray-500">{{.ProjectID}}</span>
+                            <span class="ml-auto text-xs text-gray-500">{{.ProjectID}}</span>
                         </div>
                         <div class="text-sm text-gray-200 truncate" title="{{.CurrentStep}}">
                             {{if .CurrentStep}}step: <span class="font-mono text-gray-300">{{.CurrentStep}}</span>{{else}}<span class="text-gray-500">no step yet</span>{{end}}
                         </div>
-                        <div class="flex items-center justify-between text-[11px] text-gray-500">
+                        <div class="flex items-center justify-between text-xs text-gray-500">
                             <span>{{.Elapsed}}</span>
                             <span class="{{if .Stale}}text-amber-800 dark:text-amber-400{{end}}">last event {{.UpdatedAgo}}</span>
                         </div>

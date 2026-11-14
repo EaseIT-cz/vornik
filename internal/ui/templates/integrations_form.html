@@ -48,10 +48,10 @@
                 {{range .Fields}}
                 <div class="space-y-1">
                     <label class="block text-xs font-medium text-ink-300" for="field-{{.Key}}">
-                        {{.Label}}{{if .Required}} <span class="text-rose-500">*</span>{{end}}
+                        {{.Label}}{{if .Required}} <span class="text-rose-600 dark:text-rose-400">*</span>{{end}}
                     </label>
                     {{if .Secret}}
-                    {{if .ConfiguredSecret}}<p class="text-[11px] text-ink-500">•••• already set — enter a new value to replace it</p>{{end}}
+                    {{if .ConfiguredSecret}}<p class="text-xs text-ink-500">•••• already set — enter a new value to replace it</p>{{end}}
                     <input type="password" id="field-{{.Key}}" name="{{.Key}}" autocomplete="off"
                            class="w-full px-3 py-1.5 text-xs rounded-lg bg-surface-900 border border-control focus:border-brand-500 focus:outline-none text-ink-200 font-mono"
                            {{if and .Required (not .ConfiguredSecret)}}required{{end}}>
@@ -61,13 +61,13 @@
                            {{if .Required}}required{{end}}>
                     {{end}}
                     <div class="flex items-start justify-between gap-2">
-                        {{if .DocHint}}<p class="text-[11px] text-ink-500 flex-1">{{.DocHint}}</p>{{end}}
+                        {{if .DocHint}}<p class="text-xs text-ink-500 flex-1">{{.DocHint}}</p>{{end}}
                         <button type="button"
                                 hx-post="{{$.AssistHrefBase}}"
                                 hx-vals='{"project": "{{$.ProjectID}}", "field": "{{.Key}}"}'
                                 hx-target="#assist-{{.Key}}"
                                 hx-swap="innerHTML"
-                                class="text-[11px] text-brand-400 hover:text-brand-300 shrink-0">Help</button>
+                                class="v-btn v-btn--quiet shrink-0">Help</button>
                     </div>
                     <div id="assist-{{.Key}}"></div>
                 </div>
@@ -81,7 +81,7 @@
                             hx-include="#integration-form"
                             hx-target="#probe-result"
                             hx-swap="innerHTML"
-                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-surface-600 text-ink-200 hover:border-brand-500">
+                            class="v-btn v-btn--secondary">
                         Test connection
                     </button>
                     <button type="button"
@@ -89,7 +89,7 @@
                             hx-include="#integration-form"
                             hx-target="#probe-result"
                             hx-swap="innerHTML"
-                            class="px-3 py-1.5 text-xs font-medium rounded-lg bg-brand-600 hover:bg-brand-500 text-white">
+                            class="v-btn v-btn--primary">
                         Save
                     </button>
                 </div>

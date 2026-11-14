@@ -191,15 +191,15 @@ func TestMemorySubgraph_EmptyState(t *testing.T) {
 func TestKGHelpers(t *testing.T) {
 	assert.True(t, isClosedPredicate("depends_on"))
 	assert.False(t, isClosedPredicate("CUSTOM_REL"))
-	assert.Equal(t, "#6b7280", predicateColour("CUSTOM_REL", false))
+	assert.Equal(t, "c-stroke-muted", predicateColour("CUSTOM_REL", false))
 	// Every closed-vocab colour branch.
-	assert.Equal(t, "#34d399", predicateColour(persistence.PredicateDependsOn, true))
-	assert.Equal(t, "#34d399", predicateColour(persistence.PredicateRelatesTo, true))
-	assert.Equal(t, "#a78bfa", predicateColour(persistence.PredicateOwnedBy, true))
-	assert.Equal(t, "#a78bfa", predicateColour(persistence.PredicateChosenOver, true))
-	assert.Equal(t, "#fbbf24", predicateColour(persistence.PredicateHasDeadline, true))
-	assert.Equal(t, "#fbbf24", predicateColour(persistence.PredicateQuotedPrice, true))
-	assert.Equal(t, "#60a5fa", predicateColour(persistence.PredicateMentionedIn, true)) // other closed
+	assert.Equal(t, "c-stroke-s3", predicateColour(persistence.PredicateDependsOn, true))
+	assert.Equal(t, "c-stroke-s3", predicateColour(persistence.PredicateRelatesTo, true))
+	assert.Equal(t, "c-stroke-s4", predicateColour(persistence.PredicateOwnedBy, true))
+	assert.Equal(t, "c-stroke-s4", predicateColour(persistence.PredicateChosenOver, true))
+	assert.Equal(t, "c-stroke-s2", predicateColour(persistence.PredicateHasDeadline, true))
+	assert.Equal(t, "c-stroke-s2", predicateColour(persistence.PredicateQuotedPrice, true))
+	assert.Equal(t, "c-stroke-s1", predicateColour(persistence.PredicateMentionedIn, true)) // other closed
 	assert.Equal(t, []string{"a", "b"}, decodeJSONStringArray([]byte(`["a","b"]`)))
 	assert.Nil(t, decodeJSONStringArray([]byte(`not json`)))
 	assert.Nil(t, decodeJSONStringArray([]byte(`[bad json]`)))

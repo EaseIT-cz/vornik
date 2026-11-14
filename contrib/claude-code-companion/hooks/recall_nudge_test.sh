@@ -20,6 +20,17 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# new_sid PREFIX prints a session id no other case in this run uses (GitHub
+# #684). A hint fires once per session, so two cases that drew the same
+# $RANDOM shared a session and the second printed nothing; the counter lives
+# in a file so an id taken inside $(...) is still never reused.
+new_sid() {
+  local n
+  n=$(( $(cat "$WORK/sid-counter" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" >"$WORK/sid-counter"
+  printf '%s%s' "$1" "$n"
+}
+
 REPO="$WORK/repo"
 mkdir -p "$REPO"
 export CLAUDE_PLUGIN_DATA="$WORK/data"
@@ -116,7 +127,7 @@ OUT="$(run_hook observe "$(pre $S Read "$(read_in "$REPO/internal/rag/r3.go")")"
 grep -q "internal/rag" <<<"$OUT" || fail "case3: a recall older than the window still suppressed the nudge"
 # A FAILED recall does not suppress (review 649c F1/F2): no design was read.
 for resp in '{"isError":true,"content":[{"type":"text","text":"daemon down"}]}' 'null' '{"error":"x"}' '[]'; do
-  S="sess3f$RANDOM"
+  S="$(new_sid sess3f)"
   run_hook recalled "$(post_recall "$S" "$resp")" >/dev/null || fail "case3: recalled mode exited non-zero on $resp"
   for n in 1 2; do run_hook observe "$(pre "$S" Read "$(read_in "$REPO/internal/memory/f$n.go")")" >/dev/null; done
   OUT="$(run_hook observe "$(pre "$S" Read "$(read_in "$REPO/internal/memory/f3.go")")")"
@@ -125,7 +136,8 @@ done
 
 # --- Case 4: roots and key derivation (threshold 1 to see each key at once).
 key_of() { # tool input_json -> nudge text or empty (fresh session per probe)
-  local sid="k$RANDOM$RANDOM"
+  local sid
+  sid="$(new_sid k)"
   run_hook observe "$(pre "$sid" "$1" "$2")" VORNIK_NUDGE_THRESHOLD=1 | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null
 }
 for root in src pkg cmd contrib; do

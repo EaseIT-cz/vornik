@@ -127,9 +127,9 @@ func logHTML(text string) string {
 	}
 
 	// Add color highlighting for log levels
-	escaped = strings.ReplaceAll(escaped, "[INFO]", `<span class="text-blue-400 font-bold">[INFO]</span>`)
-	escaped = strings.ReplaceAll(escaped, "[WARN]", `<span class="text-yellow-400 font-bold">[WARN]</span>`)
-	escaped = strings.ReplaceAll(escaped, "[ERROR]", `<span class="text-red-500 font-bold">[ERROR]</span>`)
+	escaped = strings.ReplaceAll(escaped, "[INFO]", `<span class="text-brand-400 font-bold">[INFO]</span>`)
+	escaped = strings.ReplaceAll(escaped, "[WARN]", `<span class="text-yellow-700 font-bold dark:text-yellow-400">[WARN]</span>`)
+	escaped = strings.ReplaceAll(escaped, "[ERROR]", `<span class="text-red-600 font-bold dark:text-red-400">[ERROR]</span>`)
 	escaped = strings.ReplaceAll(escaped, "[DEBUG]", `<span class="text-gray-500 font-bold">[DEBUG]</span>`)
 	// Colorize dates (YYYY-MM-DD) if present at start of line
 	// We'll keep it simple for now with just the levels to avoid expensive regex.

@@ -58,7 +58,7 @@ Pick whichever surface suits you — they all apply the same decision:
   operator can approve. This is the Community-Edition path.
 - **Companion command.** `/skill-list maturity=draft` to see pending drafts,
   then `/skill-approve <id>` (needs a key with the `skill_admin` capability).
-- **Web UI (Enterprise).** The **Admin → Skills** page (`/ui/admin/skills`)
+- **Web UI (Enterprise).** The **Manage → Skills** page (`/ui/admin/skills`)
   is a full skills browser across all projects, with maturity tabs
   (Pending review / Active / Trusted / Retired / All) and per-skill usage
   counters. Pending drafts carry Approve / Reject; any skill carries a
@@ -96,7 +96,7 @@ project's roles instead, so a procedure captured once (say, from your
     - **CLI:** `vornikctl knowledge set-global <id>` /
       `vornikctl knowledge set-project <id>`.
     - **Web UI (Enterprise):** the **Make global / Make project-only**
-      buttons on the **Admin → Skills** inbox.
+      buttons on the **Manage → Skills** inbox.
 
 Because an approved global skill fires in every project, every review surface
 labels a global draft **"affects ALL projects"** so the approver decides its
@@ -114,7 +114,7 @@ either way:
 - **CLI:** `vornikctl companion grant --project <p> --client claude-code
   --skill-all` (or `--skill-read` / `--skill-write` / `--skill-admin`
   individually; `--skill-write` implies `--skill-read`).
-- **Web UI (Enterprise):** **Admin → Keys & access** (`/ui/admin/keys`) has a
+- **Web UI (Enterprise):** **Manage → Keys & access** (`/ui/admin/keys`) has a
   per-key capability toggle for memory + skill flags — grant or revoke a
   role in the browser, no re-mint required.
 

@@ -714,6 +714,9 @@ func (m *mockExecutionRepo) CountByStatus(context.Context, string) (map[persiste
 func (m *mockExecutionRepo) FailedRateByProject(context.Context, time.Time) (map[string]persistence.ExecFailedRate, error) {
 	return nil, nil
 }
+func (m *mockExecutionRepo) CountCompletedByProject(context.Context, time.Time, time.Time) (map[string]int64, error) {
+	return nil, nil
+}
 func (m *mockExecutionRepo) LatencyP95ByProject(context.Context, time.Time) (map[string]persistence.ExecLatencyStat, error) {
 	return nil, nil
 }

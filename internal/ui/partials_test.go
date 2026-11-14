@@ -194,7 +194,7 @@ func TestPanelComponentClassesPresent(t *testing.T) {
 	// Assert the full set the CSS ships — incl. every data-tone variant and
 	// the [open] rule — so a typo in any single rule is caught.
 	for _, want := range []string{
-		".panel-primary", ".panel-ref", ".panel-ref > summary", ".panel-ref[open]",
+		".panel-primary", // .panel-ref was retired for the shared disclosure (#748 K)
 		`data-tone="amber"`, `data-tone="sky"`, `data-tone="rose"`,
 	} {
 		if !strings.Contains(out, want) {

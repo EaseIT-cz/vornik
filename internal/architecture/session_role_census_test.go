@@ -36,6 +36,8 @@ var sessionRoleReaders = map[string]int{
 	"internal/api/surface.go":            1, // logTenantAdminDecision (M1b)
 	"internal/api/owner_export_581.go":   1, // the owner export: tenant_admin only (#581 D5)
 	"internal/ui/companion_page_587.go":  1, // the companion page: tenant_admin only (#587)
+	"internal/ui/project_keys.go":        1, // logs the owner's keys-page decision (#754); decides nothing
+	"internal/ui/manage.go":              1, // the Manage overview shows the owner its cards (#759); a view, not a gate
 }
 
 // sessionRoleWriters write auth.ExtraSessionRole into an identity.

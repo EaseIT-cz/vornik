@@ -18,7 +18,6 @@ package ui
 // existing dispatcher.ChannelReceiver picks it up.
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -145,6 +144,11 @@ type ChatPageData struct {
 	ProjectID   string
 	ProjectName string
 
+	// Prefill is the question carried from the home page's Ask box (#756,
+	// design §14.2): it fills the composer, escaped by html/template, and
+	// is never sent until the person presses Send.
+	Prefill string
+
 	// History is the conversation so far, oldest-first. Each entry
 	// has a Role ("user" / "assistant") and a Content string the
 	// template renders with renderMarkdown.
@@ -153,6 +157,15 @@ type ChatPageData struct {
 	// Marks maps a History index to the Art 50(2) mark of the reply it
 	// shows (this turn's replies only; chat_aimark.go).
 	Marks map[int]string
+
+	// Exchanges is History as the page shows it: each question with its
+	// steps line and its reply, never the tool results
+	// (web-chat-design.md §2.1).
+	Exchanges []chatExchange
+
+	// Pending is the running turn of this browser and view, when there is
+	// one: the page shows its message and polls it.
+	Pending *chatPending
 
 	// Error, when non-empty, renders an inline banner above the
 	// composer. Used for both dispatcher errors and missing
@@ -194,13 +207,26 @@ type ChatPageData struct {
 func (s *Server) ChatPage(w http.ResponseWriter, r *http.Request, projectID string) {
 	data := s.chatPageData(r, projectID)
 	s.ensureChatCookie(w, r, &data)
-	s.render(w, "chat.html", data)
+	// A reload while a turn runs shows its message and resumes polling it
+	// (web-chat-design.md §2.4).
+	if data.SessionID != "" {
+		if v, ok := s.chatTurnRegistry().runningFor(chatHistoryKey(data.SessionID, s.chatOperatorView(r)), projectID); ok {
+			data.Pending = &chatPending{Turn: v.ID, Prompt: v.Prompt, Status: v.Status}
+		}
+	}
+	s.renderChat(w, data)
 }
 
-// ChatPostMessage handles POST /ui/projects/<id>/chat/messages.
-// Reads the operator's prompt from the form, dispatches a single
-// turn synchronously, and re-renders the chat page with the
-// updated history.
+// chatPending is a running turn as the page shows it on load.
+type chatPending struct {
+	Turn, Prompt, Status string
+}
+
+// ChatPostMessage handles POST /ui/projects/<id>/chat/messages, the send
+// without JavaScript. It starts the same background turn the page's script
+// starts (web-chat-design.md §2.2), waits for it, and renders the page, so
+// both paths share one validation, the one-turn rule, the drain refusal and
+// the deploy-gate count.
 func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, projectID string) {
 	// GitHub #491: the dispatcher's status tools put the task's raw
 	// last_error and error_message into the model's context, and its answer
@@ -210,97 +236,59 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 		api.RespondProjectScopeRequired(w)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Failed to parse form: "+err.Error(), http.StatusBadRequest)
+	in, data, status, msg := s.prepareChatTurn(w, r, projectID)
+	if status == http.StatusBadRequest && data.ProjectID == "" {
+		http.Error(w, msg, status)
 		return
 	}
-	prompt := strings.TrimSpace(r.FormValue("prompt"))
-	data := s.chatPageData(r, projectID)
-	s.ensureChatCookie(w, r, &data)
-
-	if data.Disabled {
-		// No dispatcher — explain and re-render. Don't pretend
-		// the message landed.
-		s.render(w, "chat.html", data)
+	if status != 0 {
+		// Disabled: the banner already explains; don't pretend the message landed.
+		if !data.Disabled {
+			data.Error = msg
+		}
+		if status == http.StatusNotFound {
+			w.WriteHeader(status)
+		}
+		s.renderChat(w, data)
 		return
 	}
-	if prompt == "" {
-		data.Error = "Prompt is empty — type something to send."
-		s.render(w, "chat.html", data)
+	in.keepHistory = true
+	t, code, _, msg := s.beginChatTurn(r, in)
+	if t == nil {
+		data.Error = msg
+		w.WriteHeader(code)
+		s.renderChat(w, data)
 		return
 	}
-	if data.ProjectID == "" || data.ProjectName == "" && s.projectReg != nil && s.projectReg.GetProject(projectID) == nil {
-		data.Error = "Project not found in the registry."
-		w.WriteHeader(http.StatusNotFound)
-		s.render(w, "chat.html", data)
-		return
+	select {
+	case <-t.done:
+	case <-r.Context().Done():
+		return // the browser left; the turn finishes on its own
 	}
-
-	store := s.chatStoreFor(projectID)
-	// #480 (process-spawn-law design, "Amendment 2026-10-21 (#480)", J4):
-	// an admin-class request reads the task tools' error text raw, and its
-	// turns read and write a history of their own, so a later non-admin
-	// session in this browser never replays an admin turn's raw tool results.
-	operatorView := s.chatOperatorView(r)
-	historyKey := chatHistoryKey(data.SessionID, operatorView)
-	channel := webchat.New(projectID, conversation.Speaker{
-		ID:          "web-chat:" + data.SessionID,
-		DisplayName: "Web operator",
-	})
-	receiver := &dispatcher.ChannelReceiver{
-		Channel:                  channel,
-		Agent:                    s.chatDispatcher,
-		Sessions:                 store,
-		Disclosure:               s.aiDisclosure,
-		DisclosureMetrics:        s.disclosureMetrics,
-		Media:                    s.mediaSight,
-		MemoryWriteConfirmations: s.chatMemoryConfirmations,
-		OperatorView: func(context.Context, conversation.ChannelMessage) bool {
-			return operatorView
-		},
-		// #499: the web chat's tasks carry the request's principal (the
-		// presented key first, then the session user).
-		TaskPrincipal: func(context.Context, conversation.ChannelMessage) string {
-			if a := s.uiSessionActor(r); !a.IsZero() {
-				return a.String()
+	v, _ := s.chatTurnRegistry().lookup(t.id, in.historyKey, projectID)
+	switch v.State {
+	case chatTurnDone:
+		for k, vals := range v.Header {
+			for _, val := range vals {
+				w.Header().Add(k, val)
 			}
-			return ""
-		},
-		ResultPostprocessor: func(result dispatcher.Result) string {
-			// Append the deliverable-links block when the
-			// dispatcher's turn referenced a task that produced
-			// files. The dispatcher doesn't currently propagate
-			// produced_files through the Result — we read off the
-			// artifact repo via the executor's existing telegram
-			// notify path. For the synchronous web chat turn,
-			// produced files belong to a separate task surface
-			// (the dispatcher submits work asynchronously). When
-			// the future event-driven webchat lifecycle lands, the
-			// task-complete deliverable surfacing will share the
-			// telegram path; for now, the postprocessor is a
-			// passthrough that future code can extend without
-			// touching the receiver wiring.
-			return result.Text
-		},
+		}
+		data.History, data.Marks = v.History, v.Marks
+	default:
+		data.History = s.chatStoreFor(projectID).History(in.historyKey)
+		data.Marks = nil
+		data.Error = v.Error
+		if v.State == chatTurnCancelled {
+			data.Error = "Stopped."
+		}
 	}
+	s.renderChat(w, data)
+}
 
-	ctx, cancel := context.WithTimeout(r.Context(), chatDispatchTimeout)
-	defer cancel()
-
-	inbound := conversation.ChannelMessage{
-		Source:    channel.Name(),
-		SessionID: historyKey,
-		SpeakerID: data.SessionID,
-		Text:      prompt,
-		Timestamp: time.Now(),
-	}
-	if err := receiver.Receive(ctx, inbound); err != nil {
-		data.Error = "Chat dispatch failed: " + err.Error()
-	}
-	// Refresh history from the store so the rendered page shows
-	// the user's new prompt + the assistant reply.
-	data.History = mergeDisclosureIntoHistory(store.History(historyKey), channel, s.aiDisclosure)
-	data.Marks = s.markChatReplies(ctx, w, channel.Sent(), data.History)
+// renderChat renders the chat page: the history as exchanges, and the
+// running turn's pending message, when there is one.
+func (s *Server) renderChat(w http.ResponseWriter, data ChatPageData) {
+	data.Exchanges = buildChatExchanges(data.History, data.Marks)
 	s.render(w, "chat.html", data)
 }
 
@@ -361,6 +349,7 @@ func (s *Server) chatPageData(r *http.Request, projectID string) ChatPageData {
 		Title:       "Chat: " + projectID,
 		CurrentPage: "projects",
 		ProjectID:   projectID,
+		Prefill:     truncateRunes(r.URL.Query().Get("q"), askQuestionMaxRunes),
 	}
 	if s.chatDispatcher == nil {
 		data.Disabled = true

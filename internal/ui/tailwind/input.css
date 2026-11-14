@@ -31,8 +31,14 @@
     .vk-hint-btn {
         @apply ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-ink-500 hover:text-ink-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-500;
     }
-    .vk-hint-btn svg {
+    /* The icon, drawn once here rather than as an inline SVG in every hint
+       (#748 E: 71 hints, 27.7 KB on a settings page). It takes currentColor. */
+    .vk-hint-btn::before {
+        content: "";
         @apply h-3.5 w-3.5;
+        background-color: currentColor;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z' clip-rule='evenodd'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z' clip-rule='evenodd'/%3E%3C/svg%3E") center / contain no-repeat;
     }
     .vk-hint-pop {
         display: none;
@@ -50,5 +56,155 @@
     }
     .vk-hint-layer.is-shown {
         visibility: visible;
+    }
+}
+
+/* The one disclosure (web-ui-design.md "Progressive disclosure across the
+   console — 2026-11-13 (#748)", B1): discOpen/discClose in _partials.html. A
+   closed section's summary carries its current value (.vk-disc-meta). */
+@layer components {
+    .vk-disc {
+        @apply rounded-lg border border-surface-600/60 bg-surface-800/40;
+    }
+    .vk-disc-sum {
+        @apply flex cursor-pointer select-none items-center gap-2 px-5 py-3.5 list-none rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent-500;
+    }
+    .vk-disc-sum::-webkit-details-marker {
+        display: none;
+    }
+    /* The console's section header style (sectionHeader), so a collapsible
+       section looks like the open sections around it (#748 E). */
+    .vk-disc-title {
+        @apply text-sm font-semibold text-ink-200;
+    }
+    .vk-disc-meta {
+        @apply min-w-0 truncate text-xs text-ink-400;
+    }
+    /* The chevron, drawn by CSS so no summary (server-rendered or built by a
+       script) carries an icon element: right when closed, down when open. A
+       row puts it before its text. */
+    .vk-disc-sum::after {
+        content: "";
+        @apply ml-auto h-4 w-4 shrink-0 text-ink-500 transition-transform;
+        background-color: currentColor;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M7.21 14.77a.75.75 0 01.02-1.06L11.17 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z' clip-rule='evenodd'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M7.21 14.77a.75.75 0 01.02-1.06L11.17 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z' clip-rule='evenodd'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    .vk-disc[open] > .vk-disc-sum::after {
+        transform: rotate(90deg);
+    }
+    .vk-disc-row > .vk-disc-sum::after {
+        @apply order-first ml-0 h-3 w-3;
+    }
+    .vk-disc-body {
+        @apply space-y-4 px-5 pb-5;
+    }
+    .vk-disc-row {
+        @apply rounded-md border-0 bg-transparent;
+    }
+    .vk-disc-row > .vk-disc-sum {
+        @apply px-0 py-1;
+    }
+    .vk-disc-row > .vk-disc-sum .vk-disc-title {
+        @apply text-[11px] font-medium normal-case tracking-normal text-ink-400;
+    }
+    .vk-disc-row > .vk-disc-body {
+        @apply space-y-2 px-0 pb-1 pt-1;
+    }
+    /* A server's tool list shows only in "selected only" mode; hidden boxes
+       still post, and the handler ignores them in "all" mode. */
+    .vk-tools:has(input[value="all"]:checked) .vk-tools-list {
+        display: none;
+    }
+}
+
+/* Web chat, laid out like the chat UIs people know (llama.cpp's web UI,
+   Open WebUI): web-chat-design.md §2.1. One centred column; the person's
+   messages in a bubble on the right; replies as plain rendered markdown on
+   the left; a rounded composer pinned to the bottom with the send button
+   inside it. */
+@layer components {
+    .chat-shell {
+        @apply mx-auto flex w-full max-w-3xl flex-col px-4 sm:px-6;
+        min-height: calc(100dvh - 4rem);
+    }
+    .chat-thread {
+        @apply flex-1 space-y-6 py-4;
+    }
+    .chat-user {
+        @apply max-w-[85%] rounded-2xl bg-surface-700 px-4 py-2.5 text-base leading-relaxed text-ink-100 whitespace-pre-wrap;
+        overflow-wrap: anywhere;
+    }
+    .chat-assistant {
+        @apply min-w-0 text-base leading-relaxed text-ink-100;
+    }
+    .chat-who {
+        @apply mb-1 flex items-center gap-2 text-xs font-medium text-ink-400;
+    }
+    .chat-steps {
+        @apply text-xs text-ink-400;
+    }
+    .chat-steps > summary {
+        @apply cursor-pointer select-none list-none;
+    }
+    .chat-steps > summary::-webkit-details-marker {
+        display: none;
+    }
+    .chat-steps > p {
+        @apply mt-1 border-l-2 border-surface-600 pl-3 text-ink-400;
+    }
+    .chat-md {
+        @apply min-w-0;
+        overflow-wrap: anywhere;
+    }
+    .chat-md > * + * {
+        @apply mt-3;
+    }
+    .chat-md h1 { @apply text-xl font-semibold; }
+    .chat-md h2 { @apply text-lg font-semibold; }
+    .chat-md h3, .chat-md h4 { @apply text-base font-semibold; }
+    .chat-md ul { @apply list-disc space-y-1 pl-6; }
+    .chat-md ol { @apply list-decimal space-y-1 pl-6; }
+    .chat-md a { @apply text-accent-500 underline underline-offset-2; }
+    .chat-md blockquote { @apply border-l-2 border-surface-600 pl-3 text-ink-300; }
+    .chat-md code { @apply rounded bg-surface-700 px-1 py-0.5 font-mono text-xs; }
+    .chat-md pre {
+        @apply relative overflow-x-auto rounded-lg bg-surface-800 p-3 font-mono text-xs;
+        overflow-wrap: normal;
+    }
+    .chat-md pre code { @apply bg-transparent p-0; }
+    .chat-md table {
+        @apply block max-w-full overflow-x-auto border-collapse text-sm;
+        overflow-wrap: normal;
+    }
+    .chat-md th, .chat-md td { @apply border border-surface-600 px-2 py-1 text-left align-top; }
+    .chat-md th { @apply bg-surface-800 font-semibold; }
+    .chat-md hr { @apply border-surface-600; }
+    .chat-actions {
+        @apply mt-1 flex gap-1 text-ink-500;
+    }
+    .chat-thinking {
+        @apply text-sm text-ink-400;
+    }
+    .chat-thinking-dot {
+        @apply inline-block h-2 w-2 animate-pulse rounded-full bg-accent-500 align-middle;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .chat-thinking-dot { animation: none; }
+    }
+    .chat-composer-wrap {
+        @apply sticky bottom-0 bg-surface-900 pb-4 pt-2;
+    }
+    .chat-composer {
+        @apply flex items-end gap-2 rounded-3xl bg-surface-800 py-2 pl-4 pr-2 shadow-sm focus-within:border-accent-500;
+    }
+    .chat-composer textarea {
+        @apply max-h-48 min-h-[1.5rem] flex-1 resize-none border-0 bg-transparent py-1.5 text-base leading-6 text-ink-100 outline-none placeholder:text-ink-500;
+    }
+    .chat-send {
+        @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0;
+    }
+    .chat-suggest {
+        @apply rounded-xl text-left text-sm;
     }
 }

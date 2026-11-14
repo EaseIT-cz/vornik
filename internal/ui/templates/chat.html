@@ -5,101 +5,114 @@
 <body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
     {{template "nav" .}}
 
-    <main id="main" tabindex="-1" class="flex-1 max-w-4xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
-        <div class="space-y-4">
-            <div class="flex items-start justify-between gap-3">
-                <div>
-                    <h1 class="text-xl font-semibold text-gray-100">Chat</h1>
-                    <p class="text-xs text-gray-500 mt-1">
-                        Project:
-                        <code class="text-gray-300 font-mono">{{.ProjectID}}</code>
-                        {{if .ProjectName}}<span class="text-gray-400">— {{.ProjectName}}</span>{{end}}
-                    </p>
+    {{/* The chat, laid out like the chat UIs people know (llama.cpp's web
+         UI, Open WebUI): web-chat-design.md §2.1. The page scrolls; the
+         composer is pinned to the bottom of the column. chat.js sends
+         without a page load and polls the turn (§2.2 to §2.4); without it
+         the form posts and the page loads when the reply is ready. */}}
+    <main id="main" tabindex="-1" class="flex-1 shell-offset">
+        <div class="chat-shell" data-chat data-chat-turns="/ui/projects/{{.ProjectID}}/chat/turns">
+            <header class="flex items-center justify-between gap-3 border-b border-surface-600/60 py-3">
+                <div class="min-w-0">
+                    <h1 class="truncate text-base font-semibold text-ink-100">{{if .ProjectName}}{{.ProjectName}}{{else}}{{.ProjectID}}{{end}}</h1>
                 </div>
-                <div class="flex items-center gap-3">
-                    {{/*
-                        Context-tier badge — Slice 4 of the context-budget tier track.
-                        Hidden when the deployment hasn't configured a chatContextBudget
-                        (empty ContextTier) so the chat surface matches the legacy
-                        byte-for-byte on opt-out deployments.
-
-                        Color palette mirrors the rate-limit warn-tier badge already
-                        in use elsewhere in the UI so operators don't have to learn
-                        a second visual language for "things are degrading":
-                        green PEAK, yellow GOOD, orange DEGRADING, red POOR.
-                    */}}
+                <div class="flex shrink-0 items-center gap-2">
                     {{if .ContextTier}}
                     <span data-testid="chat-context-tier-badge"
                           data-tier="{{.ContextTier}}"
                           title="Context-budget headroom: {{.ContextHeadroomPct}}% remaining. Tier {{.ContextTier}} — when degrading or poor, deferred-tool mode auto-engages so the model sees a leaner schema and conversation history stays usable."
-                          class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium border
+                          class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium border
                                  {{if eq .ContextTier "peak"}}bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300{{end}}
                                  {{if eq .ContextTier "good"}}bg-yellow-500/10 border-yellow-500/30 text-yellow-700 dark:text-yellow-300{{end}}
                                  {{if eq .ContextTier "degrading"}}bg-orange-500/10 border-orange-500/30 text-orange-700 dark:text-orange-300{{end}}
                                  {{if eq .ContextTier "poor"}}bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300{{end}}">
-                        <span class="inline-block w-1.5 h-1.5 rounded-full
-                                     {{if eq .ContextTier "peak"}}bg-emerald-400{{end}}
-                                     {{if eq .ContextTier "good"}}bg-yellow-400{{end}}
-                                     {{if eq .ContextTier "degrading"}}bg-orange-400{{end}}
-                                     {{if eq .ContextTier "poor"}}bg-red-400{{end}}"></span>
                         Context {{.ContextTier}} · {{.ContextHeadroomPct}}%
                     </span>
                     {{end}}
-                    <a href="/ui/projects/{{.ProjectID}}" class="text-xs text-gray-400 hover:text-gray-200">Back to project</a>
+                    {{if or .Exchanges .Pending}}
+                    <form method="POST" action="/ui/projects/{{.ProjectID}}/chat/reset" data-confirm="Start a new chat? This conversation is cleared.">
+                        <button type="submit" class="v-btn v-btn--quiet" data-chat-new {{if .Pending}}disabled{{end}}>New chat</button>
+                    </form>
+                    {{end}}
                 </div>
-            </div>
+            </header>
 
             {{if .Error}}
-            <div class="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap" data-testid="chat-error">{{.Error}}</div>
+            <div class="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap" data-testid="chat-error">{{.Error}}</div>
             {{end}}
 
-            <!-- Scrollable message list. New messages render at the
-                 bottom; the composer below sits inside the page
-                 rather than fixed-positioned so mobile keyboards
-                 don't fight the layout. -->
-            <section class="rounded-lg border border-dark-700 bg-dark-800/30 p-4 min-h-[300px] max-h-[60vh] overflow-y-auto space-y-3" data-testid="chat-message-list">
-                {{if .History}}
-                    {{range $i, $msg := .History}}
-                    <div class="rounded-md px-3 py-2 text-sm leading-relaxed
-                                {{if eq .Role "user"}}bg-brand-900/40 border border-brand-700/40 text-brand-50 ml-12{{else}}bg-dark-700/40 border border-dark-600 text-gray-100 mr-12{{end}}"
-                         data-role="{{.Role}}"{{with markAt $.Marks $i}} data-ai-mark="{{.}}"{{end}}>
-                        <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{{.Role}}</div>
-                        <div class="whitespace-pre-wrap">{{renderMarkdown .Content}}</div>
+            <section class="chat-thread" id="chat-thread" data-testid="chat-message-list" aria-live="polite">
+                {{template "chatExchanges" (dict "Exchanges" .Exchanges "ProjectID" .ProjectID)}}
+                {{with .Pending}}
+                <div class="chat-exchange space-y-3" data-chat-pending>
+                    <div class="flex justify-end"><div class="chat-user" data-role="user">{{.Prompt}}</div></div>
+                    <div class="chat-assistant" data-role="pending" data-turn="{{.Turn}}">
+                        <div class="chat-thinking"><span class="chat-thinking-dot" aria-hidden="true"></span> <span data-chat-status>{{if .Status}}{{.Status}}{{else}}Thinking…{{end}}</span></div>
                     </div>
-                    {{end}}
-                {{else}}
-                    <div data-testid="chat-empty-state">
-                    {{template "emptyState" (dict
-                        "Icon" "chat"
-                        "Title" "Chat with the project's dispatcher"
-                        "Hint" "Ask a question, give a directive, or kick off work. The dispatcher routes to the right swarm role (researcher, planner, writer, etc.) and replies inline.")}}
+                </div>
+                {{end}}
+                {{if not (or .Exchanges .Pending)}}
+                <div class="flex flex-col items-center gap-4 py-16 text-center" data-testid="chat-empty-state" data-chat-empty>
+                    <h2 class="text-2xl font-semibold text-ink-100">How can I help?</h2>
+                    <div class="grid w-full max-w-xl gap-2 sm:grid-cols-3">
+                        <button type="button" class="v-btn v-btn--secondary chat-suggest" data-chat-suggest>What needs my attention today?</button>
+                        <button type="button" class="v-btn v-btn--secondary chat-suggest" data-chat-suggest>Summarise what got done this week.</button>
+                        <button type="button" class="v-btn v-btn--secondary chat-suggest" data-chat-suggest>What's in the news?</button>
                     </div>
+                </div>
                 {{end}}
             </section>
 
-            <!-- Composer: textarea + submit. Form posts back to
-                 /ui/projects/<id>/chat/messages; on return the
-                 handler re-renders this page with the assistant
-                 reply already in History. -->
-            <form method="POST" action="/ui/projects/{{.ProjectID}}/chat/messages" class="space-y-2" data-testid="chat-composer">
-                <input type="hidden" name="sessionId" value="{{.SessionID}}">
-                <label for="prompt" class="block text-xs font-medium text-gray-300">Your message</label>
-                <textarea name="prompt" id="prompt" rows="4"
-                          placeholder="Type a question or task description…"
-                          class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6"
-                          {{if .Disabled}}disabled{{end}}></textarea>
-                <div class="flex items-center justify-end gap-3">
-                    <button type="submit"
-                            class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-500 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                            data-testid="chat-send-button"
-                            {{if .Disabled}}disabled{{end}}>
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/></svg>
-                        Send
-                    </button>
-                </div>
-            </form>
+            <div class="chat-composer-wrap">
+                <form method="POST" action="/ui/projects/{{.ProjectID}}/chat/messages" data-testid="chat-composer" data-chat-form>
+                    <input type="hidden" name="sessionId" value="{{.SessionID}}">
+                    <div class="chat-composer border border-control">
+                        <label for="prompt" class="sr-only">Message</label>
+                        <textarea name="prompt" id="prompt" rows="1" data-chat-input
+                                  placeholder="Message {{if .ProjectName}}{{.ProjectName}}{{else}}the assistant{{end}}…"
+                                  {{if .Disabled}}disabled{{end}}>{{.Prefill}}</textarea>
+                        <button type="submit" class="v-btn v-btn--primary chat-send" data-testid="chat-send-button" data-chat-send aria-label="Send" {{if .Disabled}}disabled{{end}}>
+                            <svg data-chat-icon-send class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19V5m0 0l-6 6m6-6l6 6"/></svg>
+                            <svg data-chat-icon-stop class="hidden h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                        </button>
+                    </div>
+                    <p class="mt-1.5 text-center text-xs text-ink-500">The assistant can make mistakes. Check what matters.</p>
+                </form>
+            </div>
         </div>
     </main>
+    <script src="{{staticHref "chat.js"}}" defer></script>
 </body>
 </html>
 {{end}}
+
+{{/* One exchange per question: the person's message, the tools used (a
+     steps line that opens to the interim sentences), the reply. Rendered
+     here for the page and by chat_turns.go for a finished turn. Tool results
+     are never rendered (web-chat-design.md §2.1). */}}
+{{define "chatExchanges"}}{{range .Exchanges}}
+<div class="chat-exchange space-y-3">
+    {{if .User}}<div class="flex justify-end"><div class="chat-user" data-role="user">{{.User}}</div></div>{{end}}
+    {{if .Steps}}
+    <details class="chat-steps">
+        <summary>Steps: {{.Steps}}</summary>
+        {{range .Interim}}<p{{with .Mark}} data-ai-mark="{{.}}"{{end}}>{{.Text}}</p>{{end}}
+    </details>
+    {{else}}{{range .Interim}}<p class="chat-steps"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>{{.Text}}</p>{{end}}{{end}}
+    {{if .Reply}}
+    <div class="chat-assistant" data-role="assistant"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>
+        <div class="chat-md">{{renderChatMarkdown .Reply}}</div>
+        <div class="chat-actions">
+            <button type="button" class="v-btn v-btn--quiet" data-chat-copy aria-label="Copy reply">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg>
+            </button>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{end}}{{end}}
+
+{{/* A reply as it streams, or the delivered part of a stopped or failed
+     one (web-chat-design.md §3.2): the markdown container, with the Art
+     50(2) mark once the text is final. */}}
+{{define "chatPartial"}}<div class="chat-md"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>{{.HTML}}</div>{{end}}

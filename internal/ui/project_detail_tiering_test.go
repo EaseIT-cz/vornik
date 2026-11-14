@@ -132,9 +132,9 @@ func TestProjectDetailTiering_MCPServersIsRefPanel(t *testing.T) {
 	}
 	body := renderProjectDetailBody(t, data)
 
-	if !strings.Contains(body, `<details class="panel-ref`) {
-		t.Errorf("MCP servers block not inside panel-ref <details>; body excerpt around 'panel-ref':\n%s",
-			excerptAround(body, "panel-ref", 500))
+	if !strings.Contains(body, `<details class="vk-disc"`) {
+		t.Errorf("MCP servers block not inside the shared disclosure (#748 G); body excerpt around vk-disc:\n%s",
+			excerptAround(body, "vk-disc", 500))
 	}
 }
 
@@ -249,9 +249,10 @@ func TestProjectDetailTiering_StackPanelRefHasOpenChevron(t *testing.T) {
 	}
 	body := renderProjectDetailBody(t, data)
 
-	// At least one panel-ref <details> must be present.
-	if !strings.Contains(body, `class="panel-ref`) {
-		t.Errorf("no panel-ref <details> found on project_detail page with MCP+Swarm data")
+	// At least one shared disclosure must be present; its summary carries the
+	// CSS chevron (vk-disc-sum::after) that replaced panel-ref's (#748 G).
+	if !strings.Contains(body, `<details class="vk-disc"`) || !strings.Contains(body, `<summary class="vk-disc-sum">`) {
+		t.Errorf("no shared disclosure (vk-disc with a vk-disc-sum summary) on project_detail page with MCP+Swarm data")
 	}
 }
 
@@ -316,7 +317,8 @@ func TestProjectDetailWorkflowMetadataPreserved(t *testing.T) {
 // (Poll Interval / Max Tasks/Hour / Require Approval) render through the
 // statStrip primitive, not a hand-rolled grid.
 //
-// Strategy: statStrip renders labels with class "uppercase tracking-wider text-[10px]"
+// Strategy: statStrip renders labels with class "uppercase tracking-wider text-xs"
+// (text-[10px] before #753 part B)
 // — the hand-rolled grid used "text-xs text-ink-500" without uppercase/tracking.
 // We verify that the label "POLL INTERVAL" (uppercased by CSS via statStrip's
 // uppercase class) appears in the rendered body, which proves the caps went
@@ -372,7 +374,7 @@ func TestProjectDetailAutonomyCapsStatStrip(t *testing.T) {
 
 // TestProjectDetailSoakMetricsPanelRef — asserts that the Soak metrics
 // section renders inside a <details class="panel-ref" element.
-func TestProjectDetailSoakMetricsPanelRef(t *testing.T) {
+func TestProjectDetailSoakMetricsDisclosure(t *testing.T) {
 	data := ProjectDetailData{
 		Title:       "Project: demo",
 		CurrentPage: "projects",
@@ -394,8 +396,8 @@ func TestProjectDetailSoakMetricsPanelRef(t *testing.T) {
 	body := renderProjectDetailBody(t, data)
 
 	// The soak metrics block must be inside a panel-ref <details>.
-	if !strings.Contains(body, `<details class="panel-ref`) {
-		t.Errorf("Soak metrics not wrapped in panel-ref <details>; body excerpt:\n%s",
+	if !strings.Contains(body, `<details class="vk-disc"`) {
+		t.Errorf("Soak metrics not wrapped in the shared disclosure (#748 G); body excerpt:\n%s",
 			excerptAround(body, "Soak metrics", 600))
 	}
 	// Sharpe value must still appear.

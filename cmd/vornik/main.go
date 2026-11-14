@@ -34,8 +34,14 @@ func main() {
 	// var block: ldflags only override a constant initializer.
 	Version, BuildDate = version.Resolve(Version, BuildDate)
 
+	// A requested restart (#758) exits 75 for the supervisor to restart;
+	// any failure exits 1.
 	if err := service.Run(Version, BuildDate, version.EditionCommunity, service.CommunityProviders()); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		// A plain restart is not an error; a restart whose stop also
+		// failed still prints the failure.
+		if err.Error() != service.ErrRestartRequested.Error() {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		os.Exit(service.ExitCode(err))
 	}
 }

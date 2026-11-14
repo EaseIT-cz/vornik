@@ -16,6 +16,17 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# new_sid PREFIX prints a session id no other case in this run uses (GitHub
+# #684). A hint fires once per session, so two cases that drew the same
+# $RANDOM shared a session and the second printed nothing; the counter lives
+# in a file so an id taken inside $(...) is still never reused.
+new_sid() {
+  local n
+  n=$(( $(cat "$WORK/sid-counter" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" >"$WORK/sid-counter"
+  printf '%s%s' "$1" "$n"
+}
+
 REPO="$WORK/repo"
 mkdir -p "$REPO"
 export CLAUDE_PLUGIN_DATA="$WORK/data"
@@ -63,28 +74,28 @@ assert_hint() { # name out rc id-fragment event
 
 # --- commit fires once per session, after a successful git commit.
 S=c1
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m "x"')" "$(bash_out '[main abc] x')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m "x"')" "$(bash_out '[main abc] x')")")"; RC=$?
 assert_hint "commit" "$OUT" "$RC" "you just committed" PostToolUse
 grep -q 'delegate' <<<"$(ctx_of "$OUT")" || fail "commit: placeholder {delegate} not replaced: $OUT"
 grep -q '{' <<<"$(ctx_of "$OUT")" && fail "commit: an unreplaced placeholder: $OUT"
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git -C sub commit -am y')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git -C sub commit -am y')")")"; RC=$?
 assert_silent "commit again" "$OUT" "$RC"
 S=c2
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git -C sub commit -am y')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git -C sub commit -am y')")")"; RC=$?
 assert_hint "git -C commit" "$OUT" "$RC" "you just committed" PostToolUse
 S=c3
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'GIT_AUTHOR_NAME="a b" GIT_AUTHOR_EMAIL=a@b.c git commit -qm x')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'GIT_AUTHOR_NAME="a b" GIT_AUTHOR_EMAIL=a@b.c git commit -qm x')")")"; RC=$?
 assert_hint "assignments before git commit" "$OUT" "$RC" "you just committed" PostToolUse
 for cmd in 'git commit-tree HEAD^{tree}' 'echo git commit' 'git log --grep commit' 'gitcommit' 'FOO=bar echo hi' 'FOO=bar git status' "MSG='run git commit' echo hi"; do
-  S="nc$RANDOM"
-  OUT="$(run_hook call "$(post $S Bash "$(bash_in "$cmd")")")"; RC=$?
+  S="$(new_sid nc)"
+  OUT="$(run_hook call "$(post "$S" Bash "$(bash_in "$cmd")")")"; RC=$?
   assert_silent "not a commit: $cmd" "$OUT" "$RC"
 done
 
 # --- parallel hook processes fire a hint once.
 S=par
 for i in 1 2 3 4 5 6; do
-  run_hook call "$(post $S Bash "$(bash_in 'git commit -m p')")" >"$WORK/par.$i" &
+  run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m p')")" >"$WORK/par.$i" &
 done
 wait
 N=0
@@ -93,22 +104,22 @@ for i in 1 2 3 4 5 6; do [[ -s "$WORK/par.$i" ]] && N=$((N + 1)); done
 
 # --- design_written fires on a design path, not on other docs.
 S=d1
-OUT="$(run_hook call "$(post $S Write "$(write_in "$REPO/docs/guide.md")")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Write "$(write_in "$REPO/docs/guide.md")")")"; RC=$?
 assert_silent "not a design doc" "$OUT" "$RC"
-OUT="$(run_hook call "$(post $S Write "$(write_in "$REPO/docs/low-level-design/x-design.md")")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Write "$(write_in "$REPO/docs/low-level-design/x-design.md")")")"; RC=$?
 assert_hint "design written" "$OUT" "$RC" "changed a design document" PostToolUse
 S=d2
-OUT="$(run_hook call "$(post $S Edit "$(jq -cn --arg p "docs/adr/0001-thing.md" '{file_path:$p}')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Edit "$(jq -cn --arg p "docs/adr/0001-thing.md" '{file_path:$p}')")")"; RC=$?
 assert_hint "adr, relative path" "$OUT" "$RC" "changed a design document" PostToolUse
 S=d3
-OUT="$(run_hook call "$(post $S Write "$(write_in "/elsewhere/docs/low-level-design/x-design.md")")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Write "$(write_in "/elsewhere/docs/low-level-design/x-design.md")")")"; RC=$?
 assert_silent "outside the cwd" "$OUT" "$RC"
 # GitHub #682: a design document named in upper case counts too. The name
 # starts lower-case on purpose: the CE export rewrites any docs/<Capital>*.md
 # path to the docs site, which turned https://docs.vornik.io into a URL and failed this
 # case on the exported tree (publish-ce for 2026.11.3).
 S=d4
-OUT="$(run_hook call "$(post $S Edit "$(write_in "$REPO/docs/system-DESIGN.md")")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Edit "$(write_in "$REPO/docs/system-DESIGN.md")")")"; RC=$?
 assert_hint "upper-case DESIGN.md" "$OUT" "$RC" "changed a design document" PostToolUse
 
 # --- design_written and edits from a Bash command's writes (§13.13, #653):
@@ -130,11 +141,20 @@ for cmd in \
   "echo \"see <<EOF\""$'\n'"echo y > $D" \
   "(( n = 1 << x ))"$'\n'"echo y > $D" \
   "cat > notes.md <<'EOF'"$'\n''x'$'\n''EOF  '$'\n'"echo y > $D"; do
-  S="bw$RANDOM"
-  OUT="$(run_hook call "$(post $S Bash "$(bash_in "$cmd")")")"; RC=$?
+  S="$(new_sid bw)"
+  OUT="$(run_hook call "$(post "$S" Bash "$(bash_in "$cmd")")")"; RC=$?
   assert_hint "bash write: ${cmd%%$'\n'*}" "$OUT" "$RC" "changed a design document" PostToolUse
   [[ "$(wc -c <"$CLAUDE_PLUGIN_DATA/hints/$S/edits")" -eq 1 ]] || fail "bash write counts one edit: $cmd"
 done
+# The premise of new_sid (GitHub #684): a hint fires once per session, so a
+# second identical call in one session is silent. Two cases sharing a session
+# id would fail exactly this way.
+S="$(new_sid dup)"
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in "echo y > $D")")")"; RC=$?
+assert_hint "first call in a session" "$OUT" "$RC" "changed a design document" PostToolUse
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in "echo y > $D")")")"; RC=$?
+assert_silent "second call in the same session" "$OUT" "$RC"
+[[ "$(new_sid x)" != "$(new_sid x)" ]] || fail "new_sid returned one id twice"
 for cmd in \
   "cat > notes.txt <<'EOF'"$'\n''see > docs/low-level-design/y-design.md'$'\n''EOF' \
   "go test ./... 2>&1 | tail -3" \
@@ -147,14 +167,14 @@ for cmd in \
   "grep -c x README.md" \
   "printf 'usage: tool > docs/low-level-design/u-design.md\n'" \
   "tee \"log; docs/low-level-design/t-design.md\" </dev/null"; do
-  S="bn$RANDOM"
-  OUT="$(run_hook call "$(post $S Bash "$(bash_in "$cmd")")")"; RC=$?
+  S="$(new_sid bn)"
+  OUT="$(run_hook call "$(post "$S" Bash "$(bash_in "$cmd")")")"; RC=$?
   assert_silent "not a design write: ${cmd%%$'\n'*}" "$OUT" "$RC"
 done
 # A command that wrote the design and then failed (a commit with no git
 # identity) still wrote it (§13.5 re-measurement, re2 and re3).
-S="bf$RANDOM"
-OUT="$(run_hook failed "$(failure $S "cat >> $D <<'EOF'"$'\n''- x'$'\n''EOF'$'\n''git commit -qm x' 'Exit code 128')")"; RC=$?
+S="$(new_sid bf)"
+OUT="$(run_hook failed "$(failure "$S" "cat >> $D <<'EOF'"$'\n''- x'$'\n''EOF'$'\n''git commit -qm x' 'Exit code 128')")"; RC=$?
 assert_hint "a failed command's write" "$OUT" "$RC" "changed a design document" PostToolUseFailure
 grep -q "you just committed" <<<"$OUT" && fail "a failed command fired the commit hint"
 # A failed Write or Edit wrote nothing, and a failed commit is no commit
@@ -163,26 +183,26 @@ OUT="$(run_hook failed "$(jq -cn --arg c "$REPO" --arg p "$REPO/$D" '{session_id
 assert_silent "a failed Write" "$OUT" "$RC"
 OUT="$(run_hook failed "$(failure fc1 'git commit -qm x' 'Exit code 128')")"; RC=$?
 assert_silent "a failed commit-only command" "$OUT" "$RC"
-S="bn$RANDOM"
-run_hook call "$(post $S Bash "$(bash_in 'ls docs')")" >/dev/null
+S="$(new_sid bn)"
+run_hook call "$(post "$S" Bash "$(bash_in 'ls docs')")" >/dev/null
 [[ ! -s "$CLAUDE_PLUGIN_DATA/hints/$S/edits" ]] || fail "a command that writes nothing counted as an edit"
 
 # --- test_failed: from PostToolUseFailure on a runner; from output only on a match.
 S=t1
-OUT="$(run_hook failed "$(failure $S 'go test ./...' 'Exit code 1
+OUT="$(run_hook failed "$(failure "$S" 'go test ./...' 'Exit code 1
 --- FAIL: TestX (0.01s)')")"; RC=$?
 assert_hint "failed go test" "$OUT" "$RC" "failing test's name" PostToolUseFailure
 S=t2
-OUT="$(run_hook failed "$(failure $S 'ls nothere' 'Exit code 2')")"; RC=$?
+OUT="$(run_hook failed "$(failure "$S" 'ls nothere' 'Exit code 2')")"; RC=$?
 assert_silent "a failed non-runner" "$OUT" "$RC"
 for o in 'ok  pkg 0.1s' '10 passed, 0 failed' 'failed: 0' '0 tests failed' 'no failures' 'ErrorHandler ok'; do
-  S="tz$RANDOM"
-  OUT="$(run_hook call "$(post $S Bash "$(bash_in 'go test ./... | tail')" "$(bash_out "$o")")")"; RC=$?
+  S="$(new_sid tz)"
+  OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'go test ./... | tail')" "$(bash_out "$o")")")"; RC=$?
   assert_silent "passing output: $o" "$OUT" "$RC"
 done
 for o in '--- FAIL: TestY (0.0s)' 'FAIL	pkg	0.2s' '3 failed, 7 passed' '=== 2 errors ==='; do
-  S="tf$RANDOM"
-  OUT="$(run_hook call "$(post $S Bash "$(bash_in 'make test 2>&1 | tail -5')" "$(bash_out "$o")")")"; RC=$?
+  S="$(new_sid tf)"
+  OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'make test 2>&1 | tail -5')" "$(bash_out "$o")")")"; RC=$?
   assert_hint "failing output: $o" "$OUT" "$RC" "failing test's name" PostToolUse
 done
 
@@ -190,7 +210,7 @@ done
 S=m1
 mkdir -p "$CLAUDE_PLUGIN_DATA/hints"
 printf '{"enabled":true,"muted":["commit.review"]}' >"$CLAUDE_PLUGIN_DATA/hints/mask.json"
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m m')")")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m m')")")"; RC=$?
 assert_silent "muted by the saved mask" "$OUT" "$RC"
 printf '{"enabled":false,"muted":[]}' >"$CLAUDE_PLUGIN_DATA/hints/mask.json"
 OUT="$(run_hook call "$(post m2 Bash "$(bash_in 'git commit -m m')")")"; RC=$?
@@ -203,20 +223,20 @@ assert_silent "no companion token" "$OUT" "$RC"
 
 # --- follows: credited within 10 calls, once, for every open firing of the tool.
 S=f1
-run_hook call "$(post $S Bash "$(bash_in 'git commit -m f')")" >/dev/null
-run_hook call "$(post $S Write "$(write_in "$REPO/docs/low-level-design/a-design.md")")" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m f')")" >/dev/null
+run_hook call "$(post "$S" Write "$(write_in "$REPO/docs/low-level-design/a-design.md")")" >/dev/null
 SD="$CLAUDE_PLUGIN_DATA/hints/$S"
 [[ -d "$SD/fired.commit.review" && -d "$SD/fired.design_written.review" ]] && fail "an inactive hint fired"
 [[ -d "$SD/fired.commit.review" && -d "$SD/fired.design_written.ingest" ]] || fail "follows: firings not recorded: $(ls "$SD")"
-run_hook call "$(post $S Skill '{"skill":"vornik-companion:rag-ingest","args":"docs/x"}')" >/dev/null
+run_hook call "$(post "$S" Skill '{"skill":"vornik-companion:rag-ingest","args":"docs/x"}')" >/dev/null
 [[ -d "$SD/followed.design_written.ingest" ]] || fail "follows: /rag-ingest did not credit design_written.ingest"
 [[ -d "$SD/followed.commit.review" ]] && fail "follows: a rag-ingest credited the review hint"
-run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__delegate '{"workflow":"companion-architectural-review","prompt":"p"}')" >/dev/null
+run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__delegate '{"workflow":"companion-architectural-review","prompt":"p"}')" >/dev/null
 [[ -d "$SD/followed.commit.review" ]] || fail "follows: delegate review did not credit commit.review"
 S=f2
-run_hook call "$(post $S Bash "$(bash_in 'git commit -m late')")" >/dev/null
-for i in $(seq 1 10); do run_hook call "$(post $S Read '{"file_path":"x"}')" >/dev/null; done
-run_hook call "$(post $S Skill '{"skill":"vornik-companion:review"}')" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m late')")" >/dev/null
+for i in $(seq 1 10); do run_hook call "$(post "$S" Read '{"file_path":"x"}')" >/dev/null; done
+run_hook call "$(post "$S" Skill '{"skill":"vornik-companion:review"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.commit.review" ]] && fail "follows: credited after 10 calls"
 
 # --- two open hints with one target are both credited, once each; the
@@ -224,42 +244,42 @@ run_hook call "$(post $S Skill '{"skill":"vornik-companion:review"}')" >/dev/nul
 S=f3
 mkdir -p "$CLAUDE_PLUGIN_DATA/hints"
 jq -c '{hints: (.hints | map(if .id == "commit.review" or .id == "design_written.ingest" then .follow = ["recall"] else . end))}' "$HERE/hints.json" >"$CLAUDE_PLUGIN_DATA/hints/catalogue.json"
-run_hook call "$(post $S Bash "$(bash_in 'git commit -m s')")" >/dev/null
-run_hook call "$(post $S Write "$(write_in "$REPO/docs/low-level-design/b-design.md")")" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m s')")" >/dev/null
+run_hook call "$(post "$S" Write "$(write_in "$REPO/docs/low-level-design/b-design.md")")" >/dev/null
 SD="$CLAUDE_PLUGIN_DATA/hints/$S"
-for i in $(seq 1 8); do run_hook call "$(post $S Read '{"file_path":"x"}')" >/dev/null; done
-run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
+for i in $(seq 1 8); do run_hook call "$(post "$S" Read '{"file_path":"x"}')" >/dev/null; done
+run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
 [[ -d "$SD/followed.commit.review" && -d "$SD/followed.design_written.ingest" ]] || fail "same target: both open hints must be credited: $(ls "$SD")"
-run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
+run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
 [[ "$(find "$SD" -maxdepth 1 -name 'followed.*' | wc -l)" -eq 2 ]] || fail "same target: credited more than once"
 rm -f "$CLAUDE_PLUGIN_DATA/hints/catalogue.json"
 S=f4
-run_hook call "$(post $S Bash "$(bash_in 'git commit -m b')")" >/dev/null
-for i in $(seq 1 9); do run_hook call "$(post $S Read '{"file_path":"x"}')" >/dev/null; done
-run_hook call "$(post $S Skill '{"skill":"vornik-companion:review"}')" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m b')")" >/dev/null
+for i in $(seq 1 9); do run_hook call "$(post "$S" Read '{"file_path":"x"}')" >/dev/null; done
+run_hook call "$(post "$S" Skill '{"skill":"vornik-companion:review"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.commit.review" ]] || fail "window: a follow exactly 10 calls later is credited"
 
 # --- only this client's tool names credit (§13.12 X4): in Claude Code the
 # Codex name mcp__vornik__recall credits nothing.
 S=cl1
-run_hook call "$(post $S Bash "$(bash_in 'go test ./x')" "$(bash_out '--- FAIL: TestQ (0s)')")" >/dev/null
-run_hook call "$(post $S mcp__vornik__recall '{"query":"q"}')" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'go test ./x')" "$(bash_out '--- FAIL: TestQ (0s)')")" >/dev/null
+run_hook call "$(post "$S" mcp__vornik__recall '{"query":"q"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] && fail "client: a Codex tool name credited in Claude Code"
-run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
+run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] || fail "client: the plugin-qualified recall did not credit"
 
 # --- the recall hint names the exact tool in Claude Code (#704, design §13.16):
 # the measured wording names mcp__plugin_vornik-companion_vornik__recall, and a
 # call of it within the window still credits the follow.
 S=r704
-out="$(run_hook call "$(post $S Bash "$(bash_in 'go test ./x')" "$(bash_out '--- FAIL: TestQ (0s)')")")"
+out="$(run_hook call "$(post "$S" Bash "$(bash_in 'go test ./x')" "$(bash_out '--- FAIL: TestQ (0s)')")")"
 grep -qF 'Call mcp__plugin_vornik-companion_vornik__recall with query' <<<"$(ctx_of "$out")" || fail "#704: the recall hint does not name the plugin's recall tool: $(ctx_of "$out")"
-run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"TestQ"}')" >/dev/null
+run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__recall '{"query":"TestQ"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] || fail "#704: the named recall did not credit"
 
 # --- a non-string stdout still counts the call (review ac74 F3).
 S=ns1
-run_hook call "$(post $S Bash "$(bash_in 'true')" '{"stdout":["a"],"stderr":3}')" >/dev/null
+run_hook call "$(post "$S" Bash "$(bash_in 'true')" '{"stdout":["a"],"stderr":3}')" >/dev/null
 [[ "$(wc -c <"$CLAUDE_PLUGIN_DATA/hints/$S/calls" 2>/dev/null)" -eq 1 ]] || fail "a structured tool_response dropped the call"
 
 # --- every path exits 0 and stays silent on bad input.
@@ -323,22 +343,22 @@ while IFS= read -r c; do
     if [[ "$(jq -r 'has("shell")' <<<"$st")" == true ]]; then
       cmd="$(jq -r .shell <<<"$st")"; ex="$(jq -r '.exit // 0' <<<"$st")"; o="$(jq -r '.output // ""' <<<"$st")"
       if [[ "$ex" == 0 ]]; then
-        run_hook call "$(post $S Bash "$(bash_in "$cmd")" "$(bash_out "$o")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+        run_hook call "$(post "$S" Bash "$(bash_in "$cmd")" "$(bash_out "$o")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
       else
-        run_hook failed "$(failure $S "$cmd" "$o")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+        run_hook failed "$(failure "$S" "$cmd" "$o")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
       fi
     elif [[ "$(jq -r 'has("write")' <<<"$st")" == true ]]; then
       p="$(jq -r .write <<<"$st")"; [[ "$p" == /* ]] || p="$REPO/$p"
-      run_hook call "$(post $S Write "$(write_in "$p")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      run_hook call "$(post "$S" Write "$(write_in "$p")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
     elif [[ "$(jq -r 'has("patch")' <<<"$st")" == true ]]; then
       body="$(jq -r '"*** Begin Patch\n" + (.patch | map("*** Update File: " + .) | join("\n")) + "\n*** End Patch"' <<<"$st")"
-      run_hook call "$(post $S apply_patch "$(jq -cn --arg b "$body" '{command:$b}')")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      run_hook call "$(post "$S" apply_patch "$(jq -cn --arg b "$body" '{command:$b}')")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
     elif [[ "$(jq -r 'has("prompt")' <<<"$st")" == true ]]; then
       run_hook prompt "$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
     elif [[ "$(jq -r 'has("recall")' <<<"$st")" == true ]]; then
-      run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
     elif [[ "$(jq -r 'has("delegate")' <<<"$st")" == true ]]; then
-      run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__delegate "$(jq -c '{workflow: .delegate, prompt: "p"}' <<<"$st")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      run_hook call "$(post "$S" mcp__plugin_vornik-companion_vornik__delegate "$(jq -c '{workflow: .delegate, prompt: "p"}' <<<"$st")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
     fi
   done < <(jq -c '.steps[]' <<<"$c")
   got_fired="$(cd "$CD/hints/$S" 2>/dev/null && for d in fired.*; do [[ -d "$d" ]] && echo "${d#fired.}"; done | sort | paste -sd, -)"
@@ -363,9 +383,9 @@ CD="$WORK/claims"
 mkdir -p "$CD/hints"
 jq -c '.hints |= map(if .id == "first_prompt.recall" then .active = true else . end)' "$EMBED" >"$CD/hints/catalogue.json"
 S=claims1
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m a')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m a')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
 assert_hint "claims: first commit" "$OUT" "$RC" "you just committed" PostToolUse
-OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m b')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+OUT="$(run_hook call "$(post "$S" Bash "$(bash_in 'git commit -m b')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
 assert_silent "claims: a second commit fired again under a non-exclusive mkdir" "$OUT" "$RC"
 PROMPT="$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')"
 OUT="$(run_hook prompt "$PROMPT" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?

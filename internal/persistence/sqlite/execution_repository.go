@@ -461,6 +461,30 @@ func (r *ExecutionRepository) FailedRateByProject(ctx context.Context, since tim
 	return out, rows.Err()
 }
 
+// CountCompletedByProject counts COMPLETED executions per project with
+// completed_at in [since, until) (#757).
+func (r *ExecutionRepository) CountCompletedByProject(ctx context.Context, since, until time.Time) (map[string]int64, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT project_id, COUNT(*)
+		FROM executions
+		WHERE status = 'COMPLETED' AND completed_at IS NOT NULL AND completed_at >= ? AND completed_at < ?
+		GROUP BY project_id`, sqliteTime(since.UTC()), sqliteTime(until.UTC()))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var project string
+		var n int64
+		if err := rows.Scan(&project, &n); err != nil {
+			return nil, err
+		}
+		out[project] = n
+	}
+	return out, rows.Err()
+}
+
 // LatencyP95ByProject returns per-project p95 wall-clock duration (seconds)
 // of COMPLETED executions finished at/after `since`. Duration is computed in
 // SQL (julianday diff → seconds); p95 is computed in Go per project.
@@ -526,7 +550,15 @@ func (r *ExecutionRepository) List(ctx context.Context, filter persistence.Execu
 		b.WriteString(" AND status = ?")
 		args = append(args, string(*filter.Status))
 	}
-	b.WriteString(" ORDER BY created_at DESC")
+	if filter.CompletedSince != nil {
+		b.WriteString(" AND completed_at IS NOT NULL AND completed_at >= ?")
+		args = append(args, sqliteTime(*filter.CompletedSince))
+	}
+	if filter.NewestCompletedFirst {
+		b.WriteString(" ORDER BY completed_at DESC")
+	} else {
+		b.WriteString(" ORDER BY created_at DESC")
+	}
 	if filter.PageSize > 0 {
 		b.WriteString(" LIMIT ?")
 		args = append(args, filter.PageSize)
@@ -568,6 +600,10 @@ func (r *ExecutionRepository) Count(ctx context.Context, filter persistence.Exec
 	if filter.Status != nil {
 		b.WriteString(" AND status = ?")
 		args = append(args, string(*filter.Status))
+	}
+	if filter.CompletedSince != nil {
+		b.WriteString(" AND completed_at IS NOT NULL AND completed_at >= ?")
+		args = append(args, sqliteTime(*filter.CompletedSince))
 	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, b.String(), args...).Scan(&total); err != nil {

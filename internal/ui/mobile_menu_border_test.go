@@ -45,8 +45,8 @@ func TestMobileMenus_DrawOnlyTheTopBorder(t *testing.T) {
 	// that asks for the top border, so dropping the other three is right
 	// for each of them.
 	uses := regexp.MustCompile(`class="([^"]*\bmenu-solid\b[^"]*)"`).FindAllStringSubmatch(src, -1)
-	if len(uses) != 2 {
-		t.Fatalf("menu-solid used %d times, want 2 (the bottom bar and its drawers)", len(uses))
+	if len(uses) != 3 {
+		t.Fatalf("menu-solid used %d times, want 3 (the bottom bar, its tab drawers and the More drawer, design §18)", len(uses))
 	}
 	for _, u := range uses {
 		if !regexp.MustCompile(`(?:^|\s)border-t(?:\s|$)`).MatchString(u[1]) {

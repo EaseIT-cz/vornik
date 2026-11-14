@@ -24,13 +24,13 @@
                 <li>
                     Create a key for your companion. It is shown once, here, and never again.
                     <div class="mt-2">
-                        <button id="companion-create" type="button" class="rounded-md bg-brand-600 px-3 py-1.5 text-sm text-white">Create a companion key</button>
+                        <button id="companion-create" type="button" class="v-btn v-btn--primary">Create a companion key</button>
                     </div>
                     <div id="companion-key-box" class="mt-2 hidden rounded-md border border-brand-600 bg-dark-800 px-3 py-3 space-y-1">
                         <div class="text-xs text-gray-400">Your companion key: copy it now, it is not shown again.</div>
                         <div id="companion-key" class="font-mono text-sm break-all text-gray-100"></div>
                     </div>
-                    <div id="companion-error" class="mt-2 hidden text-xs text-red-400"></div>
+                    <div id="companion-error" class="mt-2 hidden text-xs text-red-700 dark:text-red-400"></div>
                 </li>
                 <li>
                     In a terminal, add the marketplace and install the plugin (safe to run again):
@@ -44,7 +44,7 @@ claude plugin install vornik-companion@vornik</pre>
                 </li>
             </ol>
 
-            <noscript><div class="text-sm text-red-400">Creating and listing keys needs JavaScript.</div></noscript>
+            <noscript><div class="text-sm text-red-700 dark:text-red-400">Creating and listing keys needs JavaScript.</div></noscript>
 
             <h2 class="text-base font-semibold text-gray-100 pt-2">Your companion keys</h2>
             <table class="w-full text-sm">

@@ -222,3 +222,19 @@ func (r *ChatAuditRepository) GetPrompt(ctx context.Context, hash string) (strin
 	}
 	return body, nil
 }
+
+// CountSince counts chat turns at or after since, in projectID or, when it is
+// empty, in every project (persistence.ActivityCounter, GitHub #261).
+func (r *ChatAuditRepository) CountSince(ctx context.Context, projectID string, since time.Time) (int64, error) {
+	q := `SELECT COUNT(*) FROM chat_audit_log WHERE ts >= $1`
+	args := []any{since}
+	if projectID != "" {
+		q += ` AND project_id = $2`
+		args = append(args, projectID)
+	}
+	var n int64
+	if err := r.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("chat audit: count since: %w", err)
+	}
+	return n, nil
+}

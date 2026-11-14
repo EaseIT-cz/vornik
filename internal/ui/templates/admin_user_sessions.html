@@ -47,7 +47,7 @@
                             {{range .Sessions}}
                             <tr class="hover:bg-dark-700/30">
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-200 font-mono">{{.Provider}}</td>
-                                <td class="px-4 py-2 text-xs text-gray-300" title="{{.RawAgent}}">{{.Agent}}{{if .IsCurrent}} <span class="px-1.5 py-0.5 text-[10px] rounded bg-emerald-900/50 text-emerald-700 dark:text-emerald-300">this session</span>{{end}}</td>
+                                <td class="px-4 py-2 text-xs text-gray-300" title="{{.RawAgent}}">{{.Agent}}{{if .IsCurrent}} <span class="px-1.5 py-0.5 text-xs rounded bg-emerald-900/50 text-emerald-700 dark:text-emerald-300">this session</span>{{end}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-400 font-mono">{{if .IP}}{{.IP}}{{else}}—{{end}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">{{.Created}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">{{.LastSeen}}</td>

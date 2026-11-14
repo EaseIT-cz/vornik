@@ -360,7 +360,9 @@ func TestLogHTMLAndSSEData(t *testing.T) {
 	if strings.Contains(html, "<hello>") {
 		t.Fatalf("logHTML must escape raw HTML, got %q", html)
 	}
-	for _, want := range []string{"&lt;hello&gt;", "text-blue-400", "text-red-500", "<pre"} {
+	// Light-theme AA since #753 part C: brand-400 is theme-aware; [ERROR]
+	// carries a light step and its dark: partner.
+	for _, want := range []string{"&lt;hello&gt;", "text-brand-400", "text-red-600", "dark:text-red-400", "<pre"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("logHTML missing %q in %q", want, html)
 		}

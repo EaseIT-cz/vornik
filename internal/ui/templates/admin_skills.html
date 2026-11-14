@@ -18,14 +18,14 @@
                 <strong>Pending review</strong> drafts await the human gate —
                 approving activates a skill (it then injects into swarm roles
                 and matures on usage); rejecting retires it. A
-                <span class="text-amber-300">GLOBAL</span> skill injects into
+                <span class="text-amber-700 dark:text-amber-300">GLOBAL</span> skill injects into
                 <em>every</em> project's roles, not just its home project.
                 (Telegram gives the same Approve/Reject prompt for
                 non-technical staff.)
             </p>
 
             {{if .Flash}}<div class="rounded-md bg-dark-800 border border-dark-700 px-3 py-2 text-xs text-brand-300">Last action: {{.Flash}}</div>{{end}}
-            {{if .Error}}<div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-300">{{.Error}}</div>{{end}}
+            {{if .Error}}<div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-700 dark:text-red-300">{{.Error}}</div>{{end}}
 
             {{if not .Available}}
                 <div class="text-sm text-gray-400">The knowledge-skill store is not wired on this daemon.</div>
@@ -51,23 +51,30 @@
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <div class="font-mono text-sm text-gray-100">{{.Name}}</div>
  <span class="text-xs text-gray-300">v{{.Version}}</span>
-                                    <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded
+                                    <span class="px-1.5 py-0.5 text-xs font-semibold rounded
                                         {{if eq .Maturity "active"}}bg-green-700/30 text-green-300 border border-green-700
                                         {{else if eq .Maturity "trusted"}}bg-emerald-600/30 text-emerald-300 border border-emerald-700
                                         {{else if eq .Maturity "draft"}}bg-sky-700/30 text-sky-300 border border-sky-700
                                         {{else}}bg-dark-700 text-gray-400 border border-dark-600{{end}}">{{.Maturity}}</span>
-                                    {{if .IsGlobal}}<span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-600/30 text-amber-300 border border-amber-700">GLOBAL</span>{{end}}
+                                    {{if .IsGlobal}}<span class="px-1.5 py-0.5 text-xs font-semibold rounded bg-amber-600/30 text-amber-700 border border-amber-700 dark:text-amber-300">GLOBAL</span>{{end}}
                                 </div>
                                 <div class="text-xs text-gray-400 mt-0.5">{{.Description}}</div>
+                                {{if .IsGlobal}}<div class="text-xs text-amber-700 mt-1 dark:text-amber-400">⚠ Affects ALL projects — injects into every project's roles.</div>{{end}}
+                                {{/* The card's metadata folds (#748 I): proposal, scope, usage
+                                     and ratings. The summary keeps what a reviewer acts on in
+                                     sight: the fired count and a measured rating verdict, so a
+                                     low_lift skill is not hidden. */}}
+                                <details class="vk-disc vk-disc-row">
+                                    <summary class="vk-disc-sum"><span class="vk-disc-title">Details</span><span class="vk-disc-meta">fired {{.UsageFired}}{{with .Rating}}{{if ne .Verdict "not_measurable"}} · {{.Verdict}}{{end}}{{end}}</span></summary>
+                                    <div class="vk-disc-body">
  <div class="text-xs text-gray-400">Proposed at {{.ProposedAt}} · {{.ReviewStatus}}</div>
-                                {{if .IsGlobal}}<div class="text-[11px] text-amber-400 mt-1">⚠ Affects ALL projects — injects into every project's roles.</div>{{end}}
-                                <div class="text-[11px] text-gray-500 mt-1">
+                                <div class="text-xs text-gray-500 mt-1">
                                     project <code class="text-gray-400">{{.ProjectID}}</code>
                                     · roles <code class="text-gray-400">{{if .Roles}}{{range $i, $r := .Roles}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}any{{end}}</code>
                                     {{if .RepoScope}} · repo <code class="text-gray-400">{{.RepoScope}}</code>{{end}}
                                     {{if .Domain}} · domain <code class="text-gray-400">{{.Domain}}</code>{{end}}
                                 </div>
-                                <div class="text-[11px] text-gray-500 mt-1">
+                                <div class="text-xs text-gray-500 mt-1">
                                     usage: fired <span class="text-gray-300">{{.UsageFired}}</span>
                                     · worked <span class="text-gray-300">{{.UsageWorked}}</span>
                                     · corrected <span class="text-gray-300">{{.UsageCorrected}}</span>
@@ -84,7 +91,7 @@
                                      stand behind it, so the rule cannot be lost to a template
                                      edit. Absent when no rollup repo is wired. */}}
                                 {{if .Rating}}
-                                <div class="text-[11px] mt-1">
+                                <div class="text-xs mt-1">
                                     <span class="text-gray-500">ratings:</span>
                                     <span class="{{if eq .Rating.Verdict "low_lift"}}text-rose-400{{else if eq .Rating.Verdict "helping"}}text-emerald-400{{else}}text-gray-400{{end}}">{{.Rating.Verdict}}</span>
                                     {{if .Rating.Detail}}
@@ -96,20 +103,19 @@
                                     {{end}}
                                 </div>
                                 {{end}}
+                                    </div>
+                                </details>
                                 {{/* Full skill document — collapsed to a teaser so the
                                      list stays scannable, expandable so the operator
                                      reads the WHOLE thing before approving (truncated
                                      preview alone made informed approval impossible). */}}
-                                <details class="mt-2 group">
-                                    <summary class="cursor-pointer list-none flex items-center gap-1 text-[11px] text-brand-400 hover:text-brand-300 select-none">
-                                        <span class="group-open:hidden">▸ View full skill ({{len .Body}} chars)</span>
-                                        <span class="hidden group-open:inline">▾ Hide skill</span>
-                                    </summary>
+                                <details class="vk-disc vk-disc-row">
+                                    <summary class="vk-disc-sum"><span class="vk-disc-title">View full skill</span><span class="vk-disc-meta">{{len .Body}} chars</span></summary>
                                     <div class="text-xs text-gray-400">Revision properties: v{{.Version}} · Proposed at {{.ProposedAt}} · {{.ReviewStatus}}</div>
- <pre class="mt-2 whitespace-pre-wrap text-[11px] text-gray-300 bg-dark-900 rounded p-2 max-h-[60vh] overflow-auto">{{.Body}}</pre>
+ <pre class="mt-2 whitespace-pre-wrap text-xs text-gray-300 bg-dark-900 rounded p-2 max-h-[60vh] overflow-auto">{{.Body}}</pre>
                                 </details>
- {{if .HistoryError}}<div class="text-xs text-red-300">{{.HistoryError}}</div>{{end}}
- {{if .History}}<details class="mt-2"><summary class="text-xs text-brand-400">Revision history</summary>
+ {{if .HistoryError}}<div class="text-xs text-red-700 dark:text-red-300">{{.HistoryError}}</div>{{end}}
+ {{if .History}}<details class="vk-disc vk-disc-row"><summary class="vk-disc-sum"><span class="vk-disc-title">Revision history</span></summary>
  {{range .History}}<div class="mt-2 text-xs text-gray-400">v{{.Version}} · Proposed at {{.ProposedAt}} · {{.ReviewStatus}}</div><pre class="whitespace-pre-wrap text-xs text-gray-400">{{.Body}}</pre>{{end}}
  </details>{{end}}
                             </div>
@@ -146,7 +152,7 @@
  <input type="hidden" name="version" value="{{.Version}}">
                                     <input type="hidden" name="maturity" value="{{$.Filter}}">
                                     <input type="hidden" name="action" value="set-global">
-                                    <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-amber-700/40 hover:bg-amber-700/60 text-amber-200 border border-amber-700">Make global</button>
+                                    <button type="submit" class="px-3 py-1.5 text-xs rounded-md bg-amber-700/40 hover:bg-amber-700/60 text-amber-800 border border-amber-700 dark:text-amber-200">Make global</button>
                                 </form>
                                 {{end}}
                             </div>

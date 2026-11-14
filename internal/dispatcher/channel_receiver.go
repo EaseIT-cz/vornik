@@ -337,6 +337,7 @@ func (r *ChannelReceiver) receive(ctx context.Context, msg conversation.ChannelM
 	req := Request{
 		ChatID:               sess.ChatID,
 		ChannelIdentity:      channelIdentity,
+		NoLaterDelivery:      noLaterDelivery(r.Channel),
 		Messages:             history,
 		Project:              sess.ActiveProject,
 		Projects:             sess.AvailableProjects,
@@ -968,4 +969,12 @@ func (r *ChannelReceiver) taskPrincipal(ctx context.Context, msg conversation.Ch
 		return ""
 	}
 	return r.TaskPrincipal(ctx, msg)
+}
+
+// noLaterDelivery reports whether ch cannot send a message after the current
+// reply: it does not implement conversation.LaterDeliveryChannel, or says
+// false. Closed by default (web-chat-design.md §4.2).
+func noLaterDelivery(ch conversation.Channel) bool {
+	l, ok := ch.(conversation.LaterDeliveryChannel)
+	return !ok || !l.CanDeliverLater()
 }

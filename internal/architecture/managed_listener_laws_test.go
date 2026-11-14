@@ -91,6 +91,13 @@ var adminClassResolvers = map[string]int{
 	// instance's public listener the listener gate refuses admin keys first,
 	// so a tenant_admin session is admitted only through the granted surface.
 	"internal/ui/admin_credentials.go": 2,
+	// GitHub #754: the keys page's POST gate (OperatorSurfaceAccessFor with
+	// the admin-key checker, surface project_keys). As for credentials, the
+	// listener gate refuses admin keys on the public listener first.
+	"internal/ui/project_keys.go": 1,
+	// GitHub #759: the Manage overview shows an admin every card. A view,
+	// not a gate: each card's destination keeps its own server gate.
+	"internal/ui/manage.go":            1,
 	"internal/ui/chat.go":              1,
 	"internal/ui/fixit_doctor.go":      1,
 	"internal/ui/memory.go":            1,

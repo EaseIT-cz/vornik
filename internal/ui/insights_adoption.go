@@ -227,12 +227,11 @@ type keyRow struct {
 // built only on tasks reports a fraction of the work and reads as "barely
 // used".
 //
-// ChatTurns and ToolCalls are DELIBERATELY ABSENT rather than shown as zero.
-// chat_audit_log has no counting repo method and tool_audit_log's filter has no
-// time bound, so neither can be counted here without a new repository surface.
-// A zero would read as "no chat, no tool calls", which on this deployment is
-// false by four orders of magnitude — and a wrong number is worse than a
-// missing one on a panel whose entire job is to report usage honestly.
+// ChatTurns and ToolCalls are counted through persistence.ActivityCounter
+// (GitHub #261). Where a surface cannot be counted, its *Counted flag is false
+// and the panel says "not counted here": a zero would read as "no chat, no
+// tool calls", which on the reference deployment was false by four orders of
+// magnitude.
 type activityTotals struct {
 	Tasks        int
 	RAGQueries   int
@@ -240,6 +239,11 @@ type activityTotals struct {
 	LLMCalls     int
 	CostUSD      float64
 	Tokens       int64
+
+	ChatTurns        int64
+	ChatTurnsCounted bool
+	ToolCalls        int64
+	ToolCallsCounted bool
 
 	// Truncated marks a count that hit the per-query page cap and is therefore
 	// a FLOOR, not a total.
@@ -547,10 +551,16 @@ func (s *Server) InsightsAdoption(w http.ResponseWriter, r *http.Request) {
 	s.collectKeyActivity(ctx, &data.Stats, queryIDs, data.AllowedProjects, since)
 	s.resolveEphemeralKeys(ctx, &data.Stats, concreteProjects(queryIDs, data.AllowedProjects))
 	data.Capabilities = s.collectCapabilities(ctx, since, queryIDs)
+	data.Stats.Activity.ChatTurns, data.Stats.Activity.ChatTurnsCounted = countActivity(ctx, s.chatAudit, queryIDs, since)
+	data.Stats.Activity.ToolCalls, data.Stats.Activity.ToolCallsCounted = countActivity(ctx, s.auditRepo, queryIDs, since)
 
 	switch {
 	case data.Stats.Activity.Tasks == 0 && data.Stats.Activity.RAGQueries == 0 &&
-		data.Stats.Activity.LLMCalls == 0:
+		data.Stats.Activity.LLMCalls == 0 && data.Stats.Activity.ChatTurns == 0 &&
+		data.Stats.Activity.ToolCalls == 0 &&
+		// "Nothing happened" needs every surface counted: an uncounted one is
+		// unknown, not zero (GitHub #261).
+		data.Stats.Activity.ChatTurnsCounted && data.Stats.Activity.ToolCallsCounted:
 		// Only when NOTHING happened on any surface. A task count of zero is
 		// not enough: most product use never schedules a task.
 		data.Notice = "No activity on any surface in the last 30 days."
@@ -1155,4 +1165,23 @@ func (s *Server) addMemoryWrites(ctx context.Context, st *adoptionStats, project
 			days.markProject(r.KeyID, a.ProjectID)
 		}
 	}
+}
+
+// countActivity sums repo's persistence.ActivityCounter over the session's
+// projects (one global count for an all-access session) since `since`
+// (GitHub #261). counted is false when repo is nil, does not count, or any
+// count fails: the panel then says "not counted here" instead of 0.
+func countActivity(ctx context.Context, repo any, queryIDs []string, since time.Time) (total int64, counted bool) {
+	ac, ok := repo.(persistence.ActivityCounter)
+	if !ok || repo == nil {
+		return 0, false
+	}
+	for _, pid := range projectsToIterate(queryIDs) {
+		n, err := ac.CountSince(ctx, pid, since)
+		if err != nil {
+			return 0, false
+		}
+		total += n
+	}
+	return total, true
 }

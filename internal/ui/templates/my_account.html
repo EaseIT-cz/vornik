@@ -51,7 +51,7 @@
                 <div class="flex items-center justify-between">
                     <h2 class="text-sm font-medium text-gray-200">Linked identities</h2>
                     <form method="POST" action="/ui/account/link-code">
-                        <button type="submit" class="rounded-md bg-brand-600 px-3 py-1.5 text-xs text-white hover:bg-brand-500">
+                        <button type="submit" class="v-btn v-btn--primary">
                             Generate link code
                         </button>
                     </form>
@@ -83,7 +83,7 @@
                                     <form method="POST" action="/ui/account/unlink" data-confirm="Unlink {{.Channel}} {{.ExternalID}} from your account?">
                                         <input type="hidden" name="channel" value="{{.Channel}}">
                                         <input type="hidden" name="externalId" value="{{.ExternalID}}">
-                                        <button type="submit" class="text-gray-400 hover:text-gray-200">Unlink</button>
+                                        <button type="submit" class="v-btn v-btn--quiet">Unlink</button>
                                     </form>
                                 </td>
                             </tr>
@@ -111,7 +111,7 @@
                            class="rounded-md bg-dark-900 border border-control px-2 py-1 text-xs text-gray-200 font-mono">
                     <input type="password" name="keySecret" placeholder="key secret" required autocomplete="off"
                            class="rounded-md bg-dark-900 border border-control px-2 py-1 text-xs text-gray-200 font-mono">
-                    <button type="submit" class="rounded-md bg-dark-800 border border-dark-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-dark-700">
+                    <button type="submit" class="v-btn v-btn--secondary">
                         Claim
                     </button>
                 </form>

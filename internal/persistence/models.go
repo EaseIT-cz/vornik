@@ -2835,8 +2835,16 @@ type ExecutionFilter struct {
 	ProjectIDs []string
 	TaskID     *string
 	Status     *ExecutionStatus
-	PageSize   int
-	Offset     int
+	// CompletedSince is a lower bound on executions.completed_at (NULL never
+	// matches). The home page's "Done today" counts by it (#756, design
+	// ui-design-refresh-design.md §14.2): tasks carry no completion time.
+	CompletedSince *time.Time
+	// NewestCompletedFirst orders by completed_at, newest first, instead of
+	// created_at (the home page's "Recently done", #756: a long job created
+	// days ago that finished a minute ago is the newest result).
+	NewestCompletedFirst bool
+	PageSize             int
+	Offset               int
 }
 
 // ArtifactFilter defines filtering options for artifact queries.

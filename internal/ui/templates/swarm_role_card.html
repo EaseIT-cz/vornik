@@ -1,9 +1,14 @@
 {{define "schemaRow"}}
 <div class="space-y-1">
-    <label class="block text-xs font-medium text-gray-300">
-        {{.Field.Label}}{{if .Field.Required}} <span class="text-red-800 dark:text-red-400">*</span>{{end}}
-        {{if .Field.ReadOnly}}<span class="text-[10px] uppercase tracking-wide text-gray-500">read-only</span>{{end}}
-    </label>
+    <div class="flex items-center gap-1">
+        <label class="text-xs font-medium text-gray-300">
+            {{.Field.Label}}{{if .Field.Required}} <span class="text-red-800 dark:text-red-400">*</span>{{end}}
+            {{if .Field.ReadOnly}}<span class="text-xs uppercase tracking-wide text-gray-500">read-only</span>{{end}}
+        </label>
+        {{/* Help is a hint beside the label, not a paragraph under the
+             control (#748 I); a button inside a label is invalid. */}}
+        {{if .Field.Help}}{{template "hintOpen" (printf "About %s" .Field.Label)}}{{.Field.Help}}{{template "hintClose"}}{{end}}
+    </div>
     {{if .Field.IsBool}}
     <select name="{{.Name}}" {{if .Field.ReadOnly}}disabled{{end}}
             class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
@@ -26,29 +31,39 @@
            {{if .Field.Default}}placeholder="{{.Field.Default}}"{{end}}
            class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
     {{end}}
-    {{if .Field.Help}}<p class="text-[11px] text-gray-500">{{.Field.Help}}</p>{{end}}
-    {{if .Err}}<p class="text-[11px] text-red-700 dark:text-red-300">{{.Err}}</p>{{end}}
+    {{if .Err}}<p class="text-xs text-red-700 dark:text-red-300">{{.Err}}</p>{{end}}
 </div>
 {{end}}
 
 {{define "swarm_role_card.html"}}
-<div class="role-card rounded-xl border border-dark-700 bg-dark-800/40 p-4 space-y-3" data-role-index="{{.Index}}">
+<div class="role-card rounded-xl border border-dark-700 bg-dark-800/40 p-4 space-y-2" data-role-index="{{.Index}}">
     <div class="flex items-center justify-between gap-2">
-        <h4 class="text-sm font-semibold text-gray-200 role-card-title">{{if .Name}}{{.Name}}{{else}}New role{{end}}</h4>
+        <div class="flex min-w-0 items-baseline gap-2">
+            <h4 class="text-sm font-semibold text-gray-200 role-card-title">{{if .Name}}{{.Name}}{{else}}New role{{end}}</h4>
+            {{with .Model}}<span class="truncate font-mono text-xs text-gray-400 role-card-model">{{.}}</span>{{end}}
+        </div>
         <div class="flex items-center gap-2 text-xs">
             <button type="button" class="text-gray-400 hover:text-gray-200" data-on-click="swarmMoveCard" data-args="[-1]" aria-label="Move up">▲</button>
             <button type="button" class="text-gray-400 hover:text-gray-200" data-on-click="swarmMoveCard" data-args="[1]" aria-label="Move down">▼</button>
             <button type="button" class="text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200" data-on-click="remove-closest" data-target=".role-card">Remove</button>
         </div>
     </div>
+    {{/* The card's settings fold (#748 I): open for a new card (no name
+         yet) and for a card holding a field error. The move and remove
+         controls above stay outside, so a card reorders without opening. */}}
+    <details class="vk-disc vk-disc-row"{{if or (not .Name) .HasErr}} open{{end}}>
+        <summary class="vk-disc-sum"><span class="vk-disc-title">Settings</span></summary>
+        <div class="vk-disc-body">
     {{range .Sections}}
-    <details class="rounded-lg border border-dark-700/60" {{if not .Advanced}}open{{end}}>
-        <summary class="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-300">{{.Title}}{{if .Advanced}} <span class="text-gray-500">(advanced)</span>{{end}}</summary>
-        <div class="px-3 pb-3 pt-1 space-y-3">
-            {{if .Help}}<p class="text-[11px] text-gray-400">{{.Help}}</p>{{end}}
+    <details class="vk-disc vk-disc-row"{{if or (not .Advanced) .HasErr}} open{{end}}>
+        <summary class="vk-disc-sum"><span class="vk-disc-title">{{.Title}}</span>{{if .Advanced}}<span class="vk-disc-meta">advanced</span>{{end}}</summary>
+        <div class="vk-disc-body">
+            {{if .Help}}<p class="text-xs text-gray-400">{{.Help}}</p>{{end}}
             {{range .Rows}}{{template "schemaRow" .}}{{end}}
         </div>
     </details>
     {{end}}
+        </div>
+    </details>
 </div>
 {{end}}

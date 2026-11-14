@@ -83,7 +83,7 @@
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono text-right">{{printf "%.4f" .CostUSD}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap text-xs">
                                     {{if .HallucinationSignalsJSON}}
-                                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-900/30 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/30" title="Hallucination signals fired on this turn — drill in for details">⚠</span>
+                                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-rose-900/30 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/30" title="Hallucination signals fired on this turn — drill in for details">⚠</span>
                                     {{else}}
                                         <span class="text-gray-700">—</span>
                                     {{end}}
@@ -131,13 +131,13 @@
                 <div>
                     <div class="flex items-baseline justify-between mb-2">
                         <div class="text-xs text-gray-500 uppercase tracking-wider">Hallucination signals · {{len .SelectedHallucinations}}</div>
-                        <a href="https://example.invalid" class="text-[10px] text-gray-600 italic" title="From buildChatGroundingContext + the hallucination detector running in dispatcher/agent_process.go on this reply.">detector trace</a>
+                        <a href="https://example.invalid" class="text-xs text-gray-600 italic" title="From buildChatGroundingContext + the hallucination detector running in dispatcher/agent_process.go on this reply.">detector trace</a>
                     </div>
                     <div class="space-y-2">
                         {{range .SelectedHallucinations}}
                         <div class="bg-dark-900 rounded-md border {{if eq .SeverityClass "rose"}}border-rose-700/50{{else if eq .SeverityClass "amber"}}border-amber-700/40{{else}}border-dark-700{{end}} px-3 py-2.5 text-xs">
                             <div class="flex items-center gap-2 mb-1 flex-wrap">
-                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {{if eq .SeverityClass "rose"}}bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/30{{else if eq .SeverityClass "amber"}}bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/30{{else}}bg-gray-700/40 text-gray-300{{end}}">{{.Severity}}</span>
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium {{if eq .SeverityClass "rose"}}bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-inset ring-rose-500/30{{else if eq .SeverityClass "amber"}}bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/30{{else}}bg-gray-700/40 text-gray-300{{end}}">{{.Severity}}</span>
                                 <span class="text-gray-500">·</span>
                                 <span class="font-mono text-gray-300">{{.Detector}}</span>
                                 {{if .ClaimType}}
@@ -145,18 +145,18 @@
                                     <span class="font-mono text-gray-400">{{.ClaimType}}</span>
                                 {{end}}
                                 {{if .RecordedAt}}
-                                    <span class="ml-auto font-mono text-gray-600 text-[10px]">{{.RecordedAt}}</span>
+                                    <span class="ml-auto font-mono text-gray-600 text-xs">{{.RecordedAt}}</span>
                                 {{end}}
                             </div>
                             <div class="text-gray-200">{{.Detail}}</div>
                             {{if .ClaimValue}}
-                            <div class="mt-1.5 text-gray-500"><span class="text-[10px] uppercase tracking-wider">claim:</span> <span class="font-mono text-gray-300 break-all">{{.ClaimValue}}</span></div>
+                            <div class="mt-1.5 text-gray-500"><span class="text-xs uppercase tracking-wider">claim:</span> <span class="font-mono text-gray-300 break-all">{{.ClaimValue}}</span></div>
                             {{end}}
                             {{if .Sentence}}
-                            <div class="mt-1.5 text-gray-500"><span class="text-[10px] uppercase tracking-wider">sentence:</span> <span class="text-gray-400 italic">{{.Sentence}}</span></div>
+                            <div class="mt-1.5 text-gray-500"><span class="text-xs uppercase tracking-wider">sentence:</span> <span class="text-gray-400 italic">{{.Sentence}}</span></div>
                             {{end}}
                             {{if .EvidenceSearched}}
-                            <div class="mt-1.5 text-gray-500"><span class="text-[10px] uppercase tracking-wider">evidence:</span> <span class="font-mono text-gray-500">{{.EvidenceSearched}}</span></div>
+                            <div class="mt-1.5 text-gray-500"><span class="text-xs uppercase tracking-wider">evidence:</span> <span class="font-mono text-gray-500">{{.EvidenceSearched}}</span></div>
                             {{end}}
                         </div>
                         {{end}}

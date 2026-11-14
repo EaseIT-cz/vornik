@@ -92,29 +92,6 @@ func TestDashboard_603_NeedsYouIsTheInboxCount(t *testing.T) {
 	}
 }
 
-// The Projects page is open to project-scoped sessions; the moved tiles keep
-// to what the session may see (the overview they came from was all-access).
-func TestProjects_603_ScopedSessionSeesItsOwnOnly(t *testing.T) {
-	root := writeSwarmFixture(t)
-	srv, _ := swarmEditServer(t, root)
-	if p := srv.projectReg.GetProject("p1"); p != nil {
-		p.Autonomy.Enabled = true
-	}
-	srv.autonomyEvalRepo = &fakeAutonomyEvalRepo{}
-	srv.activeChatSource = &fakeActiveChatSource{count: 7}
-	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "other-project"))
-	rec := httptest.NewRecorder()
-	srv.Projects(rec, req)
-	body := rec.Body.String()
-	if strings.Contains(body, `href="/ui/projects/p1" class="text-ink-200 font-medium truncate"`) {
-		t.Error("a session scoped to another project sees p1's autonomy row")
-	}
-	if strings.Contains(body, ">7<") {
-		t.Error("a scoped session sees the instance-wide chat count")
-	}
-}
-
 func TestDashboard_603_AllClearOnlyWhenNothingWaits(t *testing.T) {
 	if body := renderOverview(t, overviewServer(nil)); !strings.Contains(body, "All clear") {
 		t.Error("an empty overview must say All clear")
@@ -163,7 +140,11 @@ func TestDashboard_603_DoctorErrorsFromTheLastReport(t *testing.T) {
 	}
 }
 
-func TestProjects_603_NextEvalAndActiveChats(t *testing.T) {
+// §E (operator, 2026-11-12): the autonomy list and the active-chats count
+// belong on the landing page only; the Projects page copy left over from §C
+// is gone. The test was red before the removal (the Projects page rendered
+// both).
+func TestProjects_603E_NoAutonomyOrChatTiles(t *testing.T) {
 	root := writeSwarmFixture(t)
 	srv, _ := swarmEditServer(t, root)
 	if p := srv.projectReg.GetProject("p1"); p != nil {
@@ -177,30 +158,38 @@ func TestProjects_603_NextEvalAndActiveChats(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Projects(rec, httptest.NewRequest(http.MethodGet, "/projects", nil))
 	body := rec.Body.String()
-	for _, want := range []string{`id="autonomy-etas"`, "every 10m0s", "noop", `data-block="active-chats"`, ">5<", "autonomy-eta-label"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("projects page lacks %q", want)
+	for _, absent := range []string{`id="autonomy-etas"`, `data-block="autonomy"`, `data-block="active-chats"`, "Active Chats"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("projects page still renders %q", absent)
 		}
 	}
-	// The overview's At a glance section shows it too (§D), from the same loader.
-	if body := renderOverview(t, srv); !strings.Contains(body, `id="autonomy-etas"`) {
-		t.Error("the overview's At a glance section lost the autonomy list")
+	// The tiles live on the Diagnostics overview since #756.
+	rec = httptest.NewRecorder()
+	srv.DiagnosticsOverview(rec, httptest.NewRequest(http.MethodGet, "/diagnostics", nil))
+	overview := rec.Body.String()
+	for _, want := range []string{`id="autonomy-etas"`, "Active Chats"} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("the overview lost %q", want)
+		}
 	}
 }
 
 // §D (operator correction 2026-11-07): the statistics return as an At a
 // glance section, below Needs you and Health, not instead of them.
-func TestDashboard_603_AtAGlanceSitsBelowNeedsYou(t *testing.T) {
+// Since #756 the home page answers "what needs me?" first and the
+// statistics live on /ui/diagnostics: Needs you comes before the three
+// stats, and none of the engineering tiles render here.
+func TestDashboard_603_NeedsYouLeadsTheHomePage(t *testing.T) {
 	srv := overviewServer(overviewTasks(map[persistence.TaskStatus]int{persistence.TaskStatusAwaitingApproval: 1}),
 		WithActiveChatSource(&fakeActiveChatSource{count: 3}))
 	body := renderOverview(t, srv)
-	needs, glance := strings.Index(body, `data-block="needs-you"`), strings.Index(body, `data-block="at-a-glance"`)
-	if needs < 0 || glance < 0 || glance < needs {
-		t.Fatalf("Needs you at %d, At a glance at %d: the statistics must render, below Needs you", needs, glance)
+	needs, stats := strings.Index(body, `data-block="needs-you"`), strings.Index(body, `data-block="stats"`)
+	if needs < 0 || stats < 0 || stats < needs {
+		t.Fatalf("Needs you at %d, stats at %d: Needs you must lead", needs, stats)
 	}
-	for _, want := range []string{"Active Chats", "Autonomy · next eval", "Memory pipeline", "Judge · last 24h"} {
-		if !strings.Contains(body[glance:], want) {
-			t.Errorf("At a glance lacks %q", want)
+	for _, gone := range []string{"Active Chats", "Autonomy · next eval", "Memory pipeline", "Judge · last 24h"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("home still renders %q; it moved to /ui/diagnostics", gone)
 		}
 	}
 }
@@ -215,7 +204,7 @@ func TestDashboard_603_ScopedSessionSeesNoInstanceWideStats(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "mine"))
 	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
+	srv.DiagnosticsOverview(rec, req)
 	body := rec.Body.String()
 	if strings.Contains(body, "t-other-running") || strings.Contains(body, ">9<") {
 		t.Fatal("a scoped session sees another project's active task or the instance-wide chat count")

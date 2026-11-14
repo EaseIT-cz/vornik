@@ -1,0 +1,59 @@
+{{define "results.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    {{/* Results & cost (ui-design-refresh-design.md §15.2, #757): one
+         sentence, one chart, one table, over the last 14 UTC days. */}}
+    <main id="main" tabindex="-1" class="flex-1 max-w-5xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-6">
+            <div>
+                <h1 class="text-2xl font-semibold text-gray-100">Results &amp; cost</h1>
+                {{if .Summary}}<p class="mt-2 text-gray-300" data-block="summary">{{.Summary}}</p>{{end}}
+            </div>
+
+            <section class="v-card" data-block="daily-spend">
+                <h2 class="v-card__title">Daily spend</h2>
+                {{if .ChartShown}}
+                <div class="overflow-x-auto">{{template "barChart" .Chart}}</div>
+                <p class="mt-2 text-sm text-gray-400">{{.Chart.Answer}} 14-day total: {{.ChartTotal}}.</p>
+                {{else}}
+                <div class="v-empty"><div>Spend could not be loaded right now.</div></div>
+                {{end}}
+            </section>
+
+            <section class="v-card" data-block="by-assistant">
+                <h2 class="v-card__title">By assistant</h2>
+                {{if and .TableShown .Rows}}
+                <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead><tr class="text-sm text-gray-400"><th scope="col" class="py-2 pr-4 font-medium">Assistant</th><th scope="col" class="py-2 pr-4 font-medium text-right">Jobs done</th><th scope="col" class="py-2 font-medium text-right">Cost</th></tr></thead>
+                    <tbody>
+                    {{range .Rows}}
+                    <tr class="border-t border-dark-700">
+                        <td class="py-2 pr-4">{{if .ProjectID}}<a href="/ui/projects/{{.ProjectID}}" class="text-brand-400 hover:underline">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td>
+                        <td class="py-2 pr-4 text-right tabular-nums">{{.Jobs}}</td>
+                        <td class="py-2 text-right tabular-nums">{{printf "$%.2f" .Cost}}</td>
+                    </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                </div>
+                {{else if .TableShown}}
+                <div class="v-empty"><div class="v-empty__title">Nothing recorded in the last {{.Days}} days.</div><div>Ask an assistant for something and its results show up here.</div></div>
+                {{else}}
+                <div class="v-empty"><div>Results could not be loaded right now.</div></div>
+                {{end}}
+            </section>
+
+            <p class="flex flex-wrap gap-4 text-sm">
+                <a href="/ui/spend" class="text-brand-400 hover:underline">Detailed spend, models and quality</a>
+                <a href="/ui/insights/trends" class="text-brand-400 hover:underline">Trends</a>
+            </p>
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

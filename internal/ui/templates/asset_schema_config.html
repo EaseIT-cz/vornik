@@ -11,7 +11,7 @@
                 <div>
                     <h1 class="text-xl font-semibold text-gray-100">Project Config — schema</h1>
                     <p class="text-xs text-gray-500 font-mono mt-1">{{.ProjectID}}{{if .ConfigPath}} · {{.ConfigPath}}{{end}}</p>
-                    <p class="text-[11px] text-gray-500 mt-1">Every project parameter, rendered from the curated field schema. Advanced sections are collapsed.</p>
+                    <p class="text-xs text-gray-500 mt-1">Every project parameter, rendered from the curated field schema. Advanced sections are collapsed.</p>
                 </div>
                 <div class="flex items-center gap-3 text-sm">
                     <a href="/ui/projects/{{.ProjectID}}/config/form" class="text-gray-400 hover:text-gray-200 underline-offset-2 hover:underline">Guided form</a>
@@ -32,19 +32,20 @@
 
             <form method="POST" action="/ui/projects/{{.ProjectID}}/config/schema" class="space-y-5">
                 {{range .Schema.Sections}}
-                <details class="rounded-xl border border-dark-700 bg-dark-800/60" {{if not .Advanced}}open{{end}}>
-                    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-gray-200 flex items-center justify-between">
-                        <span>{{.Title}}{{if .Advanced}} <span class="text-[10px] uppercase tracking-wide text-gray-500 font-normal">advanced</span>{{end}}</span>
-                    </summary>
-                    <div class="px-4 pb-4 pt-1 space-y-4">
-                        {{if .Help}}<p class="text-[11px] text-gray-400 -mt-1">{{.Help}}</p>{{end}}
+                {{/* Open when basic or holding a field error, so a failed save
+                     shows its error (#748 L). */}}
+                {{$secErr := false}}{{range .Fields}}{{if formValue $.FieldErrors .Path}}{{$secErr = true}}{{end}}{{end}}
+                <details class="vk-disc"{{if or (not .Advanced) $secErr}} open{{end}}>
+                    <summary class="vk-disc-sum"><h2 class="vk-disc-title">{{.Title}}</h2>{{if .Advanced}}<span class="vk-disc-meta">advanced</span>{{end}}</summary>
+                    <div class="vk-disc-body">
+                        {{if .Help}}<p class="text-xs text-gray-400">{{.Help}}</p>{{end}}
                         {{range .Fields}}
                         {{$val := formValue $.Values .Path}}
                         {{$err := formValue $.FieldErrors .Path}}
                         <div class="space-y-1">
                             <label for="f-{{.Path}}" class="block text-xs font-medium text-gray-300">
                                 {{.Label}}{{if .Required}} <span class="text-red-800 dark:text-red-400">*</span>{{end}}
-                                {{if .ReadOnly}}<span class="text-[10px] uppercase tracking-wide text-gray-500">read-only</span>{{end}}
+                                {{if .ReadOnly}}<span class="text-xs uppercase tracking-wide text-gray-500">read-only</span>{{end}}
                             </label>
                             {{if .IsBool}}
                             <select id="f-{{.Path}}" name="{{.HTMLName}}" {{if .ReadOnly}}disabled{{end}}
@@ -68,8 +69,8 @@
                                    {{if .Default}}placeholder="{{.Default}}"{{end}}
                                    class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
                             {{end}}
-                            {{if .Help}}<p class="text-[11px] text-gray-500">{{.Help}}</p>{{end}}
-                            {{if $err}}<p class="text-[11px] text-red-700 dark:text-red-300">{{$err}}</p>{{end}}
+                            {{if .Help}}<p class="text-xs text-gray-500">{{.Help}}</p>{{end}}
+                            {{if $err}}<p class="text-xs text-red-700 dark:text-red-300">{{$err}}</p>{{end}}
                         </div>
                         {{end}}
                     </div>

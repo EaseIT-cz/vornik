@@ -16,6 +16,17 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# new_sid PREFIX prints a session id no other case in this run uses (GitHub
+# #684). A hint fires once per session, so two cases that drew the same
+# $RANDOM shared a session and the second printed nothing; the counter lives
+# in a file so an id taken inside $(...) is still never reused.
+new_sid() {
+  local n
+  n=$(( $(cat "$WORK/sid-counter" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" >"$WORK/sid-counter"
+  printf '%s%s' "$1" "$n"
+}
+
 REPO="$WORK/repo"
 mkdir -p "$REPO"
 DATA="$WORK/data"
@@ -69,7 +80,7 @@ OUT="$(run call codex "$(post t1 Bash "$(cmd_in 'go test ./...')" "$(str $'--- F
 assert_hint "failed go test" "$OUT" "$RC" "failing test's name"
 grep -q 'mcp__vornik__recall' <<<"$(ctx_of "$OUT")" || fail "test_failed: {recall} is not the Codex tool name: $OUT"
 for o in 'ok  pkg 0.1s' '10 passed, 0 failed' 'no failures'; do
-  OUT="$(run call codex "$(post "tz$RANDOM" Bash "$(cmd_in 'pytest')" "$(str "$o")")")"; RC=$?
+  OUT="$(run call codex "$(post "$(new_sid tz)" Bash "$(cmd_in 'pytest')" "$(str "$o")")")"; RC=$?
   assert_silent "passing output: $o" "$OUT" "$RC"
 done
 

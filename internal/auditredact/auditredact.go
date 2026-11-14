@@ -287,3 +287,12 @@ func (r *Repo) log(entry *persistence.ToolAuditEntry, action secrets.Action, cou
 		Interface("by_type", counts).
 		Msg(msg)
 }
+
+// CountSince forwards to the wrapped repository's count (GitHub #261); counting
+// reads no content, so nothing is scanned.
+func (r *Repo) CountSince(ctx context.Context, projectID string, since time.Time) (int64, error) {
+	if ac, ok := r.inner.(persistence.ActivityCounter); ok {
+		return ac.CountSince(ctx, projectID, since)
+	}
+	return 0, persistence.ErrActivityNotCounted
+}

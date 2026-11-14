@@ -112,7 +112,7 @@ func renderSpend(t *testing.T, srv *Server, window string) string {
 func renderDashboard(t *testing.T, srv *Server) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/diagnostics", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	return rec.Body.String()
 }

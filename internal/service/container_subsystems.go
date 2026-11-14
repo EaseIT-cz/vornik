@@ -136,7 +136,7 @@ func (c *Container) initMCPWithBudget(budget time.Duration) {
 func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 	daemonServers := indexMCPServersByName(c.daemonMCPServers())
 	desired := make(map[string][]mcp.ServerConfig)
-	var withheld []string
+	var refused []mcp.Refusal
 	var noGrant []mcpconnect.NoGrant
 	withheldWhy := map[string]map[string]string{}
 	seen := map[string]bool{}
@@ -227,7 +227,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 								Str("project", p.ID).
 								Str("server", s.Name).
 								Msg("MCP: refusing to register server — the project entry and the daemon-scope server both declare auth; give the project entry its own transport/url to own the credential, or drop its auth block to inherit the daemon's")
-							withheld = append(withheld, p.ID+"/"+s.Name+": both the project entry and the daemon-scope server declare auth")
+							refused = append(refused, mcp.Refusal{Scope: p.ID, Server: s.Name, Reason: "both the project entry and the daemon-scope server declare auth"})
 							continue
 						}
 						auth = daemon.Auth
@@ -252,7 +252,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 						Str("project", p.ID).
 						Str("server", s.Name).
 						Msg("MCP: refusing to register server — the project subscribes to it by name only, but config.yaml mcp.servers defines no server of that name; add it there or give the project entry its own transport")
-					withheld = append(withheld, p.ID+"/"+s.Name+": subscribed by name only, but config.yaml mcp.servers does not define it")
+					refused = append(refused, mcp.Refusal{Scope: p.ID, Server: s.Name, Reason: "subscribed by name only, but config.yaml mcp.servers does not define it"})
 					continue
 				}
 			}
@@ -271,7 +271,8 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			if authProjectID == "" {
 				scopeLabel = "project " + p.ID + " (credential at daemon scope)"
 			}
-			if !c.applyMCPAuth(&cfg, auth, grants, authProjectID, scopeLabel, p.ID) {
+			if err := c.resolveMCPAuth(&cfg, auth, grants, authProjectID, scopeLabel, p.ID); err != nil {
+				refused = append(refused, mcp.Refusal{Scope: p.ID, Server: s.Name, Reason: refusalReason(err)})
 				continue
 			}
 			if cfg.NotDialledReason != "" {
@@ -292,9 +293,9 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 		}
 		desired[p.ID] = servers
 	}
-	sort.Strings(withheld)
+	sortRefusals(refused)
 	c.mcpWithheldMu.Lock()
-	c.mcpWithheld = withheld
+	c.mcpRefusedProject = refused
 	c.mcpNoGrantProject = noGrant
 	c.mcpWithheldMu.Unlock()
 	c.pruneNoGrantWarned(true, seen)
@@ -351,8 +352,20 @@ func mcpCredentialScope(projectID string, inheritedFromDaemon bool) string {
 // this is where presence is enforced — with an ERROR naming the secret, which
 // is the diagnostic the operator needs either way.
 func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grants mcpauth.Grants, projectID, scope string, consuming ...string) bool {
+	return c.resolveMCPAuth(cfg, auth, grants, projectID, scope, consuming...) == nil
+}
+
+// errMCPAuthNotApplied would mark an OAuth credential applyMCPOAuthToken could
+// not apply. Today that function always returns true (a server with no grant is
+// registered, not dialled, and reported on the no-grant channel), so this is
+// never returned; it keeps a future false from registering silently.
+var errMCPAuthNotApplied = errors.New("the oauth credential could not be applied")
+
+// resolveMCPAuth is applyMCPAuth with the refusal's reason: nil means register,
+// an error is the refusal the hub and the doctor show (GitHub #625 item 5).
+func (c *Container) resolveMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grants mcpauth.Grants, projectID, scope string, consuming ...string) error {
 	if auth.IsZero() {
-		return true
+		return nil
 	}
 	inj, err := mcpauth.Resolve(auth, cfg.Transport, c.secretSource(), grants)
 	switch {
@@ -360,7 +373,10 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 		// mode: oauth resolves from the token store rather than from config —
 		// the credential is a grant a human gave, not a value an operator
 		// wrote. Delegated to the connector, which refreshes as needed.
-		return c.applyMCPOAuthToken(cfg, projectID, scope, consuming...)
+		if !c.applyMCPOAuthToken(cfg, projectID, scope, consuming...) {
+			return errMCPAuthNotApplied
+		}
+		return nil
 	case err != nil:
 		// Never log the error's cause at a level that could carry a value:
 		// mcpauth guarantees its messages name fields and secret NAMES only.
@@ -369,7 +385,7 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 			Str("server", cfg.Name).
 			Str("scope", scope).
 			Msg("MCP: refusing to register server — its auth block could not be resolved")
-		return false
+		return err
 	}
 	consumer := projectID
 	if len(consuming) > 0 {
@@ -386,11 +402,11 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 			}
 			return current.Headers, nil
 		}
-		return true
+		return nil
 	}
 	cfg.AuthHeaders = inj.Headers
 	cfg.AuthEnv = inj.Env
-	return true
+	return nil
 }
 
 // configuredMCPProgram mints the stdio program of a ServerConfig built from
@@ -445,6 +461,7 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 	declared := c.daemonMCPServers()
 	servers := make([]mcp.ServerConfig, 0, len(declared))
 	seen := map[string]bool{}
+	var refused []mcp.Refusal
 	for _, s := range declared {
 		cfg := mcp.ServerConfig{
 			Name:           s.Name,
@@ -460,7 +477,8 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 		c.guardManagedMCPServer(&cfg, true) // GitHub #560 M1c D5, #566 E3: config.yaml's URL
 		// Daemon-scope servers are admin-configured and have no project
 		// allowlist to check against.
-		if !c.applyMCPAuth(&cfg, s.Auth, mcpauth.Grants{Unrestricted: true}, "", "daemon") {
+		if err := c.resolveMCPAuth(&cfg, s.Auth, mcpauth.Grants{Unrestricted: true}, "", "daemon"); err != nil {
+			refused = append(refused, mcp.Refusal{Server: s.Name, Reason: refusalReason(err)})
 			continue
 		}
 		if cfg.NotDialledReason != "" {
@@ -470,6 +488,10 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 		servers = append(servers, cfg)
 	}
 	c.pruneNoGrantWarned(false, seen)
+	sortRefusals(refused)
+	c.mcpWithheldMu.Lock()
+	c.mcpRefusedDaemon = refused
+	c.mcpWithheldMu.Unlock()
 	return servers
 }
 
@@ -491,11 +513,24 @@ func (c *Container) daemonMCPServers() []config.MCPServerConfig {
 	return c.Config.MCP.Servers
 }
 
+// publishDaemonMCPURLs hands the daemon catalogue's URLs to the registry, so
+// a name-only `broker` subscription resolves to the broker the daemon dials
+// (trading-broker-design.md, amendment 2026-11-13). Called at start and on
+// every reload (publishDaemonMCPServers).
+func publishDaemonMCPURLs(servers []config.MCPServerConfig) {
+	urls := make(map[string]string, len(servers))
+	for _, srv := range servers {
+		urls[srv.Name] = srv.URL
+	}
+	registry.SetDaemonMCPURLs(urls)
+}
+
 // publishDaemonMCPServers makes a freshly-parsed catalog the live one. Called
 // from the reload activator before the MCP subsystems reconcile against it.
 func (c *Container) publishDaemonMCPServers(servers []config.MCPServerConfig) {
 	snapshot := append([]config.MCPServerConfig(nil), servers...)
 	c.daemonMCPLive.Store(&snapshot)
+	publishDaemonMCPURLs(servers)
 }
 
 // publicOrigin returns the CURRENT public origin — the value a reload
@@ -1409,9 +1444,46 @@ func (c *Container) chatAuthShim() *chatauth.Shim {
 	return c.chatShim
 }
 
-// mcpWithheldServers returns the servers the last config resolution withheld.
+// mcpWithheldServers is the doctor's list: the project servers the last
+// project pass refused, as "project/server: reason".
 func (c *Container) mcpWithheldServers() []string {
 	c.mcpWithheldMu.Lock()
 	defer c.mcpWithheldMu.Unlock()
-	return append([]string(nil), c.mcpWithheld...)
+	out := make([]string, 0, len(c.mcpRefusedProject))
+	for _, r := range c.mcpRefusedProject {
+		out = append(out, r.Scope+"/"+r.Server+": "+r.Reason)
+	}
+	return out
+}
+
+// mcpRefusals is the hub's list (GitHub #625 item 5): the daemon pass's
+// refusals, then the project pass's.
+func (c *Container) mcpRefusals() []mcp.Refusal {
+	c.mcpWithheldMu.Lock()
+	defer c.mcpWithheldMu.Unlock()
+	out := append([]mcp.Refusal(nil), c.mcpRefusedDaemon...)
+	return append(out, c.mcpRefusedProject...)
+}
+
+// maxRefusalReason caps a refusal's text on the hub; the journal keeps it whole.
+const maxRefusalReason = 300
+
+// refusalReason is the text a refusal shows. mcpauth's errors name fields and
+// secret names, never a value (they are logged at ERROR for the same reason).
+func refusalReason(err error) string {
+	s := err.Error()
+	if len(s) > maxRefusalReason {
+		s = strings.ToValidUTF8(s[:maxRefusalReason], "") + "…"
+	}
+	return s
+}
+
+// sortRefusals orders refusals by scope, then server.
+func sortRefusals(rs []mcp.Refusal) {
+	sort.Slice(rs, func(i, j int) bool {
+		if rs[i].Scope != rs[j].Scope {
+			return rs[i].Scope < rs[j].Scope
+		}
+		return rs[i].Server < rs[j].Server
+	})
 }

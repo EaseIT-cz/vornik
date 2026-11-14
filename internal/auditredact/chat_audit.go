@@ -2,6 +2,7 @@ package auditredact
 
 import (
 	"context"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -212,4 +213,13 @@ func recordEvents(ctx context.Context, audit persistence.SecretRedactionAuditRep
 	if err := audit.Record(ctx, events); err != nil && logger != nil {
 		logger.Warn().Err(err).Msg(failMsg)
 	}
+}
+
+// CountSince forwards to the wrapped repository's count (GitHub #261); counting
+// reads no content, so nothing is scanned.
+func (c *ChatAudit) CountSince(ctx context.Context, projectID string, since time.Time) (int64, error) {
+	if ac, ok := c.inner.(persistence.ActivityCounter); ok {
+		return ac.CountSince(ctx, projectID, since)
+	}
+	return 0, persistence.ErrActivityNotCounted
 }

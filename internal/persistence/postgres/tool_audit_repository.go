@@ -183,3 +183,19 @@ func (r *ToolAuditRepository) ToolLatencyP95ByProjectTool(ctx context.Context, s
 	}
 	return out, nil
 }
+
+// CountSince counts tool calls at or after since, in projectID or, when it is
+// empty, in every project (persistence.ActivityCounter, GitHub #261).
+func (r *ToolAuditRepository) CountSince(ctx context.Context, projectID string, since time.Time) (int64, error) {
+	q := `SELECT COUNT(*) FROM tool_audit_log WHERE created_at >= $1`
+	args := []any{since}
+	if projectID != "" {
+		q += ` AND project_id = $2`
+		args = append(args, projectID)
+	}
+	var n int64
+	if err := r.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("tool audit: count since: %w", err)
+	}
+	return n, nil
+}

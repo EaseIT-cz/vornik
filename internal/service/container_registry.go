@@ -97,6 +97,7 @@ func (c *Container) initRegistry() error {
 	// registry and by every one the daemon builds later (the doctor's, the
 	// wizard's, the UI's), which start from the process default.
 	registry.SetDefaultAgentModelCatalogue(c.Config.AgentAdmin.ModelIDs())
+	publishDaemonMCPURLs(c.daemonMCPServers())
 	reg := registry.New()
 	if err := reg.Load(configDir); err != nil {
 		var ve *registry.ValidationError

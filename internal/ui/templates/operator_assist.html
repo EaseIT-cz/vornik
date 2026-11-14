@@ -17,7 +17,7 @@
                 Describe a change to a project's autonomy settings, swarm or workflows in plain language. The assistant edits a private, secret-sanitized copy of the configuration, validates the result with the daemon's own loaders, classifies its blast radius, has a separate judge model check it, and files a <strong>proposal</strong> for you to approve. Classes C, D and E never auto-apply; class E needs your explicit approval and shows the effective permission diff.
             </p>
             {{if .AutoApplyClasses}}
-            <div class="glass rounded-xl border border-amber-700/50 bg-amber-900/20 px-4 py-2.5 text-xs text-amber-200">
+            <div class="glass rounded-xl border border-amber-700/50 bg-amber-900/20 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200">
                 <strong>This project auto-applies class {{range $i, $c := .AutoApplyClasses}}{{if $i}}, {{end}}{{$c}}{{end}}.</strong>
                 A proposal in {{if eq (len .AutoApplyClasses) 1}}that class{{else}}those classes{{end}} that passes the judge is written to the live configuration immediately, without a further approval step from you.
             </div>
@@ -82,7 +82,7 @@
             {{end}}
 
             {{if .Error}}
-            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-200">{{.Error}}</div>
+            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-800 dark:text-red-200">{{.Error}}</div>
             {{end}}
 
             {{with .Result}}
@@ -102,22 +102,22 @@
                 </div>
                 <div class="px-4 py-3 space-y-3 text-sm">
                     {{if .Refusal}}
-                    <div class="text-red-200">{{.Refusal.Message}}</div>
+                    <div class="text-red-800 dark:text-red-200">{{.Refusal.Message}}</div>
                     {{range .Refusal.Findings}}<div class="text-xs font-mono text-gray-400">· {{.}}</div>{{end}}
                     {{else}}
                     {{if .Proposal}}
                     <div>Proposal <a href="/ui/admin/control-plane?section=proposals&amp;proposal={{.Proposal.ID}}" class="font-mono text-brand-400 hover:text-brand-300">{{.Proposal.ID}}</a> · {{.Proposal.Status}} · <span class="text-gray-400">{{.Proposal.Title}}</span></div>
                     {{end}}
                     {{if .Summary}}<div class="text-gray-300">{{.Summary}}</div>{{end}}
-                    {{if .Verdict}}{{if .Verdict.Judged}}<div class="text-xs text-gray-400">Judge ({{.Verdict.Model}}): {{.Verdict.Summary}}</div>{{else}}<div class="text-xs text-amber-300">Not judged: {{.Verdict.Reason}}</div>{{end}}{{end}}
+                    {{if .Verdict}}{{if .Verdict.Judged}}<div class="text-xs text-gray-400">Judge ({{.Verdict.Model}}): {{.Verdict.Summary}}</div>{{else}}<div class="text-xs text-amber-700 dark:text-amber-300">Not judged: {{.Verdict.Reason}}</div>{{end}}{{end}}
                     {{if not .HasEvidence}}<div class="text-xs text-gray-500">No measurement supports this change — a requested change, not an evidence-driven one.</div>{{end}}
                     {{if .Permissions}}
                     <div class="text-xs">
-                        <div class="text-amber-300 uppercase tracking-wider">Effective permission diff — confirm the subject before approving</div>
+                        <div class="text-amber-700 uppercase tracking-wider dark:text-amber-300">Effective permission diff — confirm the subject before approving</div>
                         {{range .Permissions}}<div class="font-mono text-gray-300">{{.Subject}} gains: {{if .Gains}}{{range $i, $g := .Gains}}{{if $i}}, {{end}}{{$g}}{{end}}{{else}}nothing{{end}}; loses: {{if .Loses}}{{range $i, $l := .Loses}}{{if $i}}, {{end}}{{$l}}{{end}}{{else}}nothing{{end}}</div>{{end}}
                     </div>
                     {{end}}
-                    {{range .Ignored}}<div class="text-xs text-amber-300">Ignored deletion attempt: <span class="font-mono">{{.}}</span></div>{{end}}
+                    {{range .Ignored}}<div class="text-xs text-amber-700 dark:text-amber-300">Ignored deletion attempt: <span class="font-mono">{{.}}</span></div>{{end}}
                     {{if .Diff}}<pre class="text-xs font-mono bg-dark-950 border border-dark-700 rounded-md p-3 overflow-x-auto whitespace-pre">{{.Diff}}</pre>{{end}}
                     {{end}}
                 </div>

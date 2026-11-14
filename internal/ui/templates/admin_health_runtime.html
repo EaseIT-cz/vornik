@@ -51,11 +51,11 @@
                                 <td class="px-3 py-2 text-gray-400 font-mono max-w-md truncate" title="{{.Path}}">{{if .Path}}{{.Path}}{{else}}<span class="text-gray-600 italic">not resolved</span>{{end}}</td>
                                 <td class="px-3 py-2">
                                     {{if not .Configured}}
-                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-700/40 text-gray-400">disabled</span>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-700/40 text-gray-400">disabled</span>
                                     {{else if .OK}}
-                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">ok</span>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">ok</span>
                                     {{else}}
-                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">missing</span>
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">missing</span>
                                     {{end}}
                                 </td>
                                 <td class="px-3 py-2 text-gray-400 max-w-md truncate" title="{{.Error}}">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
@@ -84,22 +84,22 @@
                     {{if eq .Storage.Backend "filesystem"}}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Path</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Path</div>
                             <div class="font-mono text-gray-200 break-all">{{.Storage.FilesystemPath}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Writable</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Writable</div>
                             <div>
                                 {{if .Storage.FilesystemWritable}}
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">yes</span>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">yes</span>
                                 {{else}}
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">no</span>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">no</span>
                                 {{end}}
                             </div>
                         </div>
                         {{if .Storage.FilesystemError}}
                         <div class="bg-rose-900/20 rounded p-3 border border-rose-900/40 md:col-span-3">
-                            <div class="text-rose-800 dark:text-rose-400 uppercase tracking-wider text-[10px] mb-1">Error</div>
+                            <div class="text-rose-800 dark:text-rose-400 uppercase tracking-wider text-xs mb-1">Error</div>
                             <div class="font-mono text-rose-600 dark:text-rose-200 text-xs">{{.Storage.FilesystemError}}</div>
                         </div>
                         {{end}}
@@ -109,38 +109,38 @@
                     {{if eq .Storage.Backend "s3"}}
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Region</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Region</div>
                             <div class="font-mono text-gray-200">{{if .Storage.S3Region}}{{.Storage.S3Region}}{{else}}—{{end}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Bucket</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Bucket</div>
                             <div class="font-mono text-gray-200">{{if .Storage.S3Bucket}}{{.Storage.S3Bucket}}{{else}}—{{end}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Prefix</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Prefix</div>
                             <div class="font-mono text-gray-200">{{if .Storage.S3Prefix}}{{.Storage.S3Prefix}}{{else}}(root){{end}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Endpoint</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Endpoint</div>
                             <div class="font-mono text-gray-200 break-all">{{if .Storage.S3Endpoint}}{{.Storage.S3Endpoint}}{{else}}<span class="text-gray-500 italic">aws default</span>{{end}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Path style</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Path style</div>
                             <div class="text-gray-200">{{if .Storage.S3UsePathStyle}}yes{{else}}no (virtual host){{end}}</div>
                         </div>
                         <div class="bg-dark-900/50 rounded p-3 border border-dark-700/60">
-                            <div class="text-gray-500 uppercase tracking-wider text-[10px] mb-1">Reachable</div>
+                            <div class="text-gray-500 uppercase tracking-wider text-xs mb-1">Reachable</div>
                             <div>
                                 {{if .Storage.S3Reachable}}
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">yes</span>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">yes</span>
                                 {{else}}
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">no</span>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-900/40 text-rose-700 dark:text-rose-300">no</span>
                                 {{end}}
                             </div>
                         </div>
                         {{if .Storage.S3Error}}
                         <div class="bg-rose-900/20 rounded p-3 border border-rose-900/40 md:col-span-3">
-                            <div class="text-rose-800 dark:text-rose-400 uppercase tracking-wider text-[10px] mb-1">Error</div>
+                            <div class="text-rose-800 dark:text-rose-400 uppercase tracking-wider text-xs mb-1">Error</div>
                             <div class="font-mono text-rose-600 dark:text-rose-200 text-xs">{{.Storage.S3Error}}</div>
                         </div>
                         {{end}}

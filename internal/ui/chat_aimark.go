@@ -23,7 +23,7 @@ func WithAIMarker(m *aimark.Marker) ServerOption {
 // for each history entry that shows a marked message (matched from the end,
 // by content), and puts the turn's marks on the response headers. Marking
 // never withholds the reply.
-func (s *Server) markChatReplies(ctx context.Context, w http.ResponseWriter, sent []string, history []chat.Message) map[int]string {
+func (s *Server) markChatReplies(ctx context.Context, header http.Header, sent []string, history []chat.Message) map[int]string {
 	if s.aiMarker == nil {
 		return nil
 	}
@@ -51,8 +51,8 @@ func (s *Server) markChatReplies(ctx context.Context, w http.ResponseWriter, sen
 		}
 	}
 	if len(headerMarks) > 0 {
-		w.Header().Set("AI-Disclosure", "ai-generated")
-		w.Header().Set("X-Vornik-AI-Mark", strings.Join(headerMarks, ", "))
+		header.Set("AI-Disclosure", "ai-generated")
+		header.Set("X-Vornik-AI-Mark", strings.Join(headerMarks, ", "))
 	}
 	return marks
 }

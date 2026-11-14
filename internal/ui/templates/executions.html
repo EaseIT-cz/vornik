@@ -60,11 +60,11 @@
                     {{range .Executions}}
                     <a href="/ui/executions/{{.ID}}" class="tap block glass rounded-xl border border-dark-700 px-4 py-3 hover:border-dark-600 transition-colors">
                         <div class="flex items-center justify-between gap-2">
-                            <span class="text-[11px] font-mono text-gray-300" title="{{.ID}}">{{shortID .ID}}</span>
+                            <span class="text-xs font-mono text-gray-300" title="{{.ID}}">{{shortID .ID}}</span>
                             {{template "taskStatusBadge" .Status}}
                         </div>
                         <div class="text-xs text-gray-400 mt-1">{{.ProjectID}} · {{.WorkflowID}}{{if ne .CurrentStep "—"}} · step: {{.CurrentStep}}{{end}}</div>
-                        <div class="text-[11px] text-gray-500 mt-1">task <span title="{{.TaskID}}">{{shortID .TaskID}}</span>{{if .StartedAgo}} · started {{.StartedAgo}}{{end}}{{if .Duration}} · {{.Duration}}{{end}}</div>
+                        <div class="text-xs text-gray-500 mt-1">task <span title="{{.TaskID}}">{{shortID .TaskID}}</span>{{if .StartedAgo}} · started {{.StartedAgo}}{{end}}{{if .Duration}} · {{.Duration}}{{end}}</div>
                     </a>
                     {{end}}
                 </div>
@@ -73,7 +73,7 @@
                 <div class="hidden md:block glass rounded-xl border border-dark-700 overflow-hidden">
                     <table class="min-w-full divide-y divide-dark-700">
                         <thead class="bg-dark-800/60">
-                            <tr class="text-left text-[11px] uppercase tracking-wider text-gray-500">
+                            <tr class="text-left text-xs uppercase tracking-wider text-gray-500">
                                 <th class="px-3 py-2.5 font-medium">
                                     <input type="checkbox" id="exec-bulk-toggle-all" data-on-change="execBulkToggleAll"
                                            class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select all">
@@ -96,8 +96,8 @@
                                            data-on-click="stop" data-on-change="execBulkUpdateCount"
                                            class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select execution">
                                 </td>
-                                <td class="px-5 py-3 text-[11px] font-mono text-gray-300" title="{{.ID}}">{{shortID .ID}}</td>
-                                <td class="px-5 py-3 text-[11px] font-mono text-gray-400">
+                                <td class="px-5 py-3 text-xs font-mono text-gray-300" title="{{.ID}}">{{shortID .ID}}</td>
+                                <td class="px-5 py-3 text-xs font-mono text-gray-400">
                                     <a href="/ui/tasks/{{.TaskID}}" data-on-click="stop" class="hover:text-accent-300" title="{{.TaskID}}">{{shortID .TaskID}}</a>
                                 </td>
                                 <td class="px-5 py-3 text-sm text-gray-300">{{.ProjectID}}</td>

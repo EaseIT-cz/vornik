@@ -185,24 +185,20 @@
                     <svg width="{{.PerfChart.SVGWidth}}" height="{{.PerfChart.SVGHeight}}"
                          viewBox="0 0 {{.PerfChart.SVGWidth}} {{.PerfChart.SVGHeight}}"
                          aria-label="Daily P&amp;L chart" role="img"
-                         class="overflow-visible">
+                         class="c-chart overflow-visible">
 
                         {{/* Zero baseline, spanning the plot area (between the axis gutters). */}}
                         <line x1="{{.PerfChart.PlotLeft}}" y1="{{.PerfChartBaseline}}"
                               x2="{{.PerfChart.PlotRight}}"
                               y2="{{.PerfChartBaseline}}"
-                              stroke="#374151" stroke-width="1"/>
+                              class="c-axis"/>
 
                         {{/* Y-axis value labels: realized P&L (left), equity (right). */}}
                         {{range .PerfChart.YAxisLeft}}
-                        <text x="{{.X}}" y="{{add .Y 3}}" font-size="8" fill="#6b7280"
-                              text-anchor="{{.Anchor}}"
-                              font-family="ui-monospace,monospace">{{.Label}}</text>
+                        <text x="{{.X}}" y="{{add .Y 4}}" text-anchor="{{.Anchor}}">{{.Label}}</text>
                         {{end}}
                         {{range .PerfChart.YAxisRight}}
-                        <text x="{{.X}}" y="{{add .Y 3}}" font-size="8" fill="#818cf8"
-                              text-anchor="{{.Anchor}}"
-                              font-family="ui-monospace,monospace">{{.Label}}</text>
+                        <text class="c-s4" x="{{.X}}" y="{{add .Y 4}}" text-anchor="{{.Anchor}}">{{.Label}}</text>
                         {{end}}
 
                         {{/* Realized P&L bars. */}}
@@ -210,8 +206,7 @@
                         {{if gt .BarH 0}}
                         <rect x="{{.X}}" y="{{.BarY}}" width="26" height="{{.BarH}}"
                               rx="2"
-                              fill="{{if .BarAboveBaseline}}#34d399{{else}}#f87171{{end}}"
-                              opacity="0.8">
+                              class="{{if .BarAboveBaseline}}c-ok{{else}}c-danger{{end}}">
                             <title>{{.Date}}: realized</title>
                         </rect>
                         {{end}}
@@ -221,11 +216,11 @@
                         {{if and .PerfChart.HasEquity .PerfChart.PolylinePoints}}
                         <polyline
                             points="{{.PerfChart.PolylinePoints}}"
-                            fill="none" stroke="#818cf8" stroke-width="1.5"
+                            class="c-line-s4"
                             stroke-linejoin="round" stroke-linecap="round"/>
                         {{range .PerfChart.Points}}
                         {{if .HasEquity}}
-                        <circle cx="{{.EX}}" cy="{{.EY}}" r="2.5" fill="#818cf8">
+                        <circle class="c-s4" cx="{{.EX}}" cy="{{.EY}}" r="3">
                             <title>{{.Date}}: equity {{.ELabel}}</title>
                         </circle>
                         {{end}}
@@ -235,9 +230,7 @@
                         {{/* X-axis day labels. ShowLabel is pre-computed (every-other) in Go. */}}
                         {{range .PerfChart.Points}}
                         {{if .ShowLabel}}
-                        <text x="{{add .X 13}}" y="{{.LabelY}}"
-                              font-size="8" fill="#6b7280" text-anchor="middle"
-                              font-family="ui-monospace,monospace">{{.DateShort}}</text>
+                        <text x="{{add .X 13}}" y="{{.LabelY}}" text-anchor="middle">{{.DateShort}}</text>
                         {{end}}
                         {{end}}
                     </svg>

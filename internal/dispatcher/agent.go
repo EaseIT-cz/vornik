@@ -123,6 +123,12 @@ type Request struct {
 	// 2026-07-28). Empty means "unknown"; no identity claim is made.
 	ChannelIdentity string
 
+	// NoLaterDelivery: the originating channel cannot send the person a
+	// message after this reply (it does not implement
+	// conversation.LaterDeliveryChannel as true), so the prompt tells the
+	// lead not to promise a follow-up (web-chat-design.md §4.2).
+	NoLaterDelivery bool
+
 	// ContextTier signals the session's context-budget headroom
 	// (PEAK / GOOD / DEGRADING / POOR). Zero-value (TierPeak) means
 	// "no degradation signal" — defaults apply. When the caller

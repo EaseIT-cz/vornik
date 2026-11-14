@@ -81,21 +81,21 @@
                     {{if .Baseline.HasRuns}}
                     <dl class="grid grid-cols-3 gap-3 text-sm">
                         <div>
-                            <dt class="text-[11px] text-gray-500 uppercase tracking-wider">Runs</dt>
+                            <dt class="text-xs text-gray-500 uppercase tracking-wider">Runs</dt>
                             <dd class="text-gray-100 font-mono">{{.Baseline.RunCount}}</dd>
                         </div>
                         <div>
-                            <dt class="text-[11px] text-gray-500 uppercase tracking-wider">Failure rate</dt>
+                            <dt class="text-xs text-gray-500 uppercase tracking-wider">Failure rate</dt>
                             <dd class="text-gray-100 font-mono">{{printf "%.1f%%" .Baseline.FailureRatePct}} <span class="text-gray-500">({{.Baseline.FailureCount}}/{{.Baseline.RunCount}})</span></dd>
                         </div>
                         <div>
-                            <dt class="text-[11px] text-gray-500 uppercase tracking-wider">Avg cost / run</dt>
+                            <dt class="text-xs text-gray-500 uppercase tracking-wider">Avg cost / run</dt>
                             <dd class="text-gray-100 font-mono">${{printf "%.4f" .Baseline.AvgCostUSD}}</dd>
                         </div>
                     </dl>
                     {{if .Baseline.TopFailureClasses}}
                     <div class="mt-2">
-                        <p class="text-[11px] text-gray-500 uppercase tracking-wider mb-1">Top failure classes</p>
+                        <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Top failure classes</p>
                         <ul class="flex flex-wrap gap-1.5 text-xs">
                             {{range .Baseline.TopFailureClasses}}
                             <li class="rounded bg-dark-700/60 px-2 py-0.5 font-mono text-rose-600 dark:text-rose-200">{{.ErrorClass}} <span class="text-gray-500">×{{.Count}}</span></li>
@@ -104,18 +104,18 @@
                     </div>
                     {{end}}
                     {{if .Baseline.DirectionHint}}
-                    <p class="text-[11px] text-gray-500 mt-2">Heuristic, not a forecast: this proposal {{.Baseline.DirectionHint}}.</p>
+                    <p class="text-xs text-gray-500 mt-2">Heuristic, not a forecast: this proposal {{.Baseline.DirectionHint}}.</p>
                     {{end}}
                     {{else}}
                     <p class="text-sm text-gray-400">No runs in window — no baseline cost / failure profile to show yet.</p>
                     {{end}}
-                    <p class="text-[11px] text-gray-500 mt-2">This is the workflow's <span class="text-gray-400">current</span> profile from execution telemetry (the baseline the proposal targets), not a simulated forecast of the change.</p>
+                    <p class="text-xs text-gray-500 mt-2">This is the workflow's <span class="text-gray-400">current</span> profile from execution telemetry (the baseline the proposal targets), not a simulated forecast of the change.</p>
                 </div>
                 {{end}}
                 {{if .PredictedImpact}}
                 <div>
                     <p class="text-sm text-gray-200">{{.PredictedImpact}}</p>
-                    <p class="text-[11px] text-gray-500 mt-1">Summary derived from the proposal's kind, confidence, evidence, and diff size.</p>
+                    <p class="text-xs text-gray-500 mt-1">Summary derived from the proposal's kind, confidence, evidence, and diff size.</p>
                 </div>
                 {{end}}
             </div>
@@ -132,11 +132,8 @@
             {{end}}
 
             {{if .CanModify}}
-            <details class="glass rounded-xl border border-dark-700 overflow-hidden group">
-                <summary class="cursor-pointer list-none px-5 py-3 border-b border-dark-700/0 group-open:border-dark-700/60 flex items-center gap-2 text-sm font-semibold text-gray-300 uppercase tracking-wider">
-                    <svg class="h-3.5 w-3.5 transform transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-                    Modify before approving
-                </summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Modify before approving</h2></summary>
                 <form method="post" action="/ui/admin/workflow-proposals/{{.Proposal.ID}}/modify" class="px-5 py-4 space-y-3">
                     <p class="text-xs text-gray-500">Edit the architect's YAML, then save. The revised YAML replaces the proposal's content (pending only) so you can approve a tweaked version. Saving does NOT apply to disk.</p>
                     <textarea name="proposal_yaml" rows="18" class="w-full bg-dark-900 border border-control text-gray-200 text-xs rounded-md px-3 py-2 font-mono">{{.Proposal.ProposalYAML}}</textarea>

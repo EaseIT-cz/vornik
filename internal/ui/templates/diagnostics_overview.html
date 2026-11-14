@@ -1,0 +1,448 @@
+{{define "diagnostics_overview.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-surface-900 text-ink-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-6">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+                <h1 class="text-2xl font-display font-bold text-ink-100">Diagnostics</h1>
+                <span class="htmx-indicator text-xs text-ink-500" role="status" aria-live="polite">refreshing…</span>
+            </div>
+            {{/* The At-a-glance tiles that lived on the home page until #756
+                 (ui-design-refresh-design.md §14.2), moved unchanged. Every
+                 session may open this page: loadGlance withholds the
+                 instance-wide figures from a project-scoped session and the
+                 section says why. */}}
+            <div id="dashboard-live" class="space-y-6"
+                 aria-live="polite" aria-atomic="false"
+                 hx-ext="sse"
+                 sse-connect="/api/v1/live/fleet"
+                 hx-get="/ui/diagnostics?window={{.WindowParam}}&limit={{.Limit}}"
+                 hx-trigger="sse:fleet-changed, every 30s"
+                 hx-select="#dashboard-live"
+                 hx-target="this"
+                 hx-swap="outerHTML"
+                 hx-indicator=".htmx-indicator">
+
+            {{/* At a glance (web UI design §D, operator correction
+                 2026-11-07): the statistics, below Needs you and Health. */}}
+            <h2 class="text-sm font-semibold text-ink-300 pt-2" data-block="at-a-glance">At a glance</h2>
+            {{if .GlanceRestricted}}<p class="text-xs text-ink-500" data-line="glance-restricted">Instance-wide statistics are shown to sessions with access to every project; your projects' figures are on their own pages.</p>{{end}}
+            <!-- Stat counts — compact strip (re-tiered onto the statStrip
+                 primitive; the 4-card text-3xl block was disproportionate
+                 next to the action-oriented operator queue above it). -->
+            <div class="glass rounded-xl border border-surface-600 overflow-hidden">
+                {{template "statStrip" (dict "Items" (slice
+                    (dict "Label" "Projects"  "Value" .ProjectCount)
+                    (dict "Label" "Queued"    "Value" (index .TaskCounts "QUEUED"))
+                    (dict "Label" "Running"   "Value" (index .TaskCounts "RUNNING"))
+                    (dict "Label" "Completed" "Value" (index .TaskCounts "COMPLETED"))
+                ))}}
+            </div>
+
+            <!-- LLM Spend (rolling windows, USD). Source: task_llm_usage.
+                 The 24h card carries a sparkline of hourly spend. -->
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                {{template "spendCard" (dict "Label" "Spend · 24h"    "USD" .Spend.Day24hUSD     "Color" "cyan"   "SparkLine" .Spend.Sparkline "SparkFilled" .Spend.SparklineFilled)}}
+                {{template "spendCard" (dict "Label" "Spend · 7 days" "USD" .Spend.Day7USD       "Color" "cyan")}}
+                {{template "spendCard" (dict "Label" "Spend · 30 days" "USD" .Spend.Day30USD     "Color" "cyan")}}
+                {{template "spendCard" (dict "Label" "Month-to-date"  "USD" .Spend.MonthToDateUSD "Color" "purple")}}
+            </div>
+
+            {{/* Response-cache card — Vornik's own Phase E response cache
+                 (calls answered from llm_response_cache without a
+                 provider). Hidden until the cache has at least one hit.
+                 Named for the cache it measures and its window, and
+                 drills down to the tile on /ui/spend that shows the same
+                 figures under the same labels: it is NOT the provider
+                 prompt-cache savings shown beside spend there, and its
+                 figures are not windowed (2026-10-14,
+                 local-llm-response-cache-design.md §Cache-savings figures
+                 on the console). */}}
+            {{if .CacheSavings.Available}}
+            <div id="response-cache-card" class="glass rounded-xl border border-emerald-700/40 overflow-hidden">
+                {{template "sectionHeader" (dict "Title" "Response cache (served by Vornik)" "Href" "/ui/spend#response-cache" "HrefLabel" "drill down →")}}
+                <div class="px-5 py-4 grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                        <dt class="text-ink-500 uppercase tracking-wider text-xs">$ saved · all cached entries</dt>
+                        <dd class="text-3xl font-semibold text-emerald-700 dark:text-emerald-300 tabular-nums" title="Sum over every cached entry of hit_count × CostUSD(model, prompt_tokens, completion_tokens). Counts from when each entry was cached; entries unused for retention.response_cache_days are deleted with their counts, so this is not a lifetime total and not a 24h / 7d / 30d window. A lower bound: entries without token counts and un-priced models add hits but no dollars.">{{fmtUSD .CacheSavings.TotalSavingsUSD}}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-ink-500 uppercase tracking-wider text-xs">LLM calls skipped · all cached entries{{template "hintOpen" "About skipped calls"}}Calls Vornik answered itself, with no provider call. Separate from the provider prompt-cache savings shown with spend, which cover a 24h / 7d / 30d window.{{template "hintClose"}}</dt>
+                        <dd class="text-3xl font-semibold text-ink-100 tabular-nums">{{.CacheSavings.TotalHits}}</dd>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+
+            <!-- "Right now" panel: active tasks + active chats + next
+                 autonomy evals, all in one place so an operator landing
+                 on /ui/ sees in-flight signal without having to
+                 bookmark per-page URLs. -->
+            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+                <!-- Active tasks tile. Header kept hand-rolled: it carries the
+                     pageSizeSelector widget on the right, which sectionHeader
+                     (Title + single link/meta) can't express. Token-migrated
+                     and uses border-b border-surface-600/60 to match sectionHeader. -->
+                <div class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    <div class="px-5 py-3.5 border-b border-surface-600/60 flex items-center justify-between gap-2">
+                        <h2 class="text-sm font-semibold text-ink-200 flex items-center gap-2">
+                            <svg class="h-4 w-4 text-accent-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                            Active Tasks
+                        </h2>
+                        <div class="flex items-center gap-3">
+                            <span class="text-xs text-ink-400">{{.ActiveTaskCount}} in flight</span>
+                            {{/* Shared page-size selector — same chrome as
+                                 /ui/audit, /ui/tasks, /ui/memory, /ui/projects,
+                                 /ui/spend. Lands the operator back on / with
+                                 the new ?limit=N. */}}
+                            {{template "pageSizeSelector" (dict "Action" "/ui/" "Current" .Limit "Options" .LimitOptions "Hidden" (dict "window" .WindowParam))}}
+                        </div>
+                    </div>
+                    {{if .ActiveTasks}}
+                    <ul class="divide-y divide-surface-600/30">
+                        {{range .ActiveTasks}}
+                        <li class="px-5 py-2.5 hover:bg-surface-700/30 transition-colors">
+                            <a href="/ui/tasks/{{.ID}}" class="flex items-center justify-between gap-3 text-sm" title="{{.ID}}">
+                                <div class="min-w-0 flex-1">
+                                    <div class="text-brand-400 font-mono text-xs truncate">{{shortID .ID}}</div>
+                                    <div class="text-xs text-ink-500 mt-0.5">{{.ProjectID}}</div>
+                                </div>
+                                <span class="text-xs font-medium px-2 py-0.5 rounded
+                                    {{if eq (printf "%s" .Status) "RUNNING"}}bg-accent-500/15 text-accent-300
+                                    {{else if eq (printf "%s" .Status) "LEASED"}}bg-blue-500/15 text-blue-700 dark:text-blue-300
+                                    {{else if eq (printf "%s" .Status) "QUEUED"}}bg-amber-500/15 text-amber-700 dark:text-amber-300
+                                    {{else}}bg-ink-500/15 text-ink-300{{end}}">{{.Status}}</span>
+                            </a>
+                        </li>
+                        {{end}}
+                    </ul>
+                    {{else}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">No active tasks. Schedule one via the API or Telegram bot.</div>
+                    {{end}}
+                </div>
+
+                <!-- Active chats tile -->
+                <div class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    {{template "sectionHeader" (dict "Title" "Active Chats")}}
+                    <div class="px-5 py-6 flex flex-col items-center justify-center">
+                        <div class="text-4xl font-bold text-purple-800 dark:text-purple-400">{{.ActiveChatCount}}</div>
+                        <div class="text-xs text-ink-500 mt-2">Telegram conversations in flight</div>
+                    </div>
+                </div>
+
+                <!-- Autonomy ETAs tile -->
+                <div class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    {{template "sectionHeader" (dict "Title" "Autonomy · next eval" "MetaText" (printf "%d active" (len .AutonomyETAs)))}}
+                    {{if .AutonomyETAs}}
+                    <ul class="divide-y divide-surface-600/30" id="autonomy-etas">
+                        {{range .AutonomyETAs}}
+                        <li class="px-5 py-2.5">
+                            <div class="flex items-center justify-between text-sm">
+                                <a href="/ui/projects/{{.ProjectID}}" class="text-ink-200 font-medium truncate">{{.ProjectID}}</a>
+                                <span class="text-xs text-amber-700 dark:text-amber-300 font-mono autonomy-eta-label" data-next-eval-iso="{{.NextEvalAtISO}}">{{.EtaLabel}}</span>
+                            </div>
+                            <div class="text-xs text-ink-500 mt-0.5 flex items-center gap-2">
+                                <span>every {{.Interval}}</span>
+                                {{if .AgoLabel}}<span class="text-ink-600">·</span><span>last {{.AgoLabel}}</span>{{end}}
+                                {{if .LastOutcome}}<span class="text-ink-600">·</span><span class="text-ink-400">{{.LastOutcome}}</span>{{end}}
+                            </div>
+                        </li>
+                        {{end}}
+                    </ul>
+                    {{else}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">No projects have autonomy enabled.</div>
+                    {{end}}
+                </div>
+
+            </div>
+
+            <!-- "Health & knowledge" row (2026-05-12). Memory pipeline,
+                 learning, judge quality — three subsystems that landed
+                 after this page was last rebuilt. Each tile silently
+                 empties when its repo isn't wired so older deployments
+                 don't crash.
+
+                 The middle slot held a "Trading safety" tile until
+                 2026-08-07, when all trading data was removed from this
+                 page at the operator's instruction (see
+                 TestDashboardHasNoTradingData). It is now the Learning
+                 tile — do NOT reintroduce trading here. -->
+            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+                <!-- Memory pipeline tile: KG extraction progress + ingest
+                     backlog summed across projects. Drives the operator
+                     question "is RAG keeping up with what tasks emit?". -->
+                <div data-tile="memory" class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    {{template "sectionHeader" (dict "Title" "Memory pipeline" "Href" "/ui/memory" "HrefLabel" "drill in →")}}
+                    {{if .Memory.Enabled}}
+                    <div class="px-5 py-4 space-y-3">
+                        <div>
+                            <div class="flex items-baseline justify-between text-xs text-ink-400 mb-1.5">
+                                <span>KG extraction</span>
+                                <span class="font-mono tabular-nums text-ink-300">{{.Memory.ChunksDone}} / {{.Memory.ChunksTotal}} chunks</span>
+                            </div>
+                            <div class="h-1.5 rounded-full bg-surface-900 overflow-hidden">
+                                <div class="h-full bg-brand-500/70" style="width: {{printf "%.1f" .Memory.PercentDone}}%"></div>
+                            </div>
+                            <div class="mt-1 text-xs text-ink-500 font-mono tabular-nums">{{printf "%.1f" .Memory.PercentDone}}% · {{.Memory.ChunksPending}} pending</div>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 text-center text-xs pt-1">
+                            <div>
+                                <div class="text-lg font-semibold text-ink-200 tabular-nums">{{.Memory.Entities}}</div>
+                                <div class="text-ink-500">entities</div>
+                            </div>
+                            <div>
+                                <div class="text-lg font-semibold text-ink-200 tabular-nums">{{.Memory.Edges}}</div>
+                                <div class="text-ink-500">edges</div>
+                            </div>
+                            <div>
+                                <div class="text-lg font-semibold text-ink-200 tabular-nums">{{.Memory.Mentions}}</div>
+                                <div class="text-ink-500">mentions</div>
+                            </div>
+                        </div>
+                        <div class="text-xs border-t border-surface-600/40 pt-2 flex items-center justify-between">
+                            <span class="text-ink-500">Ingest backlog</span>
+                            {{if gt .Memory.IngestBacklog 0}}
+                            <span class="font-mono tabular-nums text-amber-700 dark:text-amber-300">{{.Memory.IngestBacklog}} queued · {{.Memory.IngestProjects}} proj</span>
+                            {{else}}
+                            <span class="font-mono text-emerald-800 dark:text-emerald-400">drained</span>
+                            {{end}}
+                        </div>
+                    </div>
+                    {{else}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">KG extraction not wired.</div>
+                    {{end}}
+                </div>
+
+                <!-- Learning tile: what the deployment has distilled from its
+                     own runs. The draft count is the only actionable number
+                     in the row — a draft skill injects nowhere until an
+                     operator approves it — so it gets the amber/emerald
+                     treatment the Memory tile gives its ingest backlog.
+                     The instinct row is Enterprise-only (see
+                     DashboardLearning); Community renders one row fewer.
+                     data-tile is the seam the render tests slice on (they
+                     bound the fragment at the next data-tile, since
+                     html/template strips marker comments). -->
+                <div data-tile="learning" class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    {{template "sectionHeader" (dict "Title" "Learning" "Href" "/ui/admin/skills" "HrefLabel" "review →")}}
+                    {{if .Learning.Enabled}}
+                    <div class="px-5 py-4 space-y-3">
+                        <div class="grid grid-cols-3 gap-2 text-center text-xs">
+                            <div>
+                                <div class="text-lg font-semibold text-emerald-800 dark:text-emerald-400 tabular-nums">{{.Learning.Trusted}}</div>
+                                <div class="text-ink-500">trusted</div>
+                            </div>
+                            <div>
+                                <div class="text-lg font-semibold text-ink-200 tabular-nums">{{.Learning.Active}}</div>
+                                <div class="text-ink-500">active</div>
+                            </div>
+                            <div>
+                                <div class="text-lg font-semibold {{if gt .Learning.Draft 0}}text-amber-700 dark:text-amber-300{{else}}text-ink-400{{end}} tabular-nums">{{.Learning.Draft}}</div>
+                                <div class="text-ink-500">draft</div>
+                            </div>
+                        </div>
+                        <div class="text-xs border-t border-surface-600/40 pt-2 flex items-center justify-between">
+                            <span class="text-ink-500">Review queue</span>
+                            {{if gt .Learning.Draft 0}}
+                            <a href="/ui/admin/skills" class="font-mono tabular-nums text-amber-700 dark:text-amber-300 hover:underline">{{.Learning.Draft}} awaiting approval</a>
+                            {{else}}
+                            <span class="font-mono text-emerald-800 dark:text-emerald-400">review queue clear</span>
+                            {{end}}
+                        </div>
+                        {{if .Learning.InstinctsAvailable}}
+                        <div class="text-xs flex items-center justify-between">
+                            <span class="text-ink-500">Instincts live</span>
+                            <a href="/ui/admin/instincts" class="font-mono tabular-nums text-ink-300 hover:underline">{{.Learning.InstinctsLive}}</a>
+                        </div>
+                        {{end}}
+                        <div class="text-xs text-ink-500 tabular-nums">{{.Learning.Total}} skills in the store</div>
+                    </div>
+                    {{else if .Learning.Restricted}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">Instance-wide totals — admin only.</div>
+                    {{else}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">Skill store not wired.</div>
+                    {{end}}
+                </div>
+
+                <!-- Judge tile: hallucination judge verdict distribution
+                     over the rolling 24h window. The pass% bar is sized
+                     vs. the headline so a healthy day reads green at a
+                     glance and a regression day reads rose-heavy. -->
+                {{$judgeMeta := printf "%d verdicts" .Judge.Total}}{{if eq .Judge.Total 1}}{{$judgeMeta = "1 verdict"}}{{end}}
+                <div data-tile="judge" class="glass rounded-xl border border-surface-600 overflow-hidden">
+                    {{template "sectionHeader" (dict "Title" "Judge · last 24h" "MetaText" $judgeMeta)}}
+                    {{if .Judge.Enabled}}
+                        {{if gt .Judge.Total 0}}
+                        <div class="px-5 py-4 space-y-3">
+                            <div class="grid grid-cols-3 gap-2 text-center text-xs">
+                                <div>
+                                    <div class="text-lg font-semibold text-emerald-800 dark:text-emerald-400 tabular-nums">{{.Judge.Pass}}</div>
+                                    <div class="text-ink-500">pass</div>
+                                </div>
+                                <div>
+                                    <div class="text-lg font-semibold text-rose-800 dark:text-rose-400 tabular-nums">{{.Judge.Fail}}</div>
+                                    <div class="text-ink-500">fail</div>
+                                </div>
+                                <div>
+                                    <div class="text-lg font-semibold text-amber-700 dark:text-amber-300 tabular-nums">{{.Judge.Abstain}}</div>
+                                    <div class="text-ink-500">abstain</div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex items-baseline justify-between text-xs text-ink-400 mb-1.5">
+                                    <span>Pass rate</span>
+                                    <span class="font-mono tabular-nums text-ink-300">{{printf "%.0f" .Judge.PercentPass}}%</span>
+                                </div>
+                                <div class="h-1.5 rounded-full bg-surface-900 overflow-hidden">
+                                    <div class="h-full {{if ge .Judge.PercentPass 80.0}}bg-emerald-500/70{{else if ge .Judge.PercentPass 50.0}}bg-amber-500/70{{else}}bg-rose-500/70{{end}}" style="width: {{printf "%.1f" .Judge.PercentPass}}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        {{else}}
+                        <div class="px-5 py-6 text-center text-xs text-ink-500">No verdicts in the last 24h.</div>
+                        {{end}}
+                    {{else}}
+                    <div class="px-5 py-6 text-center text-xs text-ink-500">Judge not wired.</div>
+                    {{end}}
+                </div>
+
+            </div>
+
+            <!-- Model Leaderboard (top 10 role+model combos per window).
+                 All three small result sets are rendered once; JS swaps tbody
+                 visibility locally so 1d/7d/30d changes are instant. -->
+            {{if or .TopModels1d .TopModels7d .TopModels30d}}
+            <div class="glass rounded-xl border border-surface-600 overflow-hidden" data-leaderboard data-limit="{{.Limit}}">
+                <div class="px-5 py-3.5 border-b border-surface-600/60 flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                        <h2 class="text-sm font-semibold text-ink-200">Model Leaderboard <span class="text-ink-500 font-normal">· last {{.WindowLabel}}</span></h2>
+                        <p class="text-xs text-ink-500 mt-0.5">ranked by total cost</p>
+                    </div>
+                    <div class="inline-flex items-center gap-1 rounded-lg border border-control bg-surface-800/60 p-0.5" role="group" aria-label="Leaderboard window">
+                        <button type="button" data-leaderboard-window="1d" aria-pressed="{{if eq .WindowParam "1d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "1d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">1d</button>
+                        <button type="button" data-leaderboard-window="7d" aria-pressed="{{if eq .WindowParam "7d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "7d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">7d</button>
+                        <button type="button" data-leaderboard-window="30d" aria-pressed="{{if eq .WindowParam "30d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "30d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">30d</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                        <thead><tr class="border-b border-surface-600/60">
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">#</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Role</th>
+                            <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Model</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Steps</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Tokens in</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Tokens out</th>
+                            <th scope="col" class="px-4 py-2 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Cost</th>
+                        </tr></thead>
+                        <tbody data-leaderboard-panel="1d" class="divide-y divide-surface-600/30" {{if ne .WindowParam "1d"}}hidden{{end}}>
+                            {{range $i, $r := .TopModels1d}}
+                            <tr class="hover:bg-surface-700/40 transition-colors">
+                                <td class="px-4 py-1.5 text-ink-500 tabular-nums">{{add $i 1}}</td>
+                                <td class="px-4 py-1.5 text-ink-300">{{$r.Role}}</td>
+                                <td class="px-4 py-1.5 text-ink-500 font-mono text-xs">{{$r.Model}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{$r.StepCount}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.PromptTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.CompletionTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-accent-400 font-semibold tabular-nums">{{fmtUSD $r.CostUSD}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                        <tbody data-leaderboard-panel="7d" class="divide-y divide-surface-600/30" {{if ne .WindowParam "7d"}}hidden{{end}}>
+                            {{range $i, $r := .TopModels7d}}
+                            <tr class="hover:bg-surface-700/40 transition-colors">
+                                <td class="px-4 py-1.5 text-ink-500 tabular-nums">{{add $i 1}}</td>
+                                <td class="px-4 py-1.5 text-ink-300">{{$r.Role}}</td>
+                                <td class="px-4 py-1.5 text-ink-500 font-mono text-xs">{{$r.Model}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{$r.StepCount}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.PromptTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.CompletionTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-accent-400 font-semibold tabular-nums">{{fmtUSD $r.CostUSD}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                        <tbody data-leaderboard-panel="30d" class="divide-y divide-surface-600/30" {{if ne .WindowParam "30d"}}hidden{{end}}>
+                            {{range $i, $r := .TopModels30d}}
+                            <tr class="hover:bg-surface-700/40 transition-colors">
+                                <td class="px-4 py-1.5 text-ink-500 tabular-nums">{{add $i 1}}</td>
+                                <td class="px-4 py-1.5 text-ink-300 capitalize">{{$r.Role}}</td>
+                                <td class="px-4 py-1.5 text-ink-500 font-mono text-xs">{{$r.Model}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{$r.StepCount}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.PromptTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-ink-400 tabular-nums">{{fmtTokens $r.CompletionTokens}}</td>
+                                <td class="px-4 py-1.5 text-right text-accent-400 font-semibold tabular-nums">{{fmtUSD $r.CostUSD}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{end}}
+
+            </div>
+
+            <nav class="flex flex-wrap gap-x-4 gap-y-2 text-xs text-ink-400" aria-label="Detail pages" data-block="links">
+                <a href="/ui/tasks" class="hover:text-ink-200">Tasks →</a>
+                <a href="/ui/spend" class="hover:text-ink-200">Spend →</a>
+                <a href="/ui/insights/trends" class="hover:text-ink-200">Trends →</a>
+                <a href="/ui/memory" class="hover:text-ink-200">Memory →</a>
+                <a href="/ui/admin/skills" class="hover:text-ink-200">Learning →</a>
+                <a href="/ui/projects" class="hover:text-ink-200">Projects →</a>
+            </nav>
+        </div>
+    </main>
+
+    {{template "pageFooter" .}}
+    <!-- Live autonomy ETA ticker. Server-rendered EtaLabel is a
+         snapshot at page-load time; without this script the
+         countdown freezes until the operator manually refreshes
+         (operator-reported 2026-05-05 — "5m wait took much longer
+         than that, seconds wouldn't refresh"). Updates each
+         .autonomy-eta-label every 1s by parsing its
+         data-next-eval-iso attribute and formatting the delta.
+         When the deadline passes, switches to "due now" so the
+         operator knows the eval should be firing imminently.
+         Page Visibility API: only ticks when the tab is visible
+         to avoid wasted setInterval cycles in background tabs. -->
+    <script>
+      // The leaderboard result sets are preloaded in the page. Delegate the
+      // click handler so it also works after the dashboard's HTMX live swap.
+      document.addEventListener("click", function (event) {
+        var button = event.target.closest("[data-leaderboard-window]");
+        if (!button) return;
+        var leaderboard = button.closest("[data-leaderboard]");
+        if (!leaderboard) return;
+
+        var windowName = button.getAttribute("data-leaderboard-window");
+        leaderboard.querySelectorAll("[data-leaderboard-panel]").forEach(function (panel) {
+          panel.hidden = panel.getAttribute("data-leaderboard-panel") !== windowName;
+        });
+        leaderboard.querySelectorAll("[data-leaderboard-window]").forEach(function (tab) {
+          var active = tab === button;
+          tab.setAttribute("aria-pressed", active ? "true" : "false");
+          tab.classList.toggle("bg-accent-500/20", active);
+          tab.classList.toggle("text-accent-300", active);
+          tab.classList.toggle("text-ink-400", !active);
+          tab.classList.toggle("hover:bg-surface-700/70", !active);
+          tab.classList.toggle("hover:text-ink-200", !active);
+        });
+
+        // Persist the selected tab for a refresh, browser navigation, and the
+        // dashboard's periodic HTMX update without requesting a new page now.
+        var url = new URL(window.location.href);
+        url.searchParams.set("window", windowName);
+        window.history.replaceState(null, "", url);
+        var live = document.getElementById("dashboard-live");
+        if (live) live.setAttribute("hx-get", "/ui/diagnostics?window=" + windowName + "&limit=" + leaderboard.dataset.limit);
+      });
+
+    </script>
+</body>
+</html>
+{{end}}

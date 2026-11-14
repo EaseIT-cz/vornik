@@ -194,17 +194,6 @@ func (s *Server) MemoryProject(w http.ResponseWriter, r *http.Request, projectID
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 
-	type epochRow struct {
-		ID                  string
-		CreatedAt           time.Time
-		ClosedAt            *time.Time
-		ChunksAdmitted      int
-		ChunksQuarantined   int
-		ChunksVerified      int
-		ChunksSuperseded    int
-		IsActive            bool
-		IsTargetForRollback bool // true when older than the most recent active epoch
-	}
 	type quarantineRow struct {
 		ID               string
 		SourceArtifactID string
@@ -246,8 +235,15 @@ func (s *Server) MemoryProject(w http.ResponseWriter, r *http.Request, projectID
 		QuarantineByGate  map[string]int
 		QuarantinePending []quarantineRow
 
-		Epochs    []epochRow
-		Rollbacks []rollbackRow
+		// Epochs is every loaded epoch, newest first; EpochsRecent is the
+		// newest EpochsShownOpen of them and EpochsOlder the rest, which the
+		// Operate tab folds behind a disclosure (#748 G). The console's
+		// template `slice` is a list builder (server.go), so the split is
+		// made here.
+		Epochs       []epochRow
+		EpochsRecent []epochRow
+		EpochsOlder  []epochRow
+		Rollbacks    []rollbackRow
 
 		// Per-table page-size limits feed the pageSizeSelector
 		// partial at the head of each panel. Each query param is
@@ -259,6 +255,9 @@ func (s *Server) MemoryProject(w http.ResponseWriter, r *http.Request, projectID
 		RollbacksLimit  int
 		EvictionLimit   int
 		LimitOptions    []int
+		// EpochsLimitOptions is the Epochs selector's options: the shared
+		// set plus 500, the default (#748 G).
+		EpochsLimitOptions []int
 
 		// Visualizations
 		Pipeline      pipelineFunnel
@@ -296,10 +295,11 @@ func (s *Server) MemoryProject(w http.ResponseWriter, r *http.Request, projectID
 		// parseEpochsLimit (not parsePageSize) accepts 1–500 so operators
 		// with >100 snapshots can reach all of them in the rollback picker.
 		// parsePageSize's PageSizeOptions max is 100 — the cap this fixes.
-		EpochsLimit:    parseEpochsLimit(r.URL.Query().Get("epochs_limit")),
-		RollbacksLimit: parsePageSize(r.URL.Query().Get("rollbacks_limit")),
-		EvictionLimit:  parsePageSize(r.URL.Query().Get("eviction_limit")),
-		LimitOptions:   PageSizeOptions,
+		EpochsLimit:        parseEpochsLimit(r.URL.Query().Get("epochs_limit")),
+		RollbacksLimit:     parsePageSize(r.URL.Query().Get("rollbacks_limit")),
+		EvictionLimit:      parsePageSize(r.URL.Query().Get("eviction_limit")),
+		LimitOptions:       PageSizeOptions,
+		EpochsLimitOptions: EpochsLimitOptions,
 	}
 
 	if s.projectReg != nil {
@@ -362,30 +362,11 @@ func (s *Server) MemoryProject(w http.ResponseWriter, r *http.Request, projectID
 	}
 
 	if s.corpusEpochs != nil {
-		eps, _ := s.corpusEpochs.ListEpochs(ctx, projectID, data.EpochsLimit)
-		// The "most recent active epoch" is the rollback baseline:
-		// targeting it is a no-op, targeting older epochs deactivates
-		// newer ones. UI flags rollback-eligible rows so the action
-		// button only appears where it'd do something.
-		var mostRecentActive time.Time
-		for _, e := range eps {
-			if e.IsActive && e.CreatedAt.After(mostRecentActive) {
-				mostRecentActive = e.CreatedAt
-			}
-		}
-		data.Epochs = make([]epochRow, 0, len(eps))
-		for _, e := range eps {
-			data.Epochs = append(data.Epochs, epochRow{
-				ID:                  e.ID,
-				CreatedAt:           e.CreatedAt,
-				ClosedAt:            e.ClosedAt,
-				ChunksAdmitted:      e.ChunksAdmitted,
-				ChunksQuarantined:   e.ChunksQuarantined,
-				ChunksVerified:      e.ChunksVerified,
-				ChunksSuperseded:    e.ChunksSuperseded,
-				IsActive:            e.IsActive,
-				IsTargetForRollback: !mostRecentActive.IsZero() && e.CreatedAt.Before(mostRecentActive),
-			})
+		// Best effort, as before: a store error renders an empty table.
+		data.Epochs, _ = s.loadMemoryEpochs(ctx, projectID, data.EpochsLimit)
+		data.EpochsRecent, data.EpochsOlder = data.Epochs, nil
+		if len(data.Epochs) > EpochsShownOpen {
+			data.EpochsRecent, data.EpochsOlder = data.Epochs[:EpochsShownOpen], data.Epochs[EpochsShownOpen:]
 		}
 		rbs, _ := s.corpusEpochs.ListRollbacks(ctx, projectID, data.RollbacksLimit)
 		data.Rollbacks = make([]rollbackRow, 0, len(rbs))
@@ -887,6 +868,14 @@ func (s *Server) memoryRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "epochs":
+		// /epochs/older: the older-epochs rows, fetched when their
+		// disclosure opens (#748 M).
+		if len(parts) == 3 && parts[2] == "older" {
+			s.MemoryEpochsOlder(w, r, projectID)
+			return
+		}
+		http.NotFound(w, r)
 	case "rollback":
 		s.MemoryRollbackAction(w, r, projectID)
 	case "quarantine":
@@ -1215,48 +1204,52 @@ type scatterPoint struct {
 	NeighborsJSON string
 }
 
-// classColour maps each content class to a stable hex colour so the
-// legend ↔ scatter pairing is consistent across page loads. Built-
-// in classes get curated colours; unknown classes fall through to
-// gray.
+// classColour maps each content class to a stable SVG fill class, so the
+// legend and the scatter pair up on every page load. Built-in classes get
+// a chart or status class; an unknown class falls through to c-s5, the
+// neutral series.
 func classColour(class string) string {
+	// SVG fill classes on the chart tokens (#759 M3): a var() in a fill
+	// attribute is dropped by the browser, so the scatter names a class.
 	switch class {
 	case "research":
-		return "#60a5fa" // blue-400
+		return "c-s1"
 	case "spec":
-		return "#34d399" // emerald-400
+		return "c-s3"
 	case "decision":
-		return "#a78bfa" // violet-400
+		return "c-s4"
 	case "commit_msg":
-		return "#fbbf24" // amber-400
+		return "c-s2"
 	case "diagnostic":
-		return "#f87171" // red-400
+		return "c-danger"
 	case "external_fetch":
-		return "#1C7ED6" // brand blue (Brand Manual v1.2)
+		return "c-fill-brand"
 	case "summary":
-		return "#fb923c" // orange-400
+		return "c-warn"
 	case "unclassified":
-		return "#94a3b8" // slate-400
+		return "c-fill-muted"
 	}
-	return "#6b7280" // gray-500
+	return "c-s5"
 }
 
-// statusStrokeColour styles the scatter point's outer ring by
-// validation status: verified=green, refuted=red (won't appear in
-// scatter — filter excludes), superseded=amber, legacy=gray,
-// unverified=transparent (no stroke).
+// statusStrokeColour styles the scatter point's outer ring by validation
+// status as a stroke class: verified=c-stroke-ok, refuted=c-stroke-danger
+// (won't appear in the scatter: the filter excludes it),
+// superseded=c-stroke-warn, legacy=c-stroke-s5; unverified: an empty class,
+// no ring.
 func statusStrokeColour(status string) string {
+	// Stroke classes (#759 M3); an unknown status has no ring.
 	switch status {
 	case "verified":
-		return "#10b981" // emerald-500
+		return "c-stroke-ok"
 	case "superseded":
-		return "#f59e0b" // amber-500
+		return "c-stroke-warn"
 	case "refuted":
-		return "#ef4444" // red-500
+		return "c-stroke-danger"
 	case "legacy":
-		return "#64748b" // slate-500
+		return "c-stroke-s5"
 	}
-	return "transparent"
+	return ""
 }
 
 // silence unused-import warnings until we extend further.
@@ -1278,4 +1271,84 @@ func writeJSONStatus(w http.ResponseWriter, status int, body any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(body)
+}
+
+// epochRow is one row of the Epochs table, the rollback picker.
+type epochRow struct {
+	ID                  string
+	CreatedAt           time.Time
+	ClosedAt            *time.Time
+	ChunksAdmitted      int
+	ChunksQuarantined   int
+	ChunksVerified      int
+	ChunksSuperseded    int
+	IsActive            bool
+	IsTargetForRollback bool // true when older than the most recent active epoch
+}
+
+// loadMemoryEpochs builds the Epochs rows, newest first (ListEpochs' order),
+// for the page and for the older-epochs fragment alike, so a row's rollback
+// flag is the same wherever it renders (web-ui-design.md #748 M).
+//
+// The "most recent active epoch" is the rollback baseline: targeting it is a
+// no-op, targeting older epochs deactivates newer ones. Rows are flagged so
+// the action button appears only where it would do something. The baseline is
+// computed over the whole loaded list, never over a slice of it.
+func (s *Server) loadMemoryEpochs(ctx context.Context, projectID string, limit int) ([]epochRow, error) {
+	eps, err := s.corpusEpochs.ListEpochs(ctx, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	var mostRecentActive time.Time
+	for _, e := range eps {
+		if e.IsActive && e.CreatedAt.After(mostRecentActive) {
+			mostRecentActive = e.CreatedAt
+		}
+	}
+	rows := make([]epochRow, 0, len(eps))
+	for _, e := range eps {
+		rows = append(rows, epochRow{
+			ID:                  e.ID,
+			CreatedAt:           e.CreatedAt,
+			ClosedAt:            e.ClosedAt,
+			ChunksAdmitted:      e.ChunksAdmitted,
+			ChunksQuarantined:   e.ChunksQuarantined,
+			ChunksVerified:      e.ChunksVerified,
+			ChunksSuperseded:    e.ChunksSuperseded,
+			IsActive:            e.IsActive,
+			IsTargetForRollback: !mostRecentActive.IsZero() && e.CreatedAt.Before(mostRecentActive),
+		})
+	}
+	return rows, nil
+}
+
+// MemoryEpochsOlder serves the Epochs rows after the newest EpochsShownOpen,
+// rows only, for the older-epochs disclosure, which fetches them when it
+// opens (web-ui-design.md #748 M). GET only. memoryRouter's project-scope
+// check runs before this; epochs_limit goes through the page's own
+// parseEpochsLimit.
+func (s *Server) MemoryEpochsOlder(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.corpusEpochs == nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	rows, err := s.loadMemoryEpochs(ctx, projectID, parseEpochsLimit(r.URL.Query().Get("epochs_limit")))
+	if err != nil {
+		// Not an empty 200 under "N older epochs": htmx swaps nothing on
+		// an error, so the placeholder row stays (review-20261113-0c18).
+		http.Error(w, "epochs unavailable", http.StatusInternalServerError)
+		return
+	}
+	var older []epochRow
+	if len(rows) > EpochsShownOpen {
+		older = rows[EpochsShownOpen:]
+	}
+	s.render(w, "memEpochRows", map[string]any{"Rows": older, "ProjectID": projectID})
 }

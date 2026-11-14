@@ -109,6 +109,7 @@ defaultWorkflowId: wf-1
 mcp:
   servers:
     - name: broker
+      transport: sse
       url: `+brokerURL+`
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "projects", "plain.yaml"), []byte(`

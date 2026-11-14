@@ -99,16 +99,16 @@
                             The project stays archived; the sweeper retries on its next tick.
                         </p>
                         {{end}}
-                        <p class="text-[11px] mt-2 opacity-70">
+                        <p class="text-xs mt-2 opacity-70">
                             On deletion the sweeper removes the project YAML + PROJECT.md, the project's rows in every table the deletion list covers, and every artifact blob. Once gone, this can't be undone.
                         </p>
                     </div>
                     <div class="flex flex-col items-stretch gap-2 min-w-[140px]">
                         <form method="post" action="/ui/projects/{{.Project.ID}}/unarchive" data-confirm="Restore {{.Project.ID}} to active? The grace period and reason will be cleared.">
-                            <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-700/60 hover:bg-emerald-600/70 text-emerald-50 ring-1 ring-emerald-600/40">Unarchive</button>
+                            <button type="submit" class="v-btn v-btn--primary w-full justify-center">Unarchive</button>
                         </form>
                         <form method="post" action="/ui/projects/{{.Project.ID}}/delete-now" data-confirm="Delete {{.Project.ID}} now? This wipes config, DB rows, and artifact blobs immediately. Cannot be undone.">
-                            <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-rose-700/70 hover:bg-rose-600/80 text-rose-50 ring-1 ring-rose-600/40">Delete now</button>
+                            <button type="submit" class="v-btn v-btn--danger w-full justify-center">Delete now</button>
                         </form>
                     </div>
                 </div>
@@ -380,10 +380,9 @@
                      every 5 min and writes a trading_positions_snapshots row. Distinct
                      from the live Portfolio block above — this surfaces long-window
                      quality signals: Sharpe, max drawdown, equity 24h change. */}}
-                <details class="panel-ref mt-3">
-                    <summary>
-                        {{template "sectionHeader" (dict "Title" "Soak metrics")}}
-                    </summary>
+                <div class="mt-3">
+                <details class="vk-disc">
+                    <summary class="vk-disc-sum"><h2 class="vk-disc-title">Soak metrics</h2></summary>
                 <div class="px-5 py-4">
                     {{if .Trading.Soak.SoakReady}}
                     <dl class="grid grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
@@ -478,26 +477,26 @@
                         <div class="overflow-x-auto">
                             <table class="min-w-full text-xs">
                                 <thead><tr class="border-b border-surface-600/60">
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">When</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Kind</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Detail</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">When</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Kind</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Detail</th>
                                 </tr></thead>
                                 <tbody class="divide-y divide-surface-600/30">
                                     {{range .Trading.SafetyEvents}}
                                     <tr class="hover:bg-surface-700/40">
-                                        <td class="px-3 py-1 text-[11px] text-ink-500 whitespace-nowrap">{{.RecordedAt.Format "Jan 2 15:04:05"}}</td>
+                                        <td class="px-3 py-1 text-xs text-ink-500 whitespace-nowrap">{{.RecordedAt.Format "Jan 2 15:04:05"}}</td>
                                         <td class="px-3 py-1">
                                             {{if eq .SeverityClass "outcome-bad"}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-rose-800/50 font-mono">{{.Kind}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-rose-500/10 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-rose-800/50 font-mono">{{.Kind}}</span>
                                             {{else if eq .SeverityClass "outcome-warn"}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-800/50 font-mono">{{.Kind}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-800/50 font-mono">{{.Kind}}</span>
                                             {{else}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-700 text-ink-300 ring-1 ring-surface-600 font-mono">{{.Kind}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-surface-700 text-ink-300 ring-1 ring-surface-600 font-mono">{{.Kind}}</span>
                                             {{end}}
                                         </td>
                                         <td class="px-3 py-1 font-mono text-ink-300">{{if .Symbol}}{{.Symbol}}{{else}}<span class="text-ink-600">—</span>{{end}}</td>
-                                        <td class="px-3 py-1 text-ink-400 font-mono text-[10px]">
+                                        <td class="px-3 py-1 text-ink-400 font-mono text-xs">
                                             {{range $k, $v := .Detail}}<span class="mr-2">{{$k}}=<span class="text-ink-300">{{$v}}</span></span>{{end}}
                                         </td>
                                     </tr>
@@ -519,20 +518,20 @@
                         <div class="overflow-x-auto">
                             <table class="min-w-full text-xs">
                                 <thead><tr class="border-b border-surface-600/60">
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Submitted</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Side</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Type</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Qty</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Limit</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Stop</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Status</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Broker ID</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Submitted</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Side</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Type</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Qty</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Limit</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Stop</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Status</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Broker ID</th>
                                 </tr></thead>
                                 <tbody class="divide-y divide-surface-600/30">
                                     {{range .Trading.RecentOrders}}
                                     <tr class="hover:bg-surface-700/40">
-                                        <td class="px-3 py-1 text-[11px] text-ink-500 whitespace-nowrap">{{.SubmittedAt.Format "Jan 2 15:04:05"}}</td>
+                                        <td class="px-3 py-1 text-xs text-ink-500 whitespace-nowrap">{{.SubmittedAt.Format "Jan 2 15:04:05"}}</td>
                                         <td class="px-3 py-1 font-mono text-ink-200">{{.Symbol}}</td>
                                         <td class="px-3 py-1 font-mono font-semibold {{.ActionClass}}">{{.Action}}</td>
                                         <td class="px-3 py-1 font-mono text-ink-400">{{.OrderType}}</td>
@@ -541,16 +540,16 @@
                                         <td class="px-3 py-1 font-mono tabular-nums text-ink-300 text-right">{{if gt .StopPrice 0.0}}{{fmtUSD .StopPrice}}{{else}}<span class="text-ink-600">—</span>{{end}}</td>
                                         <td class="px-3 py-1">
                                             {{if eq .StatusClass "outcome-good"}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-500/10 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
                                             {{else if eq .StatusClass "outcome-bad"}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-rose-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-rose-500/10 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 ring-1 ring-rose-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
                                             {{else if eq .StatusClass "outcome-warn"}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-800/50 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
                                             {{else}}
-                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-700 text-ink-300 ring-1 ring-surface-600 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-surface-700 text-ink-300 ring-1 ring-surface-600 font-mono" title="{{.StatusReason}}">{{.Status}}</span>
                                             {{end}}
                                         </td>
-                                        <td class="px-3 py-1 font-mono text-[10px] text-ink-500">{{if .BrokerOrderID}}{{.BrokerOrderID}}{{else}}<span class="text-ink-700">—</span>{{end}}</td>
+                                        <td class="px-3 py-1 font-mono text-xs text-ink-500">{{if .BrokerOrderID}}{{.BrokerOrderID}}{{else}}<span class="text-ink-700">—</span>{{end}}</td>
                                     </tr>
                                     {{end}}
                                 </tbody>
@@ -570,24 +569,24 @@
                         <div class="overflow-x-auto">
                             <table class="min-w-full text-xs">
                                 <thead><tr class="border-b border-surface-600/60">
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Filled</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Qty</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Price</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Notional</th>
-                                    <th scope="col" class="px-3 py-1.5 text-right text-[10px] font-medium text-ink-500 uppercase tracking-wider">Commission</th>
-                                    <th scope="col" class="px-3 py-1.5 text-left text-[10px] font-medium text-ink-500 uppercase tracking-wider">Order</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Filled</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Symbol</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Qty</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Price</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Notional</th>
+                                    <th scope="col" class="px-3 py-1.5 text-right text-xs font-medium text-ink-500 uppercase tracking-wider">Commission</th>
+                                    <th scope="col" class="px-3 py-1.5 text-left text-xs font-medium text-ink-500 uppercase tracking-wider">Order</th>
                                 </tr></thead>
                                 <tbody class="divide-y divide-surface-600/30">
                                     {{range .Trading.RecentFills}}
                                     <tr class="hover:bg-surface-700/40">
-                                        <td class="px-3 py-1 text-[11px] text-ink-500 whitespace-nowrap">{{.FilledAt.Format "Jan 2 15:04:05"}}</td>
+                                        <td class="px-3 py-1 text-xs text-ink-500 whitespace-nowrap">{{.FilledAt.Format "Jan 2 15:04:05"}}</td>
                                         <td class="px-3 py-1 font-mono text-ink-200">{{.Symbol}}</td>
                                         <td class="px-3 py-1 font-mono tabular-nums text-ink-200 text-right">{{printf "%.4g" .Qty}}</td>
                                         <td class="px-3 py-1 font-mono tabular-nums text-ink-300 text-right">{{fmtUSD .Price}}</td>
                                         <td class="px-3 py-1 font-mono tabular-nums text-accent-300 text-right">{{fmtUSD .Notional}}</td>
                                         <td class="px-3 py-1 font-mono tabular-nums text-ink-400 text-right">{{if gt .CommissionUSD 0.0}}{{fmtUSD .CommissionUSD}}{{else}}<span class="text-ink-600">—</span>{{end}}</td>
-                                        <td class="px-3 py-1 font-mono text-[10px] text-ink-500">{{.OrderID}}</td>
+                                        <td class="px-3 py-1 font-mono text-xs text-ink-500">{{.OrderID}}</td>
                                     </tr>
                                     {{end}}
                                 </tbody>
@@ -597,6 +596,7 @@
                     {{end}}
                 </div>
                 </details>
+                </div>
 
                 {{else}}
                 <div class="px-5 py-4 text-xs text-ink-500">
@@ -613,10 +613,8 @@
 
             <!-- MCP Servers — panel-ref, closed by default -->
             {{if .Project.MCP.Servers}}
-            <details class="panel-ref overflow-hidden">
-                <summary>
-                    {{template "sectionHeader" (dict "Title" (printf "MCP Servers (%d)" (len .Project.MCP.Servers)) "MetaText" "project-scoped tool servers")}}
-                </summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">MCP Servers ({{len .Project.MCP.Servers}})</h2><span class="vk-disc-meta">project-scoped tool servers</span></summary>
                 <div class="px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-3 border-t border-surface-600/60">
                     {{range .Project.MCP.Servers}}
                     <div class="bg-surface-900 rounded-lg p-3.5 border border-surface-600">
@@ -648,10 +646,8 @@
 
             <!-- Swarm Details — panel-ref, closed by default -->
             {{if .Swarm}}
-            <details class="panel-ref overflow-hidden">
-                <summary>
-                    {{template "sectionHeader" (dict "Title" (printf "Swarm — %s" (or .Swarm.DisplayName .Swarm.ID)) "MetaText" (printf "%d role(s)" (len .Swarm.Roles)))}}
-                </summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Swarm — {{or .Swarm.DisplayName .Swarm.ID}}</h2><span class="vk-disc-meta">{{len .Swarm.Roles}} role(s)</span></summary>
                 <div class="px-5 py-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 border-t border-surface-600/60">
                     {{range .Swarm.Roles}}
                     <div class="bg-surface-900 rounded-lg p-3.5 border {{if eq .Name $.Swarm.LeadRole}}border-amber-700/50 ring-1 ring-amber-700/20{{else}}border-surface-600{{end}}">
@@ -682,7 +678,7 @@
                         <div class="mt-2 pt-2 border-t border-surface-600/60">
                             <div class="text-xs text-ink-500 mb-1">Tools ({{len .Permissions.AllowedTools}})</div>
                             <div class="flex flex-wrap gap-1">
-                                {{range .Permissions.AllowedTools}}<code class="text-[10px] px-1.5 py-0.5 rounded bg-surface-700 text-ink-300 font-mono ring-1 ring-inset ring-surface-600/50">{{.}}</code>{{end}}
+                                {{range .Permissions.AllowedTools}}<code class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-ink-300 font-mono ring-1 ring-inset ring-surface-600/50">{{.}}</code>{{end}}
                             </div>
                         </div>
                         {{else}}
@@ -787,32 +783,35 @@
                 var totalW = (maxCol + 2) * (NW + GAP_X) + PAD;
                 var totalH = maxRows * (NH + GAP_Y) + PAD * 2;
                 canvas.style.minHeight = totalH + 'px';
+                // Design tokens, read through CSSOM (#759 M3): tk('chart-1')
+                // is rgb(var(--chart-1)); tk(t, a) adds an alpha.
+                function tk(t, a) { return 'rgb(var(--' + t + ')' + (a ? ' / ' + a : '') + ')'; }
                 var typeColors = {
-                    agent:    {bg:'#164e63', border:'#22d3ee', text:'#a5f3fc'},
-                    gate:     {bg:'#581c87', border:'#a855f7', text:'#d8b4fe'},
-                    approval: {bg:'#713f12', border:'#eab308', text:'#fef08a'}
+                    agent:    {bg:tk('surface-800'), border:tk('chart-1'), text:tk('ink-100'), glow:tk('chart-1', 0.25), tint:tk('chart-1', 0.19)},
+                    gate:     {bg:tk('surface-800'), border:tk('chart-4'), text:tk('ink-100'), glow:tk('chart-4', 0.25), tint:tk('chart-4', 0.19)},
+                    approval: {bg:tk('surface-800'), border:tk('chart-2'), text:tk('ink-100'), glow:tk('chart-2', 0.25), tint:tk('chart-2', 0.19)}
                 };
                 var termColors = {
-                    COMPLETED: {bg:'#14532d', border:'#22c55e', text:'#86efac'},
-                    FAILED:    {bg:'#7f1d1d', border:'#ef4444', text:'#fca5a5'},
-                    CANCELLED: {bg:'#1e293b', border:'#64748b', text:'#94a3b8'}
+                    COMPLETED: {bg:tk('ok-tint'), border:tk('ok-text'), text:tk('ok-text'), glow:tk('ok-text', 0.25)},
+                    FAILED:    {bg:tk('danger-tint'), border:tk('danger-text'), text:tk('danger-text'), glow:tk('danger-text', 0.25)},
+                    CANCELLED: {bg:tk('surface-700'), border:tk('chart-5'), text:tk('ink-400'), glow:tk('chart-5', 0.25)}
                 };
                 var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
                 svg.setAttribute('width', totalW);
                 svg.setAttribute('height', totalH);
                 svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
-                svg.innerHTML = '<defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#475569"/></marker>' +
-                    '<marker id="ah-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#22c55e"/></marker>' +
-                    '<marker id="ah-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>' +
-                    '<marker id="ah-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#a855f7"/></marker></defs>';
+                svg.innerHTML = '<defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" class="c-s5"/></marker>' +
+                    '<marker id="ah-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" class="c-ok"/></marker>' +
+                    '<marker id="ah-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" class="c-danger"/></marker>' +
+                    '<marker id="ah-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" class="c-s4"/></marker></defs>';
                 canvas.appendChild(svg);
                 function drawEdge(fromId, toId, label, color) {
                     var f = pos[fromId], t = pos[toId];
                     if (!f || !t) return;
-                    var marker = 'url(#ah)', strokeColor = '#475569';
-                    if (color === 'green')  { strokeColor = '#22c55e'; marker = 'url(#ah-green)'; }
-                    if (color === 'red')    { strokeColor = '#ef4444'; marker = 'url(#ah-red)'; }
-                    if (color === 'purple') { strokeColor = '#a855f7'; marker = 'url(#ah-purple)'; }
+                    var marker = 'url(#ah)', strokeColor = tk('chart-5');
+                    if (color === 'green')  { strokeColor = tk('ok-text'); marker = 'url(#ah-green)'; }
+                    if (color === 'red')    { strokeColor = tk('danger-text'); marker = 'url(#ah-red)'; }
+                    if (color === 'purple') { strokeColor = tk('chart-4'); marker = 'url(#ah-purple)'; }
                     var x1 = f.x + NW, y1 = f.y + NH/2, x2 = t.x, y2 = t.y + NH/2;
                     var path = document.createElementNS('http://www.w3.org/2000/svg','path');
                     if (t.x <= f.x) {
@@ -822,7 +821,7 @@
                         var mx = (x1 + x2) / 2;
                         path.setAttribute('d', 'M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2);
                     }
-                    path.setAttribute('fill','none'); path.setAttribute('stroke', strokeColor);
+                    path.setAttribute('fill','none'); path.style.stroke = strokeColor;
                     path.setAttribute('stroke-width','2'); path.setAttribute('marker-end', marker);
                     svg.appendChild(path);
                     if (label) {
@@ -830,7 +829,7 @@
                         if (t.x <= f.x) { lx = (x1 + x2) / 2; ly = Math.max(f.y, t.y) + NH + 32; }
                         var txt = document.createElementNS('http://www.w3.org/2000/svg','text');
                         txt.setAttribute('x', lx); txt.setAttribute('y', ly);
-                        txt.setAttribute('text-anchor','middle'); txt.setAttribute('fill', strokeColor);
+                        txt.setAttribute('text-anchor','middle'); txt.style.fill = strokeColor;
                         txt.setAttribute('font-size','10'); txt.setAttribute('font-family','ui-monospace, monospace');
                         txt.textContent = label; svg.appendChild(txt);
                     }
@@ -856,7 +855,7 @@
                     node.style.cssText = 'position:absolute;left:'+p.x+'px;top:'+p.y+'px;width:'+NW+'px;height:'+NH+'px;' +
                         'background:'+colors.bg+';border:2px solid '+colors.border+';border-radius:8px;padding:8px 10px;' +
                         'display:flex;flex-direction:column;justify-content:center;cursor:default;' +
-                        (isEntry ? 'box-shadow:0 0 12px '+colors.border+'40;' : '');
+                        (isEntry ? 'box-shadow:0 0 12px '+colors.glow+';' : '');
                     // SECURITY: workflow step IDs, types, and roles
                     // are user-supplied at project creation time. Using
                     // string concatenation + innerHTML would let an
@@ -871,9 +870,9 @@
                     node.appendChild(titleDiv);
 
                     var metaDiv = document.createElement('div');
-                    metaDiv.style.cssText = 'font-size:10px;color:#94a3b8;margin-top:2px;display:flex;align-items:center;gap:4px';
+                    metaDiv.style.cssText = 'font-size:13px;color:'+tk('ink-400')+';margin-top:2px;display:flex;align-items:center;gap:4px';
                     var typeSpan = document.createElement('span');
-                    typeSpan.style.cssText = 'background:'+colors.border+'30;padding:1px 5px;border-radius:3px;font-size:9px;color:'+colors.text;
+                    typeSpan.style.cssText = 'background:'+colors.tint+';padding:1px 5px;border-radius:3px;font-size:13px;color:'+colors.text;
                     typeSpan.textContent = typeName;
                     metaDiv.appendChild(typeSpan);
                     if (subtitle) {
@@ -885,7 +884,7 @@
 
                     if (isEntry) {
                         var entryBadge = document.createElement('div');
-                        entryBadge.style.cssText = 'position:absolute;top:-9px;left:10px;font-size:9px;color:'+colors.border+';background:#0f172a;padding:0 4px';
+                        entryBadge.style.cssText = 'position:absolute;top:-9px;left:10px;font-size:13px;color:'+colors.border+';background:'+tk('surface-900')+';padding:0 4px';
                         entryBadge.textContent = 'entry';
                         node.appendChild(entryBadge);
                     }
@@ -894,29 +893,27 @@
             }
             </script>
             {{/* Routing legend — which entry-point runs which workflow */}}
-            <details class="panel-ref overflow-hidden" open>
-                <summary>{{template "sectionHeader" (dict "Title" "Workflow wiring")}}</summary>
+            <details class="vk-disc" open>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Workflow wiring</h2></summary>
                 <div class="px-5 py-3 border-t border-surface-600/60 space-y-1.5 text-sm">
                 {{range .WorkflowWiring.Triggers}}
                     <div class="flex items-center gap-2 flex-wrap">
                         <span class="text-ink-400">{{.Label}}</span>
                         <span class="text-ink-600">&rarr;</span>
-                        {{if .Unresolved}}<span class="font-mono text-rose-400">{{.WorkflowID}} · unresolved</span>{{else}}<a href="/ui/workflows/{{.WorkflowID}}/edit?projectId={{$.Project.ID}}" class="font-mono text-brand-400 hover:text-brand-300 transition-colors">{{.WorkflowID}}</a>{{end}}
+                        {{if .Unresolved}}<span class="font-mono text-rose-700 dark:text-rose-400">{{.WorkflowID}} · unresolved</span>{{else}}<a href="/ui/workflows/{{.WorkflowID}}/edit?projectId={{$.Project.ID}}" class="font-mono text-brand-400 hover:text-brand-300 transition-colors">{{.WorkflowID}}</a>{{end}}
                     </div>
                 {{end}}
                 </div>
             </details>
             {{/* Per-workflow graph panels — one per DISTINCT wired workflow */}}
             {{range .WorkflowWiring.Workflows}}
-            <details class="panel-ref overflow-hidden"{{if .DefaultOpen}} open{{end}}>
-                <summary>
-                    {{template "sectionHeader" (dict "Title" (printf "Workflow — %s" .WorkflowID))}}
-                </summary>
+            <details class="vk-disc"{{if .DefaultOpen}} open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Workflow — {{.WorkflowID}}</h2></summary>
                 <div class="px-5 py-2 border-t border-surface-600/60 text-xs text-ink-500">
                     triggered by: {{range $i, $l := .TriggerLabels}}{{if $i}}, {{end}}{{$l}}{{end}}
                 </div>
                 {{if .Unresolved}}
-                <div class="px-5 py-3 border-t border-surface-600/60 text-sm text-rose-400">
+                <div class="px-5 py-3 border-t border-surface-600/60 text-sm text-rose-700 dark:text-rose-400">
                     Referenced but not found in the registry.
                 </div>
                 {{else}}
@@ -957,7 +954,7 @@
                         <svg class="h-4 w-4 text-ink-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
                         Task Status Overview
                     </h2>
-                    <span class="text-[10px] text-ink-500">refreshes every 10s · tap a tile to filter</span>
+                    <span class="text-xs text-ink-500">refreshes every 10s · tap a tile to filter</span>
                 </div>
                 <div class="px-5 py-4 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-4">
                     <a href="/ui/tasks?project_id={{$projID}}&status=PENDING"   class="tap text-center hover:bg-surface-700/40 rounded-lg p-2 transition-colors"><div class="text-xl font-bold text-ink-400">{{index .TaskCounts "PENDING"}}</div><div class="text-xs text-ink-500 mt-0.5">Pending</div></a>
@@ -1080,11 +1077,11 @@
                     <table class="min-w-full divide-y divide-surface-600/60">
                         <thead class="bg-surface-900/60">
                             <tr>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Task</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Verdict</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Conf.</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Summary</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">When</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Task</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Verdict</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Conf.</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Summary</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">When</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-surface-600/40">
@@ -1102,7 +1099,7 @@
                                 </td>
                                 <td class="px-4 py-2 font-mono text-xs text-ink-300">{{printf "%.2f" .Confidence}}</td>
                                 <td class="px-4 py-2 text-xs text-ink-400 max-w-md" title="{{.Summary}}">{{if .Summary}}{{.Summary}}{{else}}<span class="text-ink-600">—</span>{{end}}</td>
-                                <td class="px-4 py-2 text-[11px] text-ink-500 whitespace-nowrap">{{.RecordedAt.Format "Jan 2 15:04"}}</td>
+                                <td class="px-4 py-2 text-xs text-ink-500 whitespace-nowrap">{{.RecordedAt.Format "Jan 2 15:04"}}</td>
                             </tr>
                             {{end}}
                         </tbody>
@@ -1224,27 +1221,27 @@
                     <div>
                         <dt class="text-ink-500 uppercase tracking-wider mb-1">LLM cost</dt>
                         <dd class="text-sm text-ink-200 font-mono tabular-nums">{{.Retention.TaskLLMUsageDays}}d</dd>
-                        {{if .Retention.TaskLLMUsageIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-[10px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
+                        {{if .Retention.TaskLLMUsageIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
                     </div>
                     <div>
                         <dt class="text-ink-500 uppercase tracking-wider mb-1">Tool audit</dt>
                         <dd class="text-sm text-ink-200 font-mono tabular-nums">{{.Retention.ToolAuditDays}}d</dd>
-                        {{if .Retention.ToolAuditIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-[10px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
+                        {{if .Retention.ToolAuditIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
                     </div>
                     <div>
                         <dt class="text-ink-500 uppercase tracking-wider mb-1">Tasks</dt>
                         <dd class="text-sm text-ink-200 font-mono tabular-nums">{{.Retention.TasksDays}}d</dd>
-                        {{if .Retention.TasksIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-[10px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
+                        {{if .Retention.TasksIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
                     </div>
                     <div>
                         <dt class="text-ink-500 uppercase tracking-wider mb-1">Executions</dt>
                         <dd class="text-sm text-ink-200 font-mono tabular-nums">{{.Retention.ExecutionsDays}}d</dd>
-                        {{if .Retention.ExecutionsIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-[10px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
+                        {{if .Retention.ExecutionsIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
                     </div>
                     <div>
                         <dt class="text-ink-500 uppercase tracking-wider mb-1">Artifacts</dt>
                         <dd class="text-sm text-ink-200 font-mono tabular-nums">{{.Retention.ArtifactsDays}}d</dd>
-                        {{if .Retention.ArtifactsIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-[10px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
+                        {{if .Retention.ArtifactsIsOverride}}<span class="inline-flex items-center px-1 py-0 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30 mt-1">override</span>{{end}}
                     </div>
                 </div>
             </div>
@@ -1263,39 +1260,39 @@
                     </div>
                     <dl class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">task_llm_usage</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">task_llm_usage</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.TaskLLMUsage}}</dd>
                         </div>
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">tool_audit</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">tool_audit</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.ToolAudit}}</dd>
                         </div>
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">tasks (terminal)</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">tasks (terminal)</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.Tasks}}</dd>
                         </div>
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">executions</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">executions</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.Executions}}</dd>
                         </div>
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">artifacts</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">artifacts</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.Artifacts}}{{if gt .RetentionPreview.ArtifactFiles 0}} <span class="text-ink-500">({{.RetentionPreview.ArtifactFiles}} files)</span>{{end}}</dd>
                         </div>
                         {{if gt .RetentionPreview.TaskMessages 0}}
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">task_messages</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">task_messages</dt>
                             <dd class="text-ink-200 font-mono tabular-nums">{{.RetentionPreview.TaskMessages}}</dd>
                         </div>
                         {{end}}
                         {{if gt .RetentionPreview.MemoryChunks 0}}
                         <div>
-                            <dt class="text-ink-500 uppercase tracking-wider text-[10px]">memory_chunks</dt>
+                            <dt class="text-ink-500 uppercase tracking-wider text-xs">memory_chunks</dt>
                             <dd class="text-amber-700 dark:text-amber-300 font-mono tabular-nums" title="Only populated when memory_chunks_days is non-zero in the project's retention block — opt-in.">{{.RetentionPreview.MemoryChunks}}</dd>
                         </div>
                         {{end}}
                     </dl>
-                    <p class="mt-3 text-[11px] text-ink-500">
+                    <p class="mt-3 text-xs text-ink-500">
                         Sweep runs on the daemon's interval. To trigger immediately, run
                         <code class="text-ink-400">vornikctl retention --project {{.Project.ID}} --apply</code>.
                     </p>
@@ -1364,7 +1361,7 @@
                     <!-- Disable control -->
                     <form method="post" action="/ui/projects/{{.Project.ID}}/git/toggle">
                         <input type="hidden" name="enabled" value="false">
-                        <button type="submit" class="text-xs text-ink-400 hover:text-red-700 dark:text-red-300 underline">Disable git access</button>
+                        <button type="submit" class="v-btn v-btn--quiet">Disable git access</button>
                     </form>
                     {{else}}
                     <!-- Disabled arm — discoverability + Enable control -->
@@ -1372,7 +1369,7 @@
                     <p class="text-xs text-ink-500">Enabling exposes the workspace over git-over-HTTPS, authenticated with per-project API keys.</p>
                     <form method="post" action="/ui/projects/{{.Project.ID}}/git/toggle">
                         <input type="hidden" name="enabled" value="true">
-                        <button type="submit" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-brand-600 hover:bg-brand-500 text-white text-xs font-medium transition-colors">Enable git access</button>
+                        <button type="submit" class="v-btn v-btn--primary">Enable git access</button>
                     </form>
                     {{end}}
                 </div>
@@ -1393,7 +1390,7 @@
                         </a>
                         <span>showing {{len .Tasks}} of {{.TaskTotal}}</span>
                         {{if .Project.Autonomy.Enabled}}
-                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30">
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-violet-500/15 text-violet-700 dark:text-violet-300 ring-1 ring-inset ring-violet-500/30">
                             <span class="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse inline-block"></span>
                             autonomy on
                         </span>
@@ -1450,14 +1447,14 @@
                 <div class="px-5 py-3 border-b border-surface-600 flex items-center gap-2">
                     <svg class="h-4 w-4 text-amber-800 dark:text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     <h2 class="text-sm font-semibold text-ink-200">Upcoming reminders</h2>
-                    <span class="text-[11px] text-ink-500">{{len .Reminders}}</span>
+                    <span class="text-xs text-ink-500">{{len .Reminders}}</span>
                 </div>
                 <ul class="divide-y divide-surface-600/40">
                     {{range .Reminders}}
                     <li class="px-5 py-3 flex items-start gap-4">
                         <div class="flex-1 min-w-0">
                             <p class="text-sm text-ink-200 truncate" title="{{.Content}}">{{.Content}}</p>
-                            <p class="text-[11px] text-ink-500 mt-0.5 font-mono">
+                            <p class="text-xs text-ink-500 mt-0.5 font-mono">
                                 {{.FireAt}}
                                 <span class="text-ink-600">·</span>
                                 <span class="text-amber-700 dark:text-amber-300">{{.Countdown}}</span>
@@ -1467,7 +1464,7 @@
                         </div>
                         <form method="post" action="/ui/reminders/{{.ID}}/cancel"
                               data-confirm="Cancel reminder {{.ID}}?">
-                            <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-surface-700 hover:bg-surface-600 text-ink-200">Cancel</button>
+                            <button type="submit" class="v-btn v-btn--secondary">Cancel</button>
                         </form>
                     </li>
                     {{end}}
@@ -1499,7 +1496,7 @@
                               data-confirm="Archive {{.Project.ID}}? New tasks will be blocked immediately and the project will be hard-deleted after the grace period."
                               class="flex flex-col gap-2 min-w-[260px]">
                             <label class="block">
-                                <span class="block text-[11px] text-ink-500 uppercase tracking-wider mb-1">Grace period</span>
+                                <span class="block text-xs text-ink-500 uppercase tracking-wider mb-1">Grace period</span>
                                 <select name="grace" class="w-full bg-surface-900 border border-control text-ink-200 text-xs rounded-md px-2 py-1.5">
                                     {{range .Lifecycle.GracePresets}}
                                     <option value="{{.Value}}" {{if eq .Value "7d"}}selected{{end}}>{{.Label}}</option>
@@ -1507,10 +1504,10 @@
                                 </select>
                             </label>
                             <label class="block">
-                                <span class="block text-[11px] text-ink-500 uppercase tracking-wider mb-1">Reason (optional)</span>
+                                <span class="block text-xs text-ink-500 uppercase tracking-wider mb-1">Reason (optional)</span>
                                 <input type="text" name="reason" placeholder="e.g. End of contract" class="w-full bg-surface-900 border border-control text-ink-200 text-xs rounded-md px-2 py-1.5">
                             </label>
-                            <button type="submit" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md bg-rose-700/70 hover:bg-rose-600/80 text-rose-50 ring-1 ring-rose-700/50">
+                            <button type="submit" class="v-btn v-btn--danger justify-center">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22"/></svg>
                                 Archive project
                             </button>

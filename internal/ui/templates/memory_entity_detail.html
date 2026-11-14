@@ -26,7 +26,7 @@
             <div class="glass rounded-xl border border-dark-700 p-5">
                 <div class="flex items-start justify-between gap-3 flex-wrap">
                     <div>
-                        <span class="inline-block text-[11px] uppercase tracking-wider px-2 py-0.5 rounded bg-dark-700 text-gray-400 mb-1">{{.Entity.Type}}</span>
+                        <span class="inline-block text-xs uppercase tracking-wider px-2 py-0.5 rounded bg-dark-700 text-gray-400 mb-1">{{.Entity.Type}}</span>
                         <h1 class="text-xl font-semibold text-gray-100">{{.Entity.CanonicalName}}</h1>
                         {{if .Entity.Description}}<p class="text-sm text-gray-400 mt-1">{{.Entity.Description}}</p>{{end}}
                     </div>
@@ -80,7 +80,7 @@
                     <li class="px-5 py-3">
                         <div class="flex items-center justify-between gap-2 mb-1">
                             <span class="text-xs text-gray-400 font-mono">{{.SourceName}}</span>
-                            {{if .RepoScope}}<span class="text-[10px] px-1.5 py-0.5 rounded bg-dark-700 text-gray-500">{{.RepoScope}}</span>{{end}}
+                            {{if .RepoScope}}<span class="text-xs px-1.5 py-0.5 rounded bg-dark-700 text-gray-500">{{.RepoScope}}</span>{{end}}
                         </div>
                         <p class="text-sm text-gray-400">{{.Preview}}</p>
                         {{if .Surface}}<p class="text-xs text-emerald-800/70 dark:text-emerald-400/70 mt-1">matched: “{{.Surface}}”</p>{{end}}

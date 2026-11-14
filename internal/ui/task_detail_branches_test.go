@@ -307,7 +307,7 @@ func renderTaskDetailBody(t *testing.T, data TaskDetailData) string {
 
 // TestTaskDetailTiering guards the Task-5 re-tier of task_detail.html:
 //   - the awaiting-approval emphasis card carries .panel-primary,
-//   - reference panels render as <details class="panel-ref …>,
+//   - reference panels render as the shared disclosure, <details class="vk-disc"> (#748 E),
 //   - the context-aware fold is correct: a no-openWhen panel
 //     (Changelog) is CLOSED for a RUNNING task while the Output
 //     panel is OPEN for a COMPLETED task,
@@ -350,7 +350,7 @@ func TestTaskDetailTiering(t *testing.T) {
 		require.GreaterOrEqual(t, dIdx, 0, "changelog title should sit inside a <details>")
 		openTag := body[dIdx:idx]
 		assert.NotContains(t, openTag, " open", "changelog reference panel must be CLOSED for a RUNNING task")
-		assert.Contains(t, openTag, "panel-ref", "changelog should render as a panel-ref reference panel")
+		assert.Contains(t, openTag, `class="vk-disc"`, "changelog should render as the shared disclosure (#748 E)")
 	})
 
 	t.Run("output reference panel is OPEN for a completed task", func(t *testing.T) {
@@ -364,7 +364,7 @@ func TestTaskDetailTiering(t *testing.T) {
 		dIdx := strings.LastIndex(pre, "<details")
 		require.GreaterOrEqual(t, dIdx, 0, "output title should sit inside a <details>")
 		openTag := body[dIdx:idx]
-		assert.Contains(t, openTag, "panel-ref", "output should render as a panel-ref reference panel")
+		assert.Contains(t, openTag, `class="vk-disc"`, "output should render as the shared disclosure (#748 E)")
 		assert.Contains(t, openTag, " open", "output reference panel must be OPEN for a COMPLETED task")
 	})
 

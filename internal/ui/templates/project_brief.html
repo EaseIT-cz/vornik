@@ -44,13 +44,13 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="displayName">Display name (optional)</label>
                         <input type="text" name="displayName" id="displayName" value="{{.DisplayName}}"
                                class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
-                        <p class="text-[11px] text-gray-500 mt-1">Overrides the project.yaml displayName when set. Empty means "inherit".</p>
+                        <p class="text-xs text-gray-500 mt-1">Overrides the project.yaml displayName when set. Empty means "inherit".</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="description">Hero description (optional)</label>
                         <textarea name="description" id="description" rows="3"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Description}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">Free-form intro that surfaces on the project homepage.</p>
+                        <p class="text-xs text-gray-500 mt-1">Free-form intro that surfaces on the project homepage.</p>
                     </div>
                 </section>
 
@@ -58,13 +58,13 @@
                 <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Required</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">All three are required; the parser rejects the brief if any is empty.</p>
+                        <p class="text-xs text-gray-500 mt-1">All three are required; the parser rejects the brief if any is empty.</p>
                     </header>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="goal">Goal <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="goal" id="goal" rows="5" required
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Goal}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">The high-level objective the swarm works toward.</p>
+                        <p class="text-xs text-gray-500 mt-1">The high-level objective the swarm works toward.</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
                             "TargetID" $.ProjectID
@@ -77,7 +77,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="audience">Audience <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="audience" id="audience" rows="3" required
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Audience}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">Who uses this project and how — drives audience-specific phrasing in prompt suggestions.</p>
+                        <p class="text-xs text-gray-500 mt-1">Who uses this project and how — drives audience-specific phrasing in prompt suggestions.</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
                             "TargetID" $.ProjectID
@@ -90,7 +90,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="successCriteria">Success criteria <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="successCriteria" id="successCriteria" rows="5" required
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.SuccessCriteria}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">Bulleted list works well. What does "this project worked" look like?</p>
+                        <p class="text-xs text-gray-500 mt-1">Bulleted list works well. What does "this project worked" look like?</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
                             "TargetID" $.ProjectID
@@ -105,7 +105,7 @@
                 <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Optional</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Strongly recommended — exclusions sharpen prompt generation more than inclusions.</p>
+                        <p class="text-xs text-gray-500 mt-1">Strongly recommended — exclusions sharpen prompt generation more than inclusions.</p>
                     </header>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="outOfScope">Out of scope</label>

@@ -533,7 +533,7 @@ func respondSetupValidationHTML(w http.ResponseWriter, status int, result onboar
 
 func respondSetupCommitHTML(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<div class="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-200"><div class="font-semibold">Chat config saved</div><div class="mt-1 text-gray-300">Restart required before the daemon uses the new chat credentials.</div></div>`))
+	_, _ = w.Write([]byte(`<div class="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-800 dark:text-emerald-200"><div class="font-semibold">Chat config saved</div><div class="mt-1 text-gray-300">Restart required before the daemon uses the new chat credentials.</div></div>`))
 }
 
 // setupSessionID generates a fresh onboarding session ID.

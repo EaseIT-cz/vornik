@@ -669,6 +669,16 @@ type ForkExecutorResult struct {
 // Server handles HTTP API requests for the data plane.
 // This is the primary external interface for all execution-related traffic.
 type Server struct {
+	// The first-run self-restart (POST /api/v1/setup/apply, #758 W1):
+	// restartRequester asks the container to stop for a restart;
+	// setupApplying is the in-progress flag; setupApplyUnlock holds the
+	// config writer lock until the process exits; setupEnv reads the
+	// supervisor's variables (os.Getenv when nil; a seam for tests).
+	restartRequester func()
+	setupApplying    atomic.Bool
+	setupApplyUnlock func()
+	setupEnv         func(string) string
+
 	// aiMarker signs and records Art 50(2) marks on generated output
 	// (aimark_mark.go); nil marks nothing.
 	aiMarker *aimark.Marker

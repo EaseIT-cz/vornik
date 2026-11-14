@@ -110,6 +110,25 @@ func RunToolAuditSuite(t *testing.T, repo persistence.ToolAuditRepository) {
 	t.Helper()
 	ctx := context.Background()
 
+	// GitHub #261: the adoption panel counts tool calls in its window.
+	t.Run("CountSince_counts_the_window_by_project", func(t *testing.T) {
+		ac, ok := repo.(persistence.ActivityCounter)
+		if !ok {
+			t.Fatalf("%T must implement persistence.ActivityCounter (GitHub #261)", repo)
+		}
+		project := uniqueID("p261")
+		base := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, at := range []time.Time{base.Add(-48 * time.Hour), base, base.Add(time.Minute)} {
+			if err := repo.Log(ctx, &persistence.ToolAuditEntry{ID: uniqueID("aud"), ProjectID: project, TaskID: "t261", ExecutionID: "e261", ToolName: "file_read", CreatedAt: at}); err != nil {
+				t.Fatalf("log %d: %v", i, err)
+			}
+		}
+		n, err := ac.CountSince(ctx, project, base)
+		if err != nil || n != 2 {
+			t.Fatalf("CountSince(project, base) = %d, %v; want 2", n, err)
+		}
+	})
+
 	// GitHub #578 B3: the seal pass scrubs a carried credential's old copy out
 	// of the audit, exactly, for one execution and tool only. A value holding
 	// LIKE wildcards must not match anything else.

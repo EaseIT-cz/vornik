@@ -331,7 +331,8 @@ func (c *Container) initDispatcher() {
 	// Let every channel that can show a turn status show it (Slack's
 	// placeholder, Telegram's streamed reply; #642). Channels that cannot are
 	// skipped by the reporter.
-	c.Dispatcher.SetTurnStatusReporter(&turnStatusReporter{resolver: &containerChannelResolver{c: c}})
+	c.turnStatus = &turnStatusReporter{resolver: &containerChannelResolver{c: c}}
+	c.Dispatcher.SetTurnStatusReporter(c.turnStatus)
 	// cancel_task stops the running execution through the shared cancel
 	// primitive (05-scheduler.md §4.11, GitHub #300). The executor is built in
 	// initScheduler, which runs before this.

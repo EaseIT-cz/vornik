@@ -176,12 +176,16 @@ func populateMCPSection(data *ProjectConfigFormData, source MCPFormRegistrySourc
 
 	// Custom rows: any project-only server NOT in the daemon
 	// registry. Rendered as editable name+transport+url+tools.
-	for i, s := range projServers {
+	// Index numbers custom rows among themselves (0..n-1): the save walks
+	// mcpCustom_0..mcpCustomCount-1, and mcpCustomCount is n. Their position
+	// in mcp.servers lost every custom server listed after a registry one
+	// (#748 §D, 2026-11-13).
+	for _, s := range projServers {
 		if registryByName[s.Name] {
 			continue
 		}
 		data.MCPCustomRows = append(data.MCPCustomRows, MCPCustomRow{
-			Index:        i,
+			Index:        len(data.MCPCustomRows),
 			Name:         s.Name,
 			Transport:    s.Transport,
 			URL:          s.URL,

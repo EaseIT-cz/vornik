@@ -62,9 +62,10 @@ curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
 
-When it finishes, open <http://localhost:8080/ui> — a first-run setup guide walks you
-through connecting an LLM endpoint (with a live connection test), optional memory/RAG,
-and your first project. Details and tunables:
+When it finishes, open <http://localhost:8080/ui>. A first-run guide takes three steps
+in the browser: connect a model (with a live connection test), choose what your
+assistant is for, and say hello. Vornik restarts itself once on the way; long-term
+memory is optional and can be set up later. Details and tunables:
 [deployments/podman/README.md](deployments/podman/README.md).
 
 **From source:**
@@ -237,4 +238,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.4 -->
+<!-- summary-reviewed-through: 2026.11.5 -->

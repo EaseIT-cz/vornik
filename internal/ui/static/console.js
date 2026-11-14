@@ -150,6 +150,21 @@
         var d = byID(el.dataset.dialog);
         if (d && d.close) { d.close(); }
     });
+    // A filter box over a long list (#748, web-ui-design.md "Progressive
+    // disclosure", B3): hides the [data-filter-item] rows of the nearest
+    // [data-filter-scope] whose name does not contain the text. It only hides:
+    // a hidden checkbox keeps its state and still posts.
+    register('filter-list', function (el, e) {
+        if (e.type === 'keydown') { return e.key !== 'Enter'; }
+        var scope = el.closest('[data-filter-scope]');
+        if (!scope) { return; }
+        var q = el.value.trim().toLowerCase();
+        scope.querySelectorAll('[data-filter-item]').forEach(function (item) {
+            var name = (item.getAttribute('data-filter-item') || '').toLowerCase();
+            // style, not the hidden attribute: a row's display utility (flex) outranks [hidden].
+            item.style.display = q !== '' && name.indexOf(q) === -1 ? 'none' : '';
+        });
+    });
 
     function args(el) {
         var raw = el.getAttribute('data-args');
@@ -250,4 +265,35 @@
     document.addEventListener("visibilitychange", function () {
         if (!document.hidden) tick();
     });
+})();
+
+// Disclosures and what they hide (#748, web-ui-design.md "Progressive
+// disclosure across the console", B1). A field inside a closed <details> still
+// posts, but the browser cannot focus it to report it invalid, and an anchor
+// to a section inside one lands on nothing visible. Both open the <details>
+// first. Both listeners act on every page console.js loads, not only the
+// settings form: any closed <details> around an invalid field or an anchor
+// target opens (review-20261113-700d).
+(function () {
+    function openAncestors(el) {
+        for (var d = el && el.closest ? el.closest('details') : null; d; d = d.parentElement && d.parentElement.closest('details')) {
+            d.open = true;
+        }
+    }
+    document.addEventListener('invalid', function (e) { openAncestors(e.target); }, true);
+    function openHash() {
+        var id;
+        try { id = decodeURIComponent((location.hash || '').slice(1)); } catch (err) { return; }
+        var el = id ? document.getElementById(id) : null;
+        if (!el) return;
+        // The browser then scrolls to the fragment itself (measured in
+        // Chromium: the scroll lands after the section opens).
+        openAncestors(el);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', openHash);
+    } else {
+        openHash();
+    }
+    window.addEventListener('hashchange', openHash);
 })();

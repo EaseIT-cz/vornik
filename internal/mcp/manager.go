@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -63,6 +64,37 @@ type Manager struct {
 	// holds is the sticky suspension of agent read tools and the re-list
 	// state (agent-administered design §6.5, amendment #481).
 	holds readHolds
+	// shuttingDown is set once by BeginShutdown and never cleared (GitHub
+	// #685): a dial that fails after it is the process ending, not a
+	// connection failure.
+	shuttingDown atomic.Bool
+}
+
+// BeginShutdown tells the manager the daemon is stopping (GitHub #685; MCP
+// failed-connect recovery design, amendment 2026-11-12). From then on a failed
+// dial logs at DEBUG and StartForProject records nothing to retry: systemd
+// signals every process in the unit, so a stdio server dialled in the last
+// seconds dies with the daemon.
+func (m *Manager) BeginShutdown() { m.shuttingDown.Store(true) }
+
+// ShuttingDown reports whether BeginShutdown has been called.
+func (m *Manager) ShuttingDown() bool { return m.shuttingDown.Load() }
+
+// logDialFailure logs a failed connect and reports whether it is a real
+// failure (false once BeginShutdown has been called).
+func (m *Manager) logDialFailure(projectID string, cfg ServerConfig, err error, status int) bool {
+	if m.ShuttingDown() {
+		m.logger.Debug().Err(err).Str("project", projectID).Str("server", cfg.Name).
+			Msg("mcp: dial ended by daemon shutdown")
+		return false
+	}
+	m.logger.Error().
+		Err(err).
+		Str("project", projectID).
+		Str("server", cfg.Name).
+		Int("http_status", status).
+		Msg("mcp: failed to connect")
+	return true
 }
 
 // SetBlockNotifier wires the scraper-block → Telegram notify hook. Nil-safe;
@@ -158,12 +190,7 @@ func (m *Manager) SyncProjects(ctx context.Context, desired map[string][]ServerC
 				if err != nil {
 					status := connectFailureStatus(err) // before redaction, which may drop the type
 					err = redactConnectErr(err)
-					m.logger.Error().
-						Err(err).
-						Str("project", projectID).
-						Str("server", cfg.Name).
-						Int("http_status", status).
-						Msg("mcp: failed to connect")
+					m.logDialFailure(projectID, cfg, err, status)
 					results <- dialResult{projectID: projectID, name: cfg.Name, cfg: cfg, err: err}
 					return
 				}
@@ -280,13 +307,9 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 		if err != nil {
 			status := connectFailureStatus(err) // before redaction, which may drop the type
 			err = redactConnectErr(err)
-			m.logger.Error().
-				Err(err).
-				Str("project", projectID).
-				Str("server", cfg.Name).
-				Int("http_status", status).
-				Msg("mcp: failed to connect")
-			m.recordStartFailure(projectID, cfg, err, startGen)
+			if m.logDialFailure(projectID, cfg, err, status) {
+				m.recordStartFailure(projectID, cfg, err, startGen)
+			}
 			continue
 		}
 		m.judgeListing(projectID, client) // design §6.5 item 4, amendment #481

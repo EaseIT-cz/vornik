@@ -43,6 +43,7 @@ var setupSurface502 = []route495{
 	{http.MethodPost, "/api/v1/setup/session/s502/memory/validate", `{"enabled":true}`},
 	{http.MethodPost, "/api/v1/setup/session/s502/memory/commit", `{"enabled":true}`},
 	{http.MethodPost, "/api/v1/setup/managed", `{}`}, // GitHub #582 P2
+	{http.MethodPost, "/api/v1/setup/apply", `{}`},   // GitHub #758
 }
 
 // wizardSurface502 is design S4: every wizard pair, not only commit.
@@ -188,8 +189,9 @@ func TestOperatorSurface502_SetupAndWizardRoutesWrapped(t *testing.T) {
 		assert.True(t, strings.HasPrefix(h, "server.operatorOnly("), "%s is registered as %s, not through server.operatorOnly", path, h)
 		return true
 	})
-	// 8 since GitHub #582 P2 added /api/v1/setup/managed (18-security-and-tenancy.md, U1 amendment).
-	assert.Equal(t, 8, seen, "the setup and wizard registrations moved: update design U1/U3")
+	// 8 since GitHub #582 P2 added /api/v1/setup/managed, 9 since #758 added
+	// /api/v1/setup/apply (18-security-and-tenancy.md, U1 amendments).
+	assert.Equal(t, 9, seen, "the setup and wizard registrations moved: update design U1/U3")
 }
 
 // The eight setup handlers lost their in-handler RoleUser check (S1); a

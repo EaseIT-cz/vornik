@@ -58,8 +58,9 @@ func TestNewContainer_CommunityRendersAdminNavEntries(t *testing.T) {
 		t.Fatalf("GET /ui/tasks: status = %d, want 200; body:\n%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
+	// The operator console's rail icon (the Admin area before #755).
 	if !strings.Contains(body, `data-admin-link class="rail-ico`) {
-		t.Error("CE /ui/tasks: Admin rail icon should render visible — ui.WithAllUICallersAdmin is not wired in the uiOpts site")
+		t.Error("CE /ui/tasks: operator console rail icon should render visible — ui.WithAllUICallersAdmin is not wired in the uiOpts site")
 	}
 	for _, h := range []string{"/ui/swarms", "/ui/workflows"} {
 		if !strings.Contains(body, `href="`+h+`" data-admin-link class="panel-item`) {

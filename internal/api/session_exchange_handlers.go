@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/authsession"
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/httpx/realip"
@@ -151,19 +152,27 @@ func (s *Server) SessionExchange(w http.ResponseWriter, r *http.Request) {
 // differences are facts about someone else's account.
 const sessionExchangeRefusal = "could not exchange this credential for a session"
 
-// Values of the JS-readable nav marker. They are a CONTRACT with the
-// console's markup, not free strings: the EE login flow sets the same two, and
-// the nav renders "Sign out" on either and the Admin link only on the first.
+// Values of the JS-readable nav marker: a contract with the console's markup,
+// not free strings; the EE login flow sets the same three. Sign out shows on
+// all three, the Admin link only on "admin", the owner's Admin entries only on
+// "owner" (GitHub #625 item 1).
 const (
 	navMarkerAdmin = "admin"
 	navMarkerUser  = "1"
+	navMarkerOwner = "owner"
 )
 
 // navMarker is the JS-readable role hint the nav reads. Decoration, never
 // authority — the server re-resolves the real principal on every request.
 func navMarker(role string) string {
-	if role == authz.RoleAdmin {
+	switch role {
+	case authz.RoleAdmin:
 		return navMarkerAdmin
+	case auth.RoleTenantAdmin:
+		// Only a demoted admin's session has this role (navRole); no
+		// principal is stored with it, so the EE flow's demoted-admin
+		// branch is the same case.
+		return navMarkerOwner
 	}
 	return navMarkerUser
 }
@@ -228,7 +237,7 @@ func WithSessionExchange(subjects exchangeSubjectResolver, minter sessionExchang
 func (s *Server) navRole(r *http.Request, role string) string {
 	if sb, ok := s.sessionBackend.(*authsession.SessionBackend); ok && role == authz.RoleAdmin &&
 		sb.DemoteAdmin != nil && sb.DemoteAdmin(r.Context()) {
-		return authz.RoleUser
+		return auth.RoleTenantAdmin // the instance owner (#560 M1b; #625 item 1)
 	}
 	return role
 }

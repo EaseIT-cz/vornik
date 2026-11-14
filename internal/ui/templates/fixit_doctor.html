@@ -16,7 +16,7 @@
             </div>
 
             {{if not .Configured}}
-            <div class="rounded-md border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+            <div class="rounded-md border border-amber-700/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
                 Fix-It Doctor is not configured on this deployment.
             </div>
             {{else}}
@@ -53,7 +53,7 @@
      the POST /message handler returns. */}}
 {{define "fixItTranscript"}}
 {{if .Notice}}
-<div class="rounded-md border border-amber-700/40 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 mb-3">
+<div class="rounded-md border border-amber-700/40 bg-amber-950/30 px-4 py-2 text-sm text-amber-800 mb-3 dark:text-amber-200">
     {{.Notice}}
 </div>
 {{end}}
@@ -62,13 +62,13 @@
 <div class="space-y-3 mb-4">
     {{range .Turns}}
     <div class="rounded-md border border-ink-800 px-4 py-3 {{if eq .Role "user"}}bg-ink-900{{else}}bg-ink-850{{end}}">
-        <div class="text-[10px] uppercase tracking-wider text-ink-500 mb-1">
+        <div class="text-xs uppercase tracking-wider text-ink-500 mb-1">
             {{if eq .Role "user"}}You{{else}}Fix-It Doctor{{end}}
         </div>
         <div class="text-sm text-ink-100 whitespace-pre-wrap">{{.Content}}</div>
 
         {{if .Resolved}}
-        <div class="mt-2 text-xs text-emerald-300">The assistant believes this is now resolved.</div>
+        <div class="mt-2 text-xs text-emerald-700 dark:text-emerald-300">The assistant believes this is now resolved.</div>
         {{end}}
 
         {{if .Actions}}

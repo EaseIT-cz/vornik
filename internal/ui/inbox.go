@@ -54,7 +54,7 @@ type inboxItem struct {
 // InboxData backs templates/inbox.html.
 type InboxData struct {
 	Title       string
-	CurrentPage string // "inbox" → Orchestration nav area
+	CurrentPage string // "inbox" → the Needs you door (#755)
 	Items       []inboxItem
 	Count       int
 

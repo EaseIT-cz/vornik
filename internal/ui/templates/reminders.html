@@ -48,7 +48,7 @@
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Project</span>
                     <input type="text" name="project" value="{{.FilterProject}}" placeholder="e.g. assistant" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-44">
                 </label>
-                <button class="bg-brand-500 hover:bg-brand-500 text-white text-xs font-medium px-3 py-1.5 rounded-md">Filter</button>
+                <button class="v-btn v-btn--primary">Filter</button>
             </form>
 
             {{if .Rows}}
@@ -70,11 +70,11 @@
                             <tr class="hover:bg-dark-700/40 transition-colors align-top">
                                 <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-400 font-mono" title="{{.FireAtISO}}">
                                     <div>{{.FireAt}}</div>
-                                    <div class="text-[10px] text-gray-500 mt-0.5">{{.Countdown}}</div>
+                                    <div class="text-xs text-gray-500 mt-0.5">{{.Countdown}}</div>
                                     {{if .IsRecurring}}
-                                    <div class="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5" title="Cron expression">↻ {{.CronExpr}}</div>
+                                    <div class="text-xs text-violet-700 dark:text-violet-300 mt-0.5" title="Cron expression">↻ {{.CronExpr}}</div>
                                     {{if .RecurrenceUntil}}
-                                    <div class="text-[10px] text-gray-500 mt-0.5">until {{.RecurrenceUntil}}</div>
+                                    <div class="text-xs text-gray-500 mt-0.5">until {{.RecurrenceUntil}}</div>
                                     {{end}}
                                     {{end}}
                                 </td>
@@ -84,7 +84,7 @@
                                 <td class="px-4 py-2 whitespace-nowrap text-xs">
                                     <span class="font-mono pill {{if .IsTaskKind}}pill-info{{else}}pill-neutral{{end}}">{{.Kind}}</span>
                                     {{if and .IsTaskKind .LastTaskID}}
-                                    <div class="mt-1"><a href="/ui/tasks/{{.LastTaskID}}" class="text-brand-400 hover:text-brand-300 font-mono text-[10px]" title="{{.LastTaskID}}">{{shortID .LastTaskID}}</a></div>
+                                    <div class="mt-1"><a href="/ui/tasks/{{.LastTaskID}}" class="text-brand-400 hover:text-brand-300 font-mono text-xs" title="{{.LastTaskID}}">{{shortID .LastTaskID}}</a></div>
                                     {{end}}
                                 </td>
                                 <td class="px-4 py-2 text-sm text-gray-200 max-w-md truncate" title="{{.Content}}">{{.Content}}</td>
@@ -97,29 +97,29 @@
                                         <form method="post" action="/ui/reminders/{{.ID}}/pause"
                                               data-confirm="Pause reminder {{.ID}}?"
                                               class="inline-flex">
-                                            <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-amber-700 dark:text-amber-300 ring-1 ring-dark-600">Pause</button>
+                                            <button type="submit" class="v-btn v-btn--secondary">Pause</button>
                                         </form>
                                         {{end}}
                                         {{if .CanResume}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/resume"
                                               data-confirm="Resume reminder {{.ID}}?"
                                               class="inline-flex">
-                                            <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-emerald-700 dark:text-emerald-300 ring-1 ring-dark-600">Resume</button>
+                                            <button type="submit" class="v-btn v-btn--secondary">Resume</button>
                                         </form>
                                         {{end}}
                                         {{if not .IsTerminal}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/cancel"
                                               data-confirm="Cancel reminder {{.ID}}?"
                                               class="inline-flex">
-                                            <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-gray-200 ring-1 ring-dark-600">Cancel</button>
+                                            <button type="submit" class="v-btn v-btn--secondary">Cancel</button>
                                         </form>
                                         {{else}}
-                                        <span class="text-[11px] text-gray-600 italic">terminal</span>
+                                        <span class="text-xs text-gray-600 italic">terminal</span>
                                         {{end}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/delete"
                                               data-confirm="Permanently delete reminder {{.ID}}? This cannot be undone."
                                               class="inline-flex">
-                                            <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-rose-900/40 hover:bg-rose-900/60 text-rose-600 dark:text-rose-200 ring-1 ring-rose-700/40" title="Permanently remove this row">Delete</button>
+                                            <button type="submit" class="v-btn v-btn--danger" title="Permanently remove this row">Delete</button>
                                         </form>
                                     </div>
                                 </td>

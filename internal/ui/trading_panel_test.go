@@ -76,7 +76,7 @@ func TestBuildTradingPanel_PopulatesFromBroker(t *testing.T) {
 	s := &Server{logger: zerolog.Nop()}
 	project := &registry.Project{
 		ID:  "p1",
-		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", URL: broker.URL}}},
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: broker.URL}}},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)
 
@@ -109,7 +109,7 @@ func TestBuildTradingPanel_BrokerUnreachable(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		// Port 1 is reserved + nobody listens — fast dial failure.
-		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", URL: "http://127.0.0.1:1"}}},
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: "http://127.0.0.1:1"}}},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)
 	assert.True(t, panel.Enabled, "trading IS configured")
@@ -139,7 +139,7 @@ func TestBuildTradingPanel_SendsProjectCapsHeader(t *testing.T) {
 	s := &Server{logger: zerolog.Nop()}
 	project := &registry.Project{
 		ID:  "ibkr-trader",
-		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", URL: broker.URL}}},
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: broker.URL}}},
 		Trading: registry.ProjectTrading{
 			Mode:       "paper",
 			KillSwitch: false,
@@ -180,7 +180,7 @@ func TestBuildTradingPanel_PortfolioOnlyNullDoesntBreakPanel(t *testing.T) {
 	s := &Server{logger: zerolog.Nop()}
 	project := &registry.Project{
 		ID:  "p1",
-		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", URL: broker.URL}}},
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: broker.URL}}},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)
 	assert.True(t, panel.Enabled)

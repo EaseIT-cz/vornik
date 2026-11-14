@@ -30,11 +30,11 @@
                 <a href="/ui/swarms/{{.ID}}/edit" class="tap block glass rounded-xl border border-dark-700 px-4 py-3 hover:border-dark-600 transition-colors">
                     <div class="flex items-center justify-between gap-2">
                         <span class="text-sm font-medium text-gray-100">{{.Label}}</span>
-                        <span class="text-[11px] px-2 py-0.5 rounded-full bg-dark-700 text-gray-300">{{.Runtime}}</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-dark-700 text-gray-300">{{.Runtime}}</span>
                     </div>
-                    <div class="text-[11px] text-gray-500 mt-1 font-mono">{{.ID}}</div>
+                    <div class="text-xs text-gray-500 mt-1 font-mono">{{.ID}}</div>
                     <div class="text-xs text-gray-400 mt-1">{{.RoleCount}} role{{if ne .RoleCount 1}}s{{end}}{{if .LeadRole}} · lead: {{.LeadRole}}{{end}}</div>
-                    <div class="text-[11px] text-gray-500 mt-1">used by: {{if .UsedBy}}{{range $i, $p := .UsedBy}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}—{{end}}</div>
+                    <div class="text-xs text-gray-500 mt-1">used by: {{if .UsedBy}}{{range $i, $p := .UsedBy}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}—{{end}}</div>
                 </a>
                 {{end}}
             </div>
@@ -43,7 +43,7 @@
             <div class="hidden md:block glass rounded-xl border border-dark-700 overflow-hidden">
                 <table class="min-w-full divide-y divide-dark-700">
                     <thead class="bg-dark-800/60">
-                        <tr class="text-left text-[11px] uppercase tracking-wider text-gray-500">
+                        <tr class="text-left text-xs uppercase tracking-wider text-gray-500">
                             <th class="px-5 py-2.5 font-medium">Swarm</th>
                             <th class="px-5 py-2.5 font-medium">Roles</th>
                             <th class="px-5 py-2.5 font-medium">Lead</th>
@@ -56,11 +56,11 @@
                         <tr class="hover:bg-dark-800/50 transition-colors cursor-pointer" data-on-click="navigate" data-href="/ui/swarms/{{.ID}}/edit">
                             <td class="px-5 py-3">
                                 <div class="text-sm font-medium text-gray-100">{{.Label}}</div>
-                                <div class="text-[11px] text-gray-500 font-mono">{{.ID}}</div>
+                                <div class="text-xs text-gray-500 font-mono">{{.ID}}</div>
                             </td>
                             <td class="px-5 py-3 text-sm text-gray-300">{{.RoleCount}}</td>
                             <td class="px-5 py-3 text-sm text-gray-400">{{if .LeadRole}}{{.LeadRole}}{{else}}—{{end}}</td>
-                            <td class="px-5 py-3"><span class="text-[11px] px-2 py-0.5 rounded-full bg-dark-700 text-gray-300">{{.Runtime}}</span></td>
+                            <td class="px-5 py-3"><span class="text-xs px-2 py-0.5 rounded-full bg-dark-700 text-gray-300">{{.Runtime}}</span></td>
                             <td class="px-5 py-3 text-sm text-gray-400">
                                 {{if .UsedBy}}{{range $i, $p := .UsedBy}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}<span class="text-gray-600">—</span>{{end}}
                             </td>

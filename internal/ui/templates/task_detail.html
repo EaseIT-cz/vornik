@@ -99,7 +99,7 @@
                     {{/* Secret-leak Phase 3: this task's output had secret-shaped
                          values redacted before persist/display. The tooltip
                          carries the per-type breakdown. */}}
-                    <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 text-[11px] font-medium rounded-full bg-amber-900/40 text-amber-300 border border-amber-700/50"
+                    <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 text-xs font-medium rounded-full bg-amber-900/40 text-amber-700 border border-amber-700/50 dark:text-amber-300"
                           title="{{range $type, $n := .RedactionsByType}}{{$type}}: {{$n}}  {{end}}">
                         🔒 {{.RedactionTotal}} secret{{if ne .RedactionTotal 1}}s{{end}} redacted
                     </span>
@@ -146,7 +146,7 @@
                     {{range .StoryLines}}
                     <li class="px-5 py-2.5 text-sm text-ink-200" data-seq="{{.Seq}}">
                         <span>{{.Text}}</span>
-                        {{if .Degraded}}<span class="ml-1.5 text-[10px] text-ink-500" title="Generated from a plain template — the narrator's LLM was unavailable, slow, or over budget.">(simplified)</span>{{end}}
+                        {{if .Degraded}}<span class="ml-1.5 text-xs text-ink-500" title="Generated from a plain template — the narrator's LLM was unavailable, slow, or over budget.">(simplified)</span>{{end}}
                     </li>
                     {{end}}
                 </ol>
@@ -196,7 +196,7 @@
                                placeholder="Optional — what made it good or not (max 500 chars)"
                                class="w-full px-3 py-1.5 rounded-lg bg-surface-800 border border-control text-sm text-ink-200 placeholder:text-ink-600">
                     </label>
-                    <p class="text-[11px] text-ink-600">
+                    <p class="text-xs text-ink-600">
                         Your verdict on execution <code>{{.Rating.ExecutionID}}</code>. Changing it
                         replaces your previous one; another operator's rating is separate.
                         {{if not .Rating.RatedAt.IsZero}}First rated {{.Rating.RatedAt.Format "2006-01-02 15:04"}} UTC.{{end}}
@@ -467,10 +467,10 @@
 
             {{/* Scratchpad summary — read-only collapsed view */}}
             {{if .Conversation.Scratchpad}}
-            <details class="glass rounded-xl border border-surface-600">
-                <summary class="px-5 py-3 cursor-pointer text-sm text-ink-300">
-                    Lead's running summary
-                    {{with .Conversation.Scratchpad.CurrentPhase}}<span class="text-ink-500"> — phase: {{.}}</span>{{end}}
+            <details class="vk-disc">
+                <summary class="vk-disc-sum">
+                    <h2 class="vk-disc-title">Lead's running summary</h2>
+                    {{with .Conversation.Scratchpad.CurrentPhase}}<span class="vk-disc-meta">phase: {{.}}</span>{{end}}
                 </summary>
                 <div class="px-5 py-4 space-y-2 border-t border-surface-600/60">
                     {{if .Conversation.Scratchpad.Summary}}<p class="text-sm text-ink-200 whitespace-pre-wrap">{{.Conversation.Scratchpad.Summary}}</p>{{end}}
@@ -592,7 +592,7 @@
                      above the scalar statStrip rather than collapsing into
                      the primitive (which renders plain {{.Value}} text). */}}
                 <dl class="px-5 pt-4">
-                    <dt class="text-ink-500 uppercase tracking-wider text-[10px]">Project</dt>
+                    <dt class="text-ink-500 uppercase tracking-wider text-xs">Project</dt>
                     <dd class="mt-0.5 text-sm text-ink-100">
                         {{if .Project}}<a href="/ui/projects/{{.Project.ID}}" class="text-brand-400 hover:text-brand-300">{{if .Project.DisplayName}}{{.Project.DisplayName}}{{else}}{{.Project.ID}}{{end}}</a>
                         {{if .Project.DisplayName}}<span class="ml-1 text-xs text-ink-500 font-mono">{{.Project.ID}}</span>{{end}}
@@ -635,7 +635,7 @@
                         <div class="flex items-center gap-2">
                             <svg class="h-3.5 w-3.5 text-amber-800 dark:text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
                             <span class="text-xs font-medium text-amber-800 dark:text-amber-400">Post-mortem</span>
-                            {{if .PostMortem}}<span class="text-[10px] text-ink-500">recorded {{.PostMortem.RecordedAt.Format "Jan 2 15:04"}}</span>{{end}}
+                            {{if .PostMortem}}<span class="text-xs text-ink-500">recorded {{.PostMortem.RecordedAt.Format "Jan 2 15:04"}}</span>{{end}}
                         </div>
                         {{if .PostMortemAvailable}}
                         <form method="POST" action="/ui/tasks/{{.Task.ID}}/post-mortem" class="m-0">
@@ -653,7 +653,7 @@
                     {{end}}
                     {{if .PostMortem}}
                     <div class="text-sm text-ink-200 bg-surface-900 rounded-lg p-3 border border-surface-600/60 whitespace-pre-wrap">{{.PostMortem.Summary}}</div>
-                    <div class="mt-2 flex items-center gap-3 text-[10px] text-ink-500">
+                    <div class="mt-2 flex items-center gap-3 text-xs text-ink-500">
                         {{if .PostMortem.Model}}<span>model: <span class="text-ink-400 font-mono">{{.PostMortem.Model}}</span></span>{{end}}
                         {{if gt .PostMortem.CostUSD 0.0}}<span>cost: <span class="text-ink-400 font-mono">${{printf "%.4f" .PostMortem.CostUSD}}</span></span>{{end}}
                         {{if gt .PostMortem.PromptTokens 0}}<span>tokens: <span class="text-ink-400 font-mono">{{.PostMortem.PromptTokens}}/{{.PostMortem.CompletionTokens}}</span></span>{{end}}
@@ -697,10 +697,9 @@
                         <svg class="h-5 w-5 text-amber-800 dark:text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
                         <p class="text-base text-ink-100 leading-snug">{{.Playbook.HumanFriendly}}</p>
                     </div>
-                    <details class="group">
-                        <summary class="cursor-pointer text-xs text-ink-400 hover:text-ink-200 transition-colors flex items-center gap-1.5">
-                            <svg class="h-3 w-3 transform transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-                            Show technical details
+                    <details class="vk-disc vk-disc-row">
+                        <summary class="vk-disc-sum">
+                            <span class="vk-disc-title">Show technical details</span>
                         </summary>
                         <div class="mt-3 space-y-2 pl-4 border-l-2 border-surface-600">
                             <div class="flex items-center gap-2">
@@ -713,7 +712,7 @@
                             {{end}}
                             </ol>
                             {{if .Playbook.References}}
-                            <div class="mt-3 text-[10px] text-ink-500">
+                            <div class="mt-3 text-xs text-ink-500">
                                 <span class="font-medium">References:</span>
                                 <ul class="list-disc list-inside mt-1 space-y-0.5">
                                 {{range .Playbook.References}}
@@ -741,13 +740,13 @@
                     <div class="flex items-center gap-2 mb-2">
                         <svg class="h-4 w-4 text-emerald-800 dark:text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         <span class="text-xs font-medium text-emerald-800 dark:text-emerald-400">Similar failures here resolved by</span>
-                        <span class="text-[10px] text-ink-500">— learned from this project's history (advisory)</span>
+                        <span class="text-xs text-ink-500">— learned from this project's history (advisory)</span>
                     </div>
                     <ul class="space-y-1.5">
                     {{range .LearnedRemediations}}
                         <li class="text-sm text-ink-200 flex items-baseline gap-2">
                             <span>{{.Action}}</span>
-                            <span class="text-[10px] text-ink-500 whitespace-nowrap">(confidence {{printf "%.2f" .Confidence}} · {{.SupportCount}} resolved / {{.ContradictCount}} regressed)</span>
+                            <span class="text-xs text-ink-500 whitespace-nowrap">(confidence {{printf "%.2f" .Confidence}} · {{.SupportCount}} resolved / {{.ContradictCount}} regressed)</span>
                         </li>
                     {{end}}
                     </ul>
@@ -801,11 +800,10 @@
                          of steering AFTER a failure. The hint endpoint
                          is /api/v1/projects/{p}/tasks/{id}/hints which
                          shipped 2026-05-26 with the task-scope schema. */}}
-                    <details id="steer-failed-section" class="mt-4 group">
-                        <summary class="cursor-pointer list-none flex items-center gap-1.5 text-xs font-medium text-accent-300 hover:text-accent-200">
-                            <svg class="h-3.5 w-3.5 transform transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-                            Compose a steering hint
-                            <span class="text-[10px] text-ink-500 font-normal ml-1">(applied on next retry)</span>
+                    <details id="steer-failed-section" class="vk-disc vk-disc-row">
+                        <summary class="vk-disc-sum">
+                            <span class="vk-disc-title text-accent-300">Compose a steering hint</span>
+                            <span class="vk-disc-meta">applied on next retry</span>
                         </summary>
                         <div class="mt-3 space-y-2">
                             <textarea id="steer-failed-input" rows="3"
@@ -813,12 +811,12 @@
                                       placeholder="What should the next attempt do differently? e.g. &quot;Skip the headphones.com source — it's captcha-locked. Use Reuters for the news round-up.&quot;"
                                       class="w-full px-3 py-2 text-sm rounded-lg bg-surface-900 border border-control text-ink-100 focus:border-accent-500/60 focus:outline-none resize-none"></textarea>
                             <div class="flex items-center justify-between gap-2 flex-wrap">
-                                <span class="text-[11px] text-ink-500">Hint is task-scoped: <span class="text-ink-400">it survives the retry and applies to the new execution's first step.</span></span>
+                                <span class="text-xs text-ink-500">Hint is task-scoped: <span class="text-ink-400">it survives the retry and applies to the new execution's first step.</span></span>
                                 <div class="flex items-center gap-3">
                                     {{/* Secondary: queue without retry — for
                                          operators composing multiple hints
                                          before the actual retry. */}}
-                                    <button id="steer-failed-queue-only" type="button" data-on-click="submitFailedSteeringHint" data-args="[false]" class="text-[11px] text-ink-400 hover:text-ink-200 transition-colors underline-offset-2 hover:underline">
+                                    <button id="steer-failed-queue-only" type="button" data-on-click="submitFailedSteeringHint" data-args="[false]" class="text-xs text-ink-400 hover:text-ink-200 transition-colors underline-offset-2 hover:underline">
                                         Queue only
                                     </button>
                                     {{/* Primary: queue THEN retry in one
@@ -830,8 +828,8 @@
                                     </button>
                                 </div>
                             </div>
-                            <p id="steer-failed-error" class="hidden text-[11px] text-rose-700 dark:text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded px-2 py-1.5"></p>
-                            <p id="steer-failed-ok" class="hidden text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-950/30 border border-emerald-900/40 rounded px-2 py-1.5"></p>
+                            <p id="steer-failed-error" class="hidden text-xs text-rose-700 dark:text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded px-2 py-1.5"></p>
+                            <p id="steer-failed-ok" class="hidden text-xs text-emerald-700 dark:text-emerald-300 bg-emerald-950/30 border border-emerald-900/40 rounded px-2 py-1.5"></p>
                             {{/* Hidden form used by the JS to submit the
                                  retry after a successful hint POST. The
                                  browser follows the server's redirect to
@@ -937,8 +935,8 @@
 
             <!-- Task Input (reference — closed by default) -->
             {{if .Task.Payload}}
-            <details class="panel-ref overflow-hidden">
-                <summary>{{template "sectionHeader" (dict "Title" "Input")}}</summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Input</h2></summary>
                 <div class="px-5 py-4">
                     {{$prompt := extractPrompt .Task.Payload}}
                     {{if $prompt}}
@@ -947,8 +945,8 @@
                         <div class="text-sm text-ink-200 bg-surface-900 rounded-lg p-3 border border-surface-600/60 whitespace-pre-wrap">{{$prompt}}</div>
                     </div>
                     {{end}}
-                    <details class="mt-2">
-                        <summary class="text-xs text-ink-500 cursor-pointer hover:text-ink-300 select-none">Raw payload</summary>
+                    <details class="vk-disc vk-disc-row">
+                        <summary class="vk-disc-sum"><span class="vk-disc-title">Raw payload</span></summary>
                         <pre class="text-xs text-ink-400 bg-surface-900 rounded-lg p-3 overflow-auto mt-2 max-h-[60vh] border border-surface-600/60">{{prettyJSON (displayTaskPayload .Task.Payload)}}</pre>
                     </details>
                 </div>
@@ -958,8 +956,8 @@
             <!-- Execution Output (reference — open by default once the task is finished) -->
             {{if .Execution}}{{if .Execution.Result}}
             {{$r := parseResult .Execution.Result}}
-            <details class="panel-ref overflow-hidden" {{if refOpen .Task.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
-                <summary>{{template "sectionHeader" (dict "Title" "Output")}}</summary>
+            <details class="vk-disc" {{if refOpen .Task.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Output</h2></summary>
                 {{if or $r.toolCount $r.duration}}
                 <div class="px-5 pt-3 flex items-center gap-3">
                     {{if $r.toolCount}}<span class="text-xs text-ink-500">{{$r.toolCount}} tool calls</span>{{end}}
@@ -984,8 +982,8 @@
                         </div>
                     </div>
                     {{end}}
-                    <details>
-                        <summary class="text-xs text-ink-500 cursor-pointer hover:text-ink-300 select-none">Raw JSON</summary>
+                    <details class="vk-disc vk-disc-row">
+                        <summary class="vk-disc-sum"><span class="vk-disc-title">Raw JSON</span></summary>
                         <pre class="text-xs text-ink-400 bg-surface-900 rounded-lg p-3 overflow-auto mt-2 max-h-[60vh] border border-surface-600/60">{{prettyJSON .Execution.Result}}</pre>
                     </details>
                 </div>
@@ -1037,8 +1035,8 @@
                  today's pre-2.2 behaviour. companion-review
                  review-20260710-d9af.md finding #2. -->
             {{if .Task.LeaseID}}
-            <details class="panel-ref overflow-hidden" {{if not .IsRoleUser}}open{{end}}>
-                <summary>{{template "sectionHeader" (dict "Title" "Lease")}}</summary>
+            <details class="vk-disc" {{if not .IsRoleUser}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Lease</h2></summary>
                 <div class="px-5 py-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <dl><dt class="text-xs text-ink-500 mb-1">Lease ID</dt><dd class="text-sm text-ink-100 font-mono text-xs">{{.Task.LeaseID}}</dd></dl>
                     <dl><dt class="text-xs text-ink-500 mb-1">Leased By</dt><dd class="text-sm text-ink-100 font-mono">{{if .Task.LeasedBy}}{{.Task.LeasedBy}}{{else}}-{{end}}</dd></dl>
@@ -1050,8 +1048,8 @@
 
             <!-- Changelog (reference — closed by default) -->
             {{if .ChangelogContent}}
-            <details class="panel-ref overflow-hidden">
-                <summary>{{template "sectionHeader" (dict "Title" "Changelog")}}</summary>
+            <details class="vk-disc">
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Changelog</h2></summary>
                 <div class="px-5 py-4">
                     <div class="text-sm text-ink-200 bg-surface-900 rounded-lg p-4 border border-surface-600/60 whitespace-pre-wrap max-h-[70vh] overflow-auto leading-relaxed">{{.ChangelogContent}}</div>
                 </div>
@@ -1060,8 +1058,8 @@
 
             <!-- LLM-as-judge verdict (reference — open by default once the task is finished) -->
             {{if .JudgeVerdict}}
-            <details class="panel-ref overflow-hidden" {{if refOpen .Task.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
-                <summary>{{template "sectionHeader" (dict "Title" "Hallucination judge")}}</summary>
+            <details class="vk-disc" {{if refOpen .Task.Status "COMPLETED" "FAILED" "CANCELLED"}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Hallucination judge</h2></summary>
                 {{/* Verdict meta moves into the body — sectionHeader carries
                      only Title + a single MetaText, but the decision badge +
                      confidence + model is a three-part rich row. */}}
@@ -1086,10 +1084,10 @@
                     <table class="min-w-full divide-y divide-surface-600/60">
                         <thead class="bg-surface-900/60">
                             <tr>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Severity</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Type</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Claim</th>
-                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-semibold text-ink-400 uppercase tracking-wider">Detail</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Severity</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Type</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Claim</th>
+                                <th scope="col" class="px-4 py-2 text-left text-xs font-semibold text-ink-400 uppercase tracking-wider">Detail</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-surface-600/40">
@@ -1134,12 +1132,12 @@
                  only the per-step row table is gated. Collapsed by
                  default for RoleUser sessions; admins keep it open
                  (today's behaviour, unchanged). */}}
-            <details class="glass rounded-xl border border-surface-600 overflow-hidden panel-ref" {{if not .IsRoleUser}}open{{end}}>
-                <summary class="px-5 py-3.5 border-b border-surface-600/60 flex items-center justify-between flex-wrap gap-y-2 cursor-pointer list-none">
-                    <h2 class="text-sm font-semibold text-ink-200 flex items-center gap-2">
+            <details class="vk-disc" {{if not .IsRoleUser}}open{{end}}>
+                <summary class="vk-disc-sum flex-wrap gap-y-2">
+                    <h2 class="vk-disc-title flex items-center gap-2">
                         <svg class="h-4 w-4 text-ink-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         LLM Cost
-                        <span class="text-[10px] text-ink-500 font-normal normal-case">— Show technical details</span>
+                        <span class="text-xs text-ink-500 font-normal normal-case">— Show technical details</span>
                     </h2>
                     {{if .Cost.Rows}}
                     <div class="flex items-center gap-4 text-xs text-ink-500">
@@ -1280,8 +1278,8 @@
                  same as today's pre-2.2 behaviour. companion-review
                  review-20260710-d9af.md finding #2. -->
             {{if .Executions}}
-            <details class="glass rounded-xl border border-surface-600 overflow-hidden panel-ref" {{if not .IsRoleUser}}open{{end}}>
-                <summary>{{template "sectionHeader" (dict "Title" "Execution Attempts" "MetaText" (printf "%d" (len .Executions)))}}</summary>
+            <details class="vk-disc" {{if not .IsRoleUser}}open{{end}}>
+                <summary class="vk-disc-sum"><h2 class="vk-disc-title">Execution Attempts</h2><span class="vk-disc-meta">{{len .Executions}}</span></summary>
                 <div class="px-5 py-4 space-y-3">
                     {{range $i, $exec := .Executions}}
                     <div class="bg-surface-900 rounded-lg p-4 border {{if eq $exec.Status "FAILED"}}border-rose-900/50{{else if eq $exec.Status "COMPLETED"}}border-emerald-900/50{{else}}border-surface-600{{end}}">

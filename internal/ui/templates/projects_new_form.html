@@ -12,7 +12,7 @@
                     <a href="/ui/projects/new" class="text-xs text-gray-500 hover:text-gray-300">← Back to gallery</a>
                     <h1 class="text-xl font-semibold text-gray-100 mt-1">{{.SelectedManifest.DisplayName}}</h1>
                 </div>
-                <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-dark-800 text-gray-400 border border-dark-700">{{.SelectedManifest.Domain}}</span>
+                <span class="text-xs uppercase tracking-wide px-1.5 py-0.5 rounded bg-dark-800 text-gray-400 border border-dark-700">{{.SelectedManifest.Domain}}</span>
             </div>
 
             <p class="text-sm text-gray-400 leading-relaxed">{{.SelectedManifest.Description}}</p>
@@ -52,7 +52,7 @@
                     {{if $optErr}}
                     <select id="p_{{.Name}}" disabled multiple
                             class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-red-500/40 text-gray-500 cursor-not-allowed"></select>
-                    <p class="text-[11px] text-rose-600 dark:text-rose-400 mt-1">{{$optErr}}</p>
+                    <p class="text-xs text-rose-600 dark:text-rose-400 mt-1">{{$optErr}}</p>
                     {{else}}
                     {{$opts := or (listFromMap $.ResolvedOptions .Name) .Options}}
                     {{$name := .Name}}
@@ -73,7 +73,7 @@
                             class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-red-500/40 text-gray-500 cursor-not-allowed">
                         <option value="">unavailable</option>
                     </select>
-                    <p class="text-[11px] text-rose-600 dark:text-rose-400 mt-1">{{$optErr}}</p>
+                    <p class="text-xs text-rose-600 dark:text-rose-400 mt-1">{{$optErr}}</p>
                     {{else}}
                     <select name="p_{{.Name}}" id="p_{{.Name}}"
                             class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
@@ -102,7 +102,7 @@
                            class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                     {{end}}
                     {{if .Description}}
-                    <p class="text-[11px] text-gray-500 mt-1">{{.Description}}</p>
+                    <p class="text-xs text-gray-500 mt-1">{{.Description}}</p>
                     {{end}}
                 </div>
                 {{end}}

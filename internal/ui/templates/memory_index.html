@@ -53,20 +53,20 @@
                 <div class="grid grid-cols-3 divide-x divide-dark-700/60 border-b border-dark-700/60">
                     <div class="px-5 py-3 text-center">
                         <div class="text-lg font-semibold text-gray-100">{{.KG.Entities}}</div>
-                        <div class="text-[11px] uppercase tracking-wider text-gray-500">Entities</div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Entities</div>
                     </div>
                     <div class="px-5 py-3 text-center">
                         <div class="text-lg font-semibold text-gray-100">{{.KG.Edges}}</div>
-                        <div class="text-[11px] uppercase tracking-wider text-gray-500">Edges</div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Edges</div>
                     </div>
                     <div class="px-5 py-3 text-center">
                         <div class="text-lg font-semibold text-gray-100">{{.KG.Mentions}}</div>
-                        <div class="text-[11px] uppercase tracking-wider text-gray-500">Mentions</div>
+                        <div class="text-xs uppercase tracking-wider text-gray-500">Mentions</div>
                     </div>
                 </div>
                 {{if .KG.EntitiesByType}}
                 <div class="px-5 py-3">
-                    <p class="text-[11px] uppercase tracking-wider text-gray-500 mb-2">Entities by type</p>
+                    <p class="text-xs uppercase tracking-wider text-gray-500 mb-2">Entities by type</p>
                     <div class="flex flex-wrap gap-2">
                         {{range .KG.EntitiesByType}}
                         <span class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-dark-700/60 border border-dark-700 text-xs">

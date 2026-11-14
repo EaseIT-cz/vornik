@@ -117,7 +117,7 @@ func TestBuildTradingPanel_PopulatesRecentOrders(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		MCP: registry.ProjectMCP{
-			Servers: []registry.MCPServerConfig{{Name: "broker", URL: brokerStub(t)}},
+			Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: brokerStub(t)}},
 		},
 	}
 
@@ -183,7 +183,7 @@ func TestBuildTradingPanel_PopulatesRecentFills(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		MCP: registry.ProjectMCP{
-			Servers: []registry.MCPServerConfig{{Name: "broker", URL: brokerStub(t)}},
+			Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: brokerStub(t)}},
 		},
 	}
 
@@ -212,7 +212,7 @@ func TestBuildTradingPanel_EmptyHistoryWhenReposNil(t *testing.T) {
 	project := &registry.Project{
 		ID: "p1",
 		MCP: registry.ProjectMCP{
-			Servers: []registry.MCPServerConfig{{Name: "broker", URL: brokerStub(t)}},
+			Servers: []registry.MCPServerConfig{{Name: "broker", Transport: "sse", URL: brokerStub(t)}},
 		},
 	}
 	panel := s.buildTradingPanel(context.Background(), project)

@@ -34,31 +34,45 @@
             {{end}}
 
             <form method="POST" action="/ui/projects/{{.ProjectID}}/config/form" class="space-y-6">
+                <nav aria-label="Settings sections" class="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                    <a href="#identity" class="text-brand-300 hover:text-brand-200 hover:underline">Identity</a>
+                    <a href="#routing" class="text-brand-300 hover:text-brand-200 hover:underline">Routing</a>
+                    <a href="#autonomy" class="text-brand-300 hover:text-brand-200 hover:underline">Autonomy</a>
+                    <a href="#permissions" class="text-brand-300 hover:text-brand-200 hover:underline">Permissions</a>
+                    <a href="#budget" class="text-brand-300 hover:text-brand-200 hover:underline">Budget</a>
+                    <a href="#rate-limit" class="text-brand-300 hover:text-brand-200 hover:underline">Rate limit</a>
+                    <a href="#retention" class="text-brand-300 hover:text-brand-200 hover:underline">Retention</a>
+                    <a href="#chat" class="text-brand-300 hover:text-brand-200 hover:underline">Chat</a>
+                    <a href="#judge" class="text-brand-300 hover:text-brand-200 hover:underline">Judge</a>
+                    <a href="#trading" class="text-brand-300 hover:text-brand-200 hover:underline">Trading</a>
+                    <a href="#github-app" class="text-brand-300 hover:text-brand-200 hover:underline">GitHub App</a>
+                    <a href="#mcp-servers" class="text-brand-300 hover:text-brand-200 hover:underline">MCP servers</a>
+                </nav>
 
                 <!-- Identity -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
+                <section id="identity" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header class="flex items-center justify-between">
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Identity</h2>
                         {{if .HasBrief}}
-                        <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-600/20 text-brand-300 border border-brand-500/30">Brief attached</span>
+                        <span class="text-xs uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-600/20 text-brand-300 border border-brand-500/30">Brief attached</span>
                         {{end}}
                     </header>
 
                     {{if .HasBrief}}
                     <div class="rounded-md border border-dark-700 bg-dark-900/50 p-3 text-xs text-gray-400 flex items-start justify-between gap-3">
                         <div class="min-w-0">
-                            <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Brief goal</div>
+                            <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Brief goal</div>
                             <div class="text-gray-300 truncate">{{.BriefGoalPrev}}</div>
                         </div>
-                        <a href="/ui/projects/{{.ProjectID}}/brief" class="shrink-0 px-3 py-1.5 rounded-md bg-dark-700 text-gray-200 hover:bg-dark-600 text-[11px] font-medium">Edit brief</a>
+                        <a href="/ui/projects/{{.ProjectID}}/brief" class="shrink-0 px-3 py-1.5 rounded-md bg-dark-700 text-gray-200 hover:bg-dark-600 text-xs font-medium">Edit brief</a>
                     </div>
                     {{else}}
                     <div class="rounded-md border border-dashed border-dark-700 bg-dark-900/30 p-3 text-xs text-gray-400 flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <div class="text-gray-400">No project brief yet.</div>
-                            <p class="text-[11px] text-gray-500 mt-0.5">A brief grounds the prompt assistant and the upcoming wizard.</p>
+                            <p class="text-xs text-gray-500 mt-0.5">A brief grounds the prompt assistant and the upcoming wizard.</p>
                         </div>
-                        <a href="/ui/projects/{{.ProjectID}}/brief" class="shrink-0 px-3 py-1.5 rounded-md bg-brand-600/20 text-brand-300 border border-brand-500/30 hover:bg-brand-600/30 text-[11px] font-medium">Create brief</a>
+                        <a href="/ui/projects/{{.ProjectID}}/brief" class="shrink-0 px-3 py-1.5 rounded-md bg-brand-600/20 text-brand-300 border border-brand-500/30 hover:bg-brand-600/30 text-xs font-medium">Create brief</a>
                     </div>
                     {{end}}
 
@@ -66,29 +80,29 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="displayName">Display name</label>
                         <input type="text" name="displayName" id="displayName" value="{{.DisplayName}}"
                                class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
-                        <p class="text-[11px] text-gray-500 mt-1">Human-readable name. Clearing this falls back to the project ID.</p>
+                        <p class="text-xs text-gray-500 mt-1">Human-readable name. Clearing this falls back to the project ID.</p>
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="description">Description</label>
                         <textarea name="description" id="description" rows="3"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Description}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">Surfaces on the project homepage hero. Multi-line markdown is fine.</p>
+                        <p class="text-xs text-gray-500 mt-1">Surfaces on the project homepage hero. Multi-line markdown is fine.</p>
                     </div>
                 </section>
 
                 <!-- Routing -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
+                <section id="routing" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Routing</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Which swarm and workflow this project runs by default. Adaptive router picks from the candidate list when the default workflow is <code class="text-gray-400">adaptive</code>.</p>
+                        <p class="text-xs text-gray-500 mt-1">Which swarm and workflow this project runs by default. Adaptive router picks from the candidate list when the default workflow is <code class="text-gray-400">adaptive</code>.</p>
                     </header>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <div class="flex items-center justify-between mb-1.5">
                                 <label class="block text-xs font-medium text-gray-300" for="swarmId">Swarm</label>
-                                {{if .SwarmID}}<a href="/ui/swarms/{{.SwarmID}}/edit?projectId={{.ProjectID}}" class="text-[11px] text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Edit prompts →</a>{{end}}
+                                {{if .SwarmID}}<a href="/ui/swarms/{{.SwarmID}}/edit?projectId={{.ProjectID}}" class="text-xs text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Edit prompts →</a>{{end}}
                             </div>
                             <select name="swarmId" id="swarmId"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
@@ -102,7 +116,7 @@
                         <div>
                             <div class="flex items-center justify-between mb-1.5">
                                 <label class="block text-xs font-medium text-gray-300" for="defaultWorkflowId">Default workflow</label>
-                                {{if .DefaultWorkflowID}}<a href="/ui/workflows/{{.DefaultWorkflowID}}/edit?projectId={{.ProjectID}}" class="text-[11px] text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Edit prompts →</a>{{end}}
+                                {{if .DefaultWorkflowID}}<a href="/ui/workflows/{{.DefaultWorkflowID}}/edit?projectId={{.ProjectID}}" class="text-xs text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Edit prompts →</a>{{end}}
                             </div>
                             <select name="defaultWorkflowId" id="defaultWorkflowId"
                                     class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
@@ -119,7 +133,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="adaptiveCandidateWorkflows">Adaptive candidate workflows</label>
                         <textarea name="adaptiveCandidateWorkflows" id="adaptiveCandidateWorkflows" rows="3"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.AdaptiveCandidateWorkflows}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">One workflow id per line. Used only when the default workflow is <code class="text-gray-400">adaptive</code>; the lead's pick must match an entry here.</p>
+                        <p class="text-xs text-gray-500 mt-1">One workflow id per line. Used only when the default workflow is <code class="text-gray-400">adaptive</code>; the lead's pick must match an entry here.</p>
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -127,22 +141,22 @@
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="defaultPriority">Default priority</label>
                             <input type="number" min="0" max="100" name="defaultPriority" id="defaultPriority" value="{{if .DefaultPriority}}{{.DefaultPriority}}{{end}}" placeholder="50"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">0-100, lower = more urgent.</p>
+                            <p class="text-xs text-gray-500 mt-1">0-100, lower = more urgent.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="maxConcurrentTasks">Max concurrent tasks</label>
                             <input type="number" min="0" name="maxConcurrentTasks" id="maxConcurrentTasks" value="{{if .MaxConcurrentTasks}}{{.MaxConcurrentTasks}}{{end}}" placeholder="1"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Cap on tasks running in parallel for this project. 0 = unlimited (uses daemon default).</p>
+                            <p class="text-xs text-gray-500 mt-1">Cap on tasks running in parallel for this project. 0 = unlimited (uses daemon default).</p>
                         </div>
                     </div>
                 </section>
 
                 <!-- Autonomy -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
+                <section id="autonomy" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Autonomy</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Controls the autonomous-loop scheduler. Disabled projects ignore every field below except as documentation.</p>
+                        <p class="text-xs text-gray-500 mt-1">Controls the autonomous-loop scheduler. Disabled projects ignore every field below except as documentation.</p>
                     </header>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -153,7 +167,7 @@
                                 <option value="false" {{if not .AutonomyEnabled}}selected{{end}}>false</option>
                                 <option value="true" {{if .AutonomyEnabled}}selected{{end}}>true</option>
                             </select>
-                            <p class="text-[11px] text-gray-500 mt-1">Turns the autonomous loop on. Off = the project only runs tasks operators submit manually.</p>
+                            <p class="text-xs text-gray-500 mt-1">Turns the autonomous loop on. Off = the project only runs tasks operators submit manually.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="autonomy_mode">Mode</label>
@@ -164,7 +178,7 @@
                                 <option value="{{.}}" {{if eq . $current}}selected{{end}}>{{.}}</option>
                                 {{end}}
                             </select>
-                            <p class="text-[11px] text-gray-500 mt-1">event-driven evaluates the goal every poll tick; cron evaluates only at scheduled times.</p>
+                            <p class="text-xs text-gray-500 mt-1">event-driven evaluates the goal every poll tick; cron evaluates only at scheduled times.</p>
                         </div>
                     </div>
 
@@ -172,7 +186,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="autonomy_goal">Goal</label>
                         <textarea name="autonomy_goal" id="autonomy_goal" rows="6"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.AutonomyGoal}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">The objective the swarm's lead works toward each autonomy tick.</p>
+                        <p class="text-xs text-gray-500 mt-1">The objective the swarm's lead works toward each autonomy tick.</p>
                         {{template "assistPanel" (dict
                             "Kind" "project_field"
                             "TargetID" .ProjectID
@@ -187,13 +201,13 @@
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="autonomy_maxTasksPerHour">Max tasks per hour</label>
                             <input type="number" name="autonomy_maxTasksPerHour" id="autonomy_maxTasksPerHour" value="{{.AutonomyMaxTasksPerHour}}" min="0"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Ceiling on autonomously-created tasks per hour. 0 = no cap (uses rate-limit section below).</p>
+                            <p class="text-xs text-gray-500 mt-1">Ceiling on autonomously-created tasks per hour. 0 = no cap (uses rate-limit section below).</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="autonomy_pollInterval">Poll interval</label>
                             <input type="text" name="autonomy_pollInterval" id="autonomy_pollInterval" value="{{.AutonomyPollInterval}}" placeholder="5m"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">How often the autonomous loop reconsiders the goal. Go duration (e.g. <code class="text-gray-400">30s</code>, <code class="text-gray-400">5m</code>, <code class="text-gray-400">1h</code>).</p>
+                            <p class="text-xs text-gray-500 mt-1">How often the autonomous loop reconsiders the goal. Go duration (e.g. <code class="text-gray-400">30s</code>, <code class="text-gray-400">5m</code>, <code class="text-gray-400">1h</code>).</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="autonomy_requireApproval">Require approval</label>
@@ -202,7 +216,7 @@
                                 <option value="false" {{if not .AutonomyRequireApproval}}selected{{end}}>false</option>
                                 <option value="true" {{if .AutonomyRequireApproval}}selected{{end}}>true</option>
                             </select>
-                            <p class="text-[11px] text-gray-500 mt-1">When true, autonomously-proposed tasks are queued for human approval before running.</p>
+                            <p class="text-xs text-gray-500 mt-1">When true, autonomously-proposed tasks are queued for human approval before running.</p>
                         </div>
                     </div>
 
@@ -212,38 +226,35 @@
                         <div class="flex flex-wrap gap-1.5 mb-2" data-task-type-chips>
                             {{range .TaskTypeSuggestions}}
                             <button type="button" data-task-type="{{.}}"
-                                    class="px-2 py-0.5 text-[11px] rounded-full bg-dark-800 border border-dark-700 hover:border-brand-500 text-gray-300 hover:text-brand-200 transition-colors">+ {{.}}</button>
+                                    class="px-2 py-0.5 text-xs rounded-full bg-dark-800 border border-dark-700 hover:border-brand-500 text-gray-300 hover:text-brand-200 transition-colors">+ {{.}}</button>
                             {{end}}
                         </div>
                         {{end}}
                         <textarea name="autonomy_allowedTaskTypes" id="autonomy_allowedTaskTypes" rows="4"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.AutonomyAllowedTaskTypes}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">One per line. Click a chip above to add a common type. Empty list allows every type the lead invents.</p>
+                        <p class="text-xs text-gray-500 mt-1">One per line. Click a chip above to add a common type. Empty list allows every type the lead invents.</p>
                     </div>
                 </section>
 
                 <!-- Permissions -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
-                    <header>
-                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Permissions</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Tool allowlists and secret references. One item per line.</p>
-                    </header>
+                {{template "discOpen" (dict "ID" "permissions" "Title" "Permissions" "Summary" .PermissionsSummary "Open" .OpenAll)}}
+                    <p class="text-xs text-gray-500">Tool allowlists and secret references. One item per line.</p>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="permissions_secrets">Secrets</label>
                             <textarea name="permissions_secrets" id="permissions_secrets" rows="4"
                                       class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.PermissionsSecrets}}</textarea>
-                            <p class="text-[11px] text-gray-500 mt-1">Environment variable names the daemon injects into agent containers (one per line). Values come from the daemon-level secrets store; the agent only sees them at runtime.</p>
+                            <p class="text-xs text-gray-500 mt-1">Environment variable names the daemon injects into agent containers (one per line). Values come from the daemon-level secrets store; the agent only sees them at runtime.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5">Allowed tools</label>
                             {{if .BuiltinTools}}
                             <fieldset class="rounded-lg border border-dark-700 bg-dark-800/40 p-3 mb-2">
-                                <legend class="px-1.5 text-[11px] font-medium text-gray-400">Agent runtime tools</legend>
+                                <legend class="px-1.5 text-xs font-medium text-gray-400">Agent runtime tools</legend>
                                 <div class="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1.5 mt-1">
                                     {{range .BuiltinTools}}
-                                    <label class="flex items-center gap-1.5 text-[11px] text-gray-300 hover:text-gray-100">
+                                    <label class="flex items-center gap-1.5 text-xs text-gray-300 hover:text-gray-100">
                                         <input type="checkbox" name="permissions_allowedTools_builtin" value="{{.Name}}"
                                                {{if .Allowed}}checked{{end}}
                                                class="rounded bg-dark-900 border-control text-brand-500 focus:ring-brand-500 focus:ring-offset-0 h-3.5 w-3.5">
@@ -253,20 +264,20 @@
                                 </div>
                             </fieldset>
                             {{end}}
-                            <label class="block text-[11px] font-medium text-gray-400 mb-1" for="permissions_allowedTools_custom">Additional tools</label>
+                            <label class="block text-xs font-medium text-gray-400 mb-1" for="permissions_allowedTools_custom">Additional tools</label>
                             <textarea name="permissions_allowedTools_custom" id="permissions_allowedTools_custom" rows="3"
                                       placeholder="my_custom_tool&#10;mcp_broker_place_order"
                                       class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.CustomAllowedTools}}</textarea>
-                            <p class="text-[11px] text-gray-500 mt-1">Tick common agent runtime tools above; add any other names (MCP tools, project-specific helpers) here, one per line. Empty (with no checks ticked) = inherit daemon-wide defaults. Per-role allowlists in the swarm editor narrow this further.</p>
+                            <p class="text-xs text-gray-500 mt-1">Tick common agent runtime tools above; add any other names (MCP tools, project-specific helpers) here, one per line. Empty (with no checks ticked) = inherit daemon-wide defaults. Per-role allowlists in the swarm editor narrow this further.</p>
                         </div>
                     </div>
-                </section>
+                {{template "discClose"}}
 
                 <!-- Budget -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
+                <section id="budget" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Budget</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">USD caps on LLM spend. Soft logs a warning; hard blocks new work. 0 disables that cap.</p>
+                        <p class="text-xs text-gray-500 mt-1">USD caps on LLM spend. Soft logs a warning; hard blocks new work. 0 disables that cap.</p>
                     </header>
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         <div>
@@ -300,77 +311,71 @@
                             <option value="{{.}}" {{if eq . $tzCurrent}}selected{{end}}>{{.}}</option>
                             {{end}}
                         </select>
-                        <p class="text-[11px] text-gray-500 mt-1">Controls when daily / monthly windows reset.</p>
+                        <p class="text-xs text-gray-500 mt-1">Controls when daily / monthly windows reset.</p>
                     </div>
                 </section>
 
                 <!-- Rate limit -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
-                    <header>
-                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Rate limit</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Task-creation frequency caps. 0 disables.</p>
-                    </header>
+                {{template "discOpen" (dict "ID" "rate-limit" "Title" "Rate limit" "Summary" .RateLimitSummary "Open" .OpenAll)}}
+                    <p class="text-xs text-gray-500">Task-creation frequency caps. 0 disables.</p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="rateLimit_tasksPerMinute">Tasks per minute</label>
                             <input type="number" min="0" name="rateLimit_tasksPerMinute" id="rateLimit_tasksPerMinute" value="{{if .RateLimitTasksPerMinute}}{{.RateLimitTasksPerMinute}}{{end}}"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Sliding rolling minute window across POST /tasks, dispatcher create_task and autonomy. Bursts above this return 429.</p>
+                            <p class="text-xs text-gray-500 mt-1">Sliding rolling minute window across POST /tasks, dispatcher create_task and autonomy. Bursts above this return 429.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="rateLimit_tasksPerHour">Tasks per hour</label>
                             <input type="number" min="0" name="rateLimit_tasksPerHour" id="rateLimit_tasksPerHour" value="{{if .RateLimitTasksPerHour}}{{.RateLimitTasksPerHour}}{{end}}"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Sliding rolling hour window; complements the per-minute cap to catch long-tail runaway loops.</p>
+                            <p class="text-xs text-gray-500 mt-1">Sliding rolling hour window; complements the per-minute cap to catch long-tail runaway loops.</p>
                         </div>
                     </div>
-                </section>
+                {{template "discClose"}}
 
                 <!-- Retention -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
-                    <header>
-                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Retention</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Per-project pruning thresholds in days. Empty / 0 inherits the daemon default. Project memory is never pruned.</p>
-                    </header>
+                {{template "discOpen" (dict "ID" "retention" "Title" "Retention" "Summary" .RetentionSummary "Open" .OpenAll)}}
+                    <p class="text-xs text-gray-500">Per-project pruning thresholds in days. Empty / 0 inherits the daemon default. Project memory is never pruned.</p>
                     <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="retention_taskLLMUsageDays">LLM usage</label>
                             <input type="number" min="0" name="retention_taskLLMUsageDays" id="retention_taskLLMUsageDays" value="{{if .RetentionTaskLLMUsageDays}}{{.RetentionTaskLLMUsageDays}}{{end}}" placeholder="90"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Days before LLM-usage rows (the /ui/spend data) are pruned.</p>
+                            <p class="text-xs text-gray-500 mt-1">Days before LLM-usage rows (the /ui/spend data) are pruned.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="retention_toolAuditDays">Tool audit</label>
                             <input type="number" min="0" name="retention_toolAuditDays" id="retention_toolAuditDays" value="{{if .RetentionToolAuditDays}}{{.RetentionToolAuditDays}}{{end}}" placeholder="30"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Days before per-tool-call audit rows are pruned.</p>
+                            <p class="text-xs text-gray-500 mt-1">Days before per-tool-call audit rows are pruned.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="retention_tasksDays">Tasks</label>
                             <input type="number" min="0" name="retention_tasksDays" id="retention_tasksDays" value="{{if .RetentionTasksDays}}{{.RetentionTasksDays}}{{end}}" placeholder="60"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Days before completed tasks are pruned. Active tasks are never deleted.</p>
+                            <p class="text-xs text-gray-500 mt-1">Days before completed tasks are pruned. Active tasks are never deleted.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="retention_executionsDays">Executions</label>
                             <input type="number" min="0" name="retention_executionsDays" id="retention_executionsDays" value="{{if .RetentionExecutionsDays}}{{.RetentionExecutionsDays}}{{end}}" placeholder="60"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Days before execution / per-step outcome rows are pruned. Should be ≥ Tasks retention to keep dashboards consistent.</p>
+                            <p class="text-xs text-gray-500 mt-1">Days before execution / per-step outcome rows are pruned. Should be ≥ Tasks retention to keep dashboards consistent.</p>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="retention_artifactsDays">Artifacts</label>
                             <input type="number" min="0" name="retention_artifactsDays" id="retention_artifactsDays" value="{{if .RetentionArtifactsDays}}{{.RetentionArtifactsDays}}{{end}}" placeholder="60"
                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                            <p class="text-[11px] text-gray-500 mt-1">Days before artifact blobs (output / handover files) are removed from object storage.</p>
+                            <p class="text-xs text-gray-500 mt-1">Days before artifact blobs (output / handover files) are removed from object storage.</p>
                         </div>
                     </div>
-                </section>
+                {{template "discClose"}}
 
                 <!-- Chat -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
+                <section id="chat" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
                     <header>
                         <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Chat</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">House-rule text prepended to every chat session in this project.</p>
+                        <p class="text-xs text-gray-500 mt-1">House-rule text prepended to every chat session in this project.</p>
                     </header>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="chat_systemPrefix">System prefix</label>
@@ -380,11 +385,8 @@
                 </section>
 
                 <!-- Hallucination judge -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4">
-                    <header>
-                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">Hallucination judge</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">LLM-as-judge that scores every completed task. Verdicts persist; rollout pattern is enable-on-one-project first.</p>
-                    </header>
+                {{template "discOpen" (dict "ID" "judge" "Title" "Hallucination judge" "Summary" .JudgeSummary "Open" .OpenAll)}}
+                    <p class="text-xs text-gray-500">LLM-as-judge that scores every completed task. Verdicts persist; rollout pattern is enable-on-one-project first.</p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="judge_enabled">Enabled</label>
@@ -415,17 +417,13 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="judge_prompt">Prompt override</label>
                         <textarea name="judge_prompt" id="judge_prompt" rows="4"
                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.JudgePrompt}}</textarea>
-                        <p class="text-[11px] text-gray-500 mt-1">Empty falls back to the package default judge prompt.</p>
+                        <p class="text-xs text-gray-500 mt-1">Empty falls back to the package default judge prompt.</p>
                     </div>
-                </section>
+                {{template "discClose"}}
 
                 <!-- Trading -->
-                <details class="rounded-lg border border-dark-700 bg-dark-800/40">
-                    <summary class="cursor-pointer p-5 select-none">
-                        <h2 class="inline text-sm font-semibold text-gray-200 uppercase tracking-wide">Trading</h2>
-                        <span class="text-[11px] text-gray-500 ml-2">broker policy + safety envelope (collapse to expand)</span>
-                    </summary>
-                    <div class="px-5 pb-5 space-y-4">
+                {{template "discOpen" (dict "ID" "trading" "Title" "Trading" "Summary" .TradingSummary "Open" .OpenAll)}}
+                        <p class="text-xs text-gray-500">Broker policy and safety envelope.</p>
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div>
                                 <label class="block text-xs font-medium text-gray-300 mb-1.5" for="trading_mode">Mode</label>
@@ -435,7 +433,7 @@
                                     <option value="paper" {{if eq .TradingMode "paper"}}selected{{end}}>paper</option>
                                     <option value="live" {{if eq .TradingMode "live"}}selected{{end}}>live</option>
                                 </select>
-                                <p class="text-[11px] text-gray-500 mt-1">Live promotion is gated by VORNIK_BROKER_LIVE_ENABLED at the broker.</p>
+                                <p class="text-xs text-gray-500 mt-1">Live promotion is gated by VORNIK_BROKER_LIVE_ENABLED at the broker.</p>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-gray-300 mb-1.5" for="trading_killSwitch">Kill switch</label>
@@ -455,19 +453,14 @@
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="trading_watchlist">Watchlist (one ticker per line)</label>
                             <textarea name="trading_watchlist" id="trading_watchlist" rows="3"
                                       class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.TradingWatchlist}}</textarea>
-                            <p class="text-[11px] text-gray-500 mt-1">Pre-warmed quotes batched in parallel before each strategist tick.</p>
+                            <p class="text-xs text-gray-500 mt-1">Pre-warmed quotes batched in parallel before each strategist tick.</p>
                         </div>
-                        <p class="text-[11px] text-gray-500">Caps (max position, daily turnover, drawdown circuit breaker) stay in <a href="/ui/projects/{{.ProjectID}}/config" class="text-brand-300 hover:text-brand-200">Advanced YAML</a> — they're rarely tuned by hand once dialed in.</p>
-                    </div>
-                </details>
+                        <p class="text-xs text-gray-500">Caps (max position, daily turnover, drawdown circuit breaker) stay in <a href="/ui/projects/{{.ProjectID}}/config" class="text-brand-300 hover:text-brand-200">Advanced YAML</a> — they're rarely tuned by hand once dialed in.</p>
+                {{template "discClose"}}
 
                 <!-- GitHub App -->
-                <details class="rounded-lg border border-dark-700 bg-dark-800/40">
-                    <summary class="cursor-pointer p-5 select-none">
-                        <h2 class="inline text-sm font-semibold text-gray-200 uppercase tracking-wide">GitHub App</h2>
-                        <span class="text-[11px] text-gray-500 ml-2">per-project conversation channel (collapse to expand)</span>
-                    </summary>
-                    <div class="px-5 pb-5 space-y-4">
+                {{template "discOpen" (dict "ID" "github-app" "Title" "GitHub App" "Summary" .GitHubAppSummary "Open" .OpenAll)}}
+                        <p class="text-xs text-gray-500">Per-project conversation channel.</p>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-medium text-gray-300 mb-1.5" for="githubApp_appID">App ID</label>
@@ -525,118 +518,119 @@
                                           class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.GitHubAppPRReviewLabels}}</textarea>
                             </div>
                         </div>
-                    </div>
-                </details>
+                {{template "discClose"}}
 
                 <!-- MCP servers -->
-                <section class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4" data-mcp-section>
+                <section id="mcp-servers" class="rounded-lg border border-dark-700 bg-dark-800/40 p-5 space-y-4" data-mcp-section>
                     <header>
-                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">MCP servers</h2>
-                        <p class="text-[11px] text-gray-500 mt-1">Subscribe this project to daemon-registered MCP servers and (optionally) narrow which tools each server exposes to agents.</p>
+                        <h2 class="text-sm font-semibold text-gray-200 uppercase tracking-wide">MCP servers {{template "hintOpen" "What subscribing does"}}Subscribe this project to a daemon-registered server to let its agents call that server's tools. Without subscription, the project is invisible to this server. Open a server's "Connection and tools" to narrow its tools: "all" inherits the server's full catalogue; "selected only" exposes just the ticked ones.{{template "hintClose"}}</h2>
                     </header>
 
                     {{if .MCPRegistryUnavailable}}
-                    <div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-200">
+                    <div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-200">
                         Daemon MCP registry is unavailable{{if .MCPRegistryError}} ({{.MCPRegistryError}}){{end}}. Custom servers below still render and save; ask an operator to wire <code class="text-amber-600 dark:text-amber-100">WithMCPFormRegistrySource</code> or visit <a href="/ui/mcp" class="underline">/ui/mcp</a>.
                     </div>
                     {{end}}
 
                     {{if .MCPRegistryRows}}
-                    <div class="space-y-3">
+                    <div class="space-y-2">
                         {{range $row := .MCPRegistryRows}}
-                        <div class="rounded-md border border-dark-700 bg-dark-900/40 p-3 space-y-2">
-                            <div class="flex items-start justify-between gap-3">
-                                <label class="flex items-start gap-2 cursor-pointer">
-                                    <input type="checkbox" name="mcpSubscribe_{{$row.Server.Name}}" value="on" {{if $row.Subscribed}}checked{{end}}
-                                           class="mt-0.5 rounded border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
-                                    <span>
-                                        <span class="block text-sm font-semibold text-gray-200">Subscribe project to {{$row.Server.Name}}</span>
-                                        <span class="block text-[11px] text-gray-500">Agents in this project can call MCP tools advertised by {{$row.Server.Name}}. Without subscription, the project is invisible to this server.</span>
-                                    </span>
+                        <div class="rounded-md border border-dark-700 bg-dark-900/40 px-3 py-2" data-mcp-row="{{$row.Server.Name}}">
+                            <div class="flex items-center justify-between gap-3">
+                                <label class="flex min-w-0 items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" name="mcpSubscribe_{{$row.Server.Name}}" value="on" {{if $row.Subscribed}}checked{{end}} aria-label="Subscribe this project to {{$row.Server.Name}}"
+                                           class="rounded border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
+                                    <span class="truncate text-sm font-semibold text-gray-200">{{$row.Server.Name}}</span>
                                 </label>
-                                <div class="text-[10px] uppercase tracking-wide text-gray-500 flex flex-col items-end gap-0.5 shrink-0">
-                                    <span class="font-mono text-gray-400">{{if $row.Server.Transport}}{{$row.Server.Transport}}{{else}}—{{end}}</span>
+                                <span class="flex shrink-0 items-center gap-2 text-xs text-gray-400">
                                     {{if $row.Server.Reachable}}
-                                    <span class="text-emerald-800 dark:text-emerald-400">reachable</span>
+                                    <span class="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span><span class="sr-only">reachable</span>
                                     {{else}}
-                                    <span class="text-amber-700 dark:text-amber-300" title="{{$row.Server.Error}}">unreachable</span>
+                                    <span class="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true"></span><span class="text-amber-700 dark:text-amber-300">unreachable</span>{{if $row.Server.Error}}{{template "hintOpen" "Why it is unreachable"}}{{$row.Server.Error}}{{template "hintClose"}}{{end}}
+                                    {{end}}
+                                    <span data-tool-count>{{$row.ToolCountLabel}}</span>
+                                </span>
+                            </div>
+                            {{template "discOpen" (dict "Title" "Connection and tools" "Row" true)}}
+                                <div class="text-xs font-mono text-gray-500 break-all">{{if $row.Server.Transport}}{{$row.Server.Transport}}{{else}}—{{end}}{{if $row.Server.URL}} · {{$row.Server.URL}}{{end}}</div>
+                                <div class="vk-tools space-y-1.5">
+                                    <div class="flex flex-wrap gap-x-4 gap-y-1">
+                                        <label class="flex items-center gap-2 text-xs text-gray-300">
+                                            <input type="radio" name="mcpAllowedToolsMode_{{$row.Server.Name}}" value="all" {{if $row.AllowAllTools}}checked{{end}}
+                                                   class="border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
+                                            <span>all (inherit full catalog)</span>
+                                        </label>
+                                        <label class="flex items-center gap-2 text-xs text-gray-300">
+                                            <input type="radio" name="mcpAllowedToolsMode_{{$row.Server.Name}}" value="selected" {{if not $row.AllowAllTools}}checked{{end}}
+                                                   class="border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
+                                            <span>selected only</span>
+                                        </label>
+                                    </div>
+                                    {{if $row.Server.Tools}}
+                                    <div class="vk-tools-list space-y-1.5" data-filter-scope>
+                                        {{if gt (len $row.Server.Tools) 10}}
+                                        <input type="search" data-filter-list data-on-input="filter-list" data-on-keydown="filter-list" placeholder="Filter tools by name" aria-label="Filter {{$row.Server.Name}} tools"
+                                               class="w-full max-w-xs px-2 py-1 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
+                                        {{end}}
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                            {{$rowTools := $row.AllowedTools}}
+                                            {{range $tool := $row.Server.Tools}}
+                                            <div class="flex items-start gap-1 text-xs text-gray-300" data-filter-item="{{$tool.Name}}">
+                                                <label class="flex items-start gap-2">
+                                                    <input type="checkbox" name="mcpAllowedTool_{{$row.Server.Name}}_{{$tool.Name}}" value="on" {{if boolFromMap $rowTools $tool.Name}}checked{{end}}
+                                                           class="mt-0.5 rounded border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
+                                                    <span class="font-mono">{{$tool.Name}}</span>
+                                                </label>
+                                                {{if $tool.Description}}{{template "hintOpen" (printf "What %s does" $tool.Name)}}{{$tool.Description}}{{template "hintClose"}}{{end}}
+                                            </div>
+                                            {{end}}
+                                        </div>
+                                    </div>
+                                    {{else}}
+                                    <p class="text-xs text-gray-500 italic">No tools advertised by this server.</p>
                                     {{end}}
                                 </div>
-                            </div>
-                            {{if $row.Server.URL}}
-                            <div class="text-[11px] font-mono text-gray-500 break-all">{{$row.Server.URL}}</div>
-                            {{end}}
-
-                            <div class="pl-6 space-y-1.5">
-                                <div class="text-[11px] text-gray-400">Per-server allowed tools</div>
-                                <p class="text-[10px] text-gray-500">Narrow the project's catalog to specific tools. Untick a tool to hide it from the agent's tool selector. Leave "all" ticked to inherit the server's full catalog.</p>
-                                <label class="flex items-center gap-2 text-[11px] text-gray-300">
-                                    <input type="radio" name="mcpAllowedToolsMode_{{$row.Server.Name}}" value="all" {{if $row.AllowAllTools}}checked{{end}}
-                                           class="border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
-                                    <span>all (inherit full catalog)</span>
-                                </label>
-                                <label class="flex items-center gap-2 text-[11px] text-gray-300">
-                                    <input type="radio" name="mcpAllowedToolsMode_{{$row.Server.Name}}" value="selected" {{if not $row.AllowAllTools}}checked{{end}}
-                                           class="border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
-                                    <span>selected only</span>
-                                </label>
-                                {{if $row.Server.Tools}}
-                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
-                                    {{$rowTools := $row.AllowedTools}}
-                                    {{range $tool := $row.Server.Tools}}
-                                    <label class="flex items-start gap-2 text-[11px] text-gray-300">
-                                        <input type="checkbox" name="mcpAllowedTool_{{$row.Server.Name}}_{{$tool.Name}}" value="on" {{if boolFromMap $rowTools $tool.Name}}checked{{end}}
-                                               class="mt-0.5 rounded border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
-                                        <span>
-                                            <span class="font-mono">{{$tool.Name}}</span>
-                                            {{if $tool.Description}}<span class="block text-[10px] text-gray-500">{{$tool.Description}}</span>{{end}}
-                                        </span>
-                                    </label>
-                                    {{end}}
-                                </div>
-                                {{else}}
-                                <p class="text-[10px] text-gray-500 italic">No tools advertised by this server.</p>
-                                {{end}}
-                            </div>
+                            {{template "discClose"}}
                         </div>
                         {{end}}
                     </div>
                     {{else if not .MCPRegistryUnavailable}}
-                    <p class="text-[11px] text-gray-500 italic">No daemon-level MCP servers registered. Add some via the operator MCP page.</p>
+                    <p class="text-xs text-gray-500 italic">No daemon-level MCP servers registered. Add some via the operator MCP page.</p>
                     {{end}}
 
                     {{if .MCPCustomRows}}
                     <div class="space-y-3 pt-2">
-                        <div class="text-[11px] uppercase tracking-wide text-gray-500">Custom servers (project-only)</div>
+                        <div class="text-xs uppercase tracking-wide text-gray-500">Custom servers (project-only)</div>
                         {{range $row := .MCPCustomRows}}
-                        <div class="rounded-md border border-dashed border-dark-700 bg-dark-900/30 p-3 space-y-2">
-                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                <div>
-                                    <label class="block text-[11px] text-gray-400 mb-1">Name</label>
-                                    <input type="text" name="mcpCustom_{{$row.Index}}_name" value="{{$row.Name}}"
-                                           class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                                </div>
-                                <div>
-                                    <label class="block text-[11px] text-gray-400 mb-1">Transport</label>
-                                    <select name="mcpCustom_{{$row.Index}}_transport"
-                                            class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                                        <option value="sse" {{if eq $row.Transport "sse"}}selected{{end}}>sse</option>
-                                        <option value="stdio" {{if eq $row.Transport "stdio"}}selected{{end}}>stdio</option>
-                                        <option value="http" {{if eq $row.Transport "http"}}selected{{end}}>http</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-[11px] text-gray-400 mb-1">URL</label>
-                                    <input type="text" name="mcpCustom_{{$row.Index}}_url" value="{{$row.URL}}" placeholder="https://…"
-                                           class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
-                                </div>
-                            </div>
+                        <div class="rounded-md border border-dashed border-dark-700 bg-dark-900/30 px-3 py-2 space-y-1">
                             <div>
-                                <label class="block text-[11px] text-gray-400 mb-1">Allowed tools (one per line, empty = full catalog)</label>
-                                <textarea name="mcpCustom_{{$row.Index}}_allowedTools" rows="2"
-                                          class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{$row.AllowedTools}}</textarea>
+                                <div class="mb-1 flex items-center text-xs text-gray-400"><label for="mcpCustom_{{$row.Index}}_name">Name</label>{{template "hintOpen" "Removing a custom server"}}Clearing the name on save removes this custom row.{{template "hintClose"}}</div>
+                                <input type="text" name="mcpCustom_{{$row.Index}}_name" id="mcpCustom_{{$row.Index}}_name" value="{{$row.Name}}"
+                                       class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                             </div>
-                            <p class="text-[10px] text-gray-500">Clearing the name on save removes this custom row.</p>
+                            {{template "discOpen" (dict "Title" "Connection and tools" "Row" true)}}
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs text-gray-400 mb-1">Transport</label>
+                                        <select name="mcpCustom_{{$row.Index}}_transport"
+                                                class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                            <option value="sse" {{if eq $row.Transport "sse"}}selected{{end}}>sse</option>
+                                            <option value="stdio" {{if eq $row.Transport "stdio"}}selected{{end}}>stdio</option>
+                                            <option value="http" {{if eq $row.Transport "http"}}selected{{end}}>http</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-400 mb-1">URL</label>
+                                        <input type="text" name="mcpCustom_{{$row.Index}}_url" value="{{$row.URL}}" placeholder="https://…"
+                                               class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-400 mb-1">Allowed tools (one per line, empty = full catalog)</label>
+                                    <textarea name="mcpCustom_{{$row.Index}}_allowedTools" rows="2"
+                                              class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{$row.AllowedTools}}</textarea>
+                                </div>
+                            {{template "discClose"}}
                         </div>
                         {{end}}
                     </div>
@@ -644,7 +638,7 @@
 
                     <input type="hidden" name="mcpCustomCount" value="{{.MCPNextCustomIndex}}" data-mcp-custom-count>
                     <button type="button" data-mcp-add-custom
-                            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-dark-700 text-gray-200 hover:bg-dark-600 text-[11px] font-medium">
+                            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-dark-700 text-gray-200 hover:bg-dark-600 text-xs font-medium">
                         + Add custom server
                     </button>
                 </section>
@@ -652,7 +646,7 @@
                 <!-- Other sections (still YAML-only) -->
                 <section class="rounded-lg border border-dark-700/60 bg-dark-800/20 p-5 space-y-2">
                     <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">Other settings</h2>
-                    <p class="text-[11px] text-gray-500">Signed webhooks (sources array) and verifiers stay in <a href="/ui/projects/{{.ProjectID}}/config" class="text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Advanced YAML</a> — array-of-objects shapes that aren't worth a dedicated form for v1.</p>
+                    <p class="text-xs text-gray-500">Signed webhooks (sources array) and verifiers stay in <a href="/ui/projects/{{.ProjectID}}/config" class="text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">Advanced YAML</a> — array-of-objects shapes that aren't worth a dedicated form for v1.</p>
                 </section>
 
                 <div class="flex items-center justify-end gap-3">
@@ -670,12 +664,12 @@
         <div class="rounded-md border border-dashed border-dark-700 bg-dark-900/30 p-3 space-y-2" data-mcp-custom-row>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                    <label class="block text-[11px] text-gray-400 mb-1">Name</label>
+                    <label class="block text-xs text-gray-400 mb-1">Name</label>
                     <input type="text" data-name-field value="" placeholder="server-name"
                            class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                 </div>
                 <div>
-                    <label class="block text-[11px] text-gray-400 mb-1">Transport</label>
+                    <label class="block text-xs text-gray-400 mb-1">Transport</label>
                     <select data-transport-field
                             class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                         <option value="sse" selected>sse</option>
@@ -684,17 +678,17 @@
                     </select>
                 </div>
                 <div>
-                    <label class="block text-[11px] text-gray-400 mb-1">URL</label>
+                    <label class="block text-xs text-gray-400 mb-1">URL</label>
                     <input type="text" data-url-field value="" placeholder="https://…"
                            class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                 </div>
             </div>
             <div>
-                <label class="block text-[11px] text-gray-400 mb-1">Allowed tools (one per line, empty = full catalog)</label>
+                <label class="block text-xs text-gray-400 mb-1">Allowed tools (one per line, empty = full catalog)</label>
                 <textarea data-tools-field rows="2"
                           class="w-full px-2 py-1.5 text-xs rounded-md bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono"></textarea>
             </div>
-            <p class="text-[10px] text-gray-500">Clearing the name on save removes this custom row.</p>
+            <p class="text-xs text-gray-500">Clearing the name on save removes this custom row.</p>
         </div>
     </template>
     <script>

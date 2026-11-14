@@ -7,6 +7,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -171,3 +172,16 @@ type ChatAuditRepository interface {
 	// when no row matches.
 	GetPrompt(ctx context.Context, hash string) (string, error)
 }
+
+// ActivityCounter counts audit rows created at or after since, in one project
+// or, with an empty projectID, in every project (GitHub #261; adoption
+// leaderboard design, amendment 2026-11-13). Optional: the chat-audit and
+// tool-audit repositories implement it, and the console asserts for it, so the
+// fakes that implement those interfaces need not.
+type ActivityCounter interface {
+	CountSince(ctx context.Context, projectID string, since time.Time) (int64, error)
+}
+
+// ErrActivityNotCounted is what a wrapping repository answers when the
+// repository it wraps cannot count: the caller shows "not counted", never 0.
+var ErrActivityNotCounted = errors.New("this repository does not count activity")

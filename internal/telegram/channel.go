@@ -35,6 +35,10 @@ func NewChannel(b *Bot) *Channel {
 // Name implements conversation.Channel.
 func (c *Channel) Name() string { return "telegram" }
 
+// CanDeliverLater reports true: a finished task reaches this channel through its own follow-up map and auto-resume
+// (web-chat-design.md §4.2; the service's parity test checks the pairing).
+func (c *Channel) CanDeliverLater() bool { return true }
+
 // Start satisfies the conversation.Channel interface. The receiver
 // argument is unused — Bot drives dispatch via SetReceiver, not the
 // Channel. Delegates to Bot.Start so daemons that lifecycle the bot

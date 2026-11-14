@@ -89,7 +89,7 @@ var markRows = map[string]markRow{
 	"internal/api Server.OllamaGenerate":              {true, "row 19"},
 	"internal/api Server.companionArtifactDownload":   {true, "row 22"},
 	"internal/ui Server.ArtifactDownload":             {true, "row 23"},
-	"internal/ui Server.ChatPostMessage":              {true, "row 16"},
+	"internal/ui Server.runChatTurn":                  {true, "row 16: a web chat reply is marked when its background turn ends; ChatTurnPoll and ChatPostMessage deliver it with the turn's mark headers (web-chat-design.md §2.9)"},
 	"internal/dispatcher ToolExecutor.renderDocument": {true, "row 27"},
 	"internal/executor Executor.harvestOne":           {true, "every agent-produced file (rows 22, 23, 28)"},
 	"internal/telegram telegramStream.Close":          {true, "rows 11, 13: a streamed reply's final text"},

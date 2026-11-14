@@ -20,17 +20,12 @@ type navDest struct {
 	// no cookie → shown). Used for surfaces that are harmless-but-
 	// irrelevant rather than access-denied (Trading degrades gracefully).
 	Cap string
-	// Badge is an optional live count rendered next to Label as "Label
-	// (N)" (design outcome-inbox-design.md §5.7 Q4 — the "My requests
-	// (3)" nav badge). Zero = no badge. navModel() itself (the
-	// canonical IA below) never sets this; it is populated per-request
-	// by navModelForPage, the "navModel" FuncMap entry NewServer wires
-	// up, from the CURRENT page's Data struct via the opt-in
-	// navAttentionCounter interface. A page whose Data doesn't
-	// implement that interface simply renders no badge — deliberately
-	// simple rather than threading live nav state through every one of
-	// the ~40 page handlers' render() call.
-	Badge int
+	// OwnerHref is where this entry takes a managed instance's owner
+	// (tenant_admin, nav marker "owner"); empty means the owner may not open
+	// it. Read only inside the AdminOnly Admin area, whose other entries the
+	// marker script hides from the owner (GitHub #625 item 1; LLD 18,
+	// amendment 2026-11-12).
+	OwnerHref string
 }
 
 // navAreaDef is one top-level area shown in the icon rail. AdminOnly
@@ -51,7 +46,19 @@ type navAreaDef struct {
 	// the template FuncMap overrides the builtin `index`.
 	Href      string
 	AdminOnly bool
-	Dests     []navDest
+	// OwnerHref is the rail icon's target for a managed instance's owner,
+	// who is refused Href (see navDest.OwnerHref).
+	OwnerHref string
+	// Page is the CurrentPage token of a door's landing page, so the door
+	// highlights there (#755: a door has no destinations to map).
+	Page string
+	// Badge is the live attention count on a door (Needs you, #755); set
+	// per request by navModelForPage, zero renders nothing.
+	Badge int
+	// PhoneTab marks the four areas the < md bar shows as tabs (§18): the
+	// others sit in its More sheet.
+	PhoneTab bool
+	Dests    []navDest
 }
 
 // MobileLabel is what the < md bottom tab bar renders under the area's
@@ -72,92 +79,68 @@ func (a navAreaDef) MobileLabel() string {
 // applied by navModelFunc (e.g. Trading is dropped on Community). Keeping
 // navModel itself pure means pageToArea and tests see the canonical IA.
 func navModel() []navAreaDef {
+	// Navigation v2 (ui-design-refresh-design.md §13.2, #755): three doors
+	// and four layers. The first four areas are the doors every session
+	// sees. Home, Ask and Needs you are plain links with no panel; Results &
+	// cost opens a panel (Spend, Trends, Adoption) until #757. Every
+	// destination keeps its key, URL and flags from the five-area model
+	// before it (§13.1); entries that left the admin-only Admin area for
+	// Manage carry AdminOnly themselves, so no audience gains or loses a
+	// nav entry (nav_v2_755_test.go pins all three audiences).
 	return []navAreaDef{
-		// Steer leads the rail: the operator's live-control surface — watch
-		// what's running (Live) and act on what's blocked (Needs you). Named
-		// for the existing "steering" affordance (inline hint injection on the
-		// live page). Distinct from Orchestration (authoring/managing the
-		// catalog) so the do-something-now surfaces aren't buried among the
-		// list pages.
-		{Key: "steer", Label: "Steer", Icon: "navIconSteer", Href: "/ui/live", Dests: []navDest{
-			{Key: "live", Label: "Live", Href: "/ui/live", Icon: "navIconLive"},
-			// Relabelled from "Needs you" to "My requests" (task 4.4,
-			// design §5.7): the inbox is now the non-admin default home
-			// and also carries the broader "Your requests" list (any
-			// status, not just what needs attention), so the nav label
-			// needed to widen with it. Not role-aware (admins see the
-			// same label) — kept simple per the design's own hedge; a
-			// per-role label would need the same per-request plumbing
-			// problem Badge below already had to solve narrowly.
-			{Key: "inbox", Label: "My requests", Href: "/ui/inbox", Icon: "navIconInbox"},
-		}},
-		// Tasks leads the Orchestration area: it's where the operator most
-		// often works, so it's the default destination (the rail icon lands
-		// here). Projects (the container for swarms/workflows/tasks), Swarms,
-		// Workflows, and Executions follow. Each dest points at its
-		// first-class top-level list page (IA completion, 2026-06-09):
-		// Swarms/Workflows list the global registry entities; Executions is
-		// the cross-task run list. Row click-through reaches the existing
-		// detail/edit surfaces.
-		{Key: "orchestration", Label: "Orchestration", Short: "Tasks", Icon: "navIconOrchestration", Href: "/ui/tasks", Dests: []navDest{
-			{Key: "tasks", Label: "Tasks", Href: "/ui/tasks", Icon: "navIconTasks"},
-			{Key: "projects", Label: "Projects", Href: "/ui/projects", Icon: "navIconProjects"},
-			{Key: "swarms", Label: "Swarms", Href: "/ui/swarms", Icon: "navIconSwarms", AdminOnly: true},
-			{Key: "workflows", Label: "Workflows", Href: "/ui/workflows", Icon: "navIconWorkflows", AdminOnly: true},
-			{Key: "executions", Label: "Executions", Href: "/ui/executions", Icon: "navIconExecutions"},
-		}},
-		{Key: "memory", Label: "Memory", Icon: "navIconMemory", Href: "/ui/memory", Dests: []navDest{
-			{Key: "memory", Label: "Memory", Href: "/ui/memory", Icon: "navIconMemory"},
-			{Key: "reminders", Label: "Reminders", Href: "/ui/reminders", Icon: "navIconReminders"},
-		}},
-		{Key: "insight", Label: "Insight", Icon: "navIconInsight", Href: "/ui/spend", Dests: []navDest{
+		{Key: "home", Label: "Home", Icon: "navIconOverview", Href: "/ui/", Page: "dashboard", PhoneTab: true},
+		// Ask lands on the dispatcher project's chat (askHandler).
+		{Key: "ask", Label: "Ask", Icon: "navIconAsk", Href: "/ui/ask", PhoneTab: true},
+		// Needs you is the outcome inbox; it carries the attention badge
+		// (navModelForPage), which sat on the "My requests" entry before.
+		{Key: "needs", Label: "Needs you", Short: "Needs", Icon: "navIconInbox", Href: "/ui/inbox", Page: "inbox", PhoneTab: true},
+		// Results & cost lands on the Results page (#757, design §15.2).
+		{Key: "results", Label: "Results & cost", Short: "Results", Icon: "navIconSpend", Href: "/ui/results", PhoneTab: true, Dests: []navDest{
+			{Key: "results", Label: "Results", Href: "/ui/results", Icon: "navIconSpend"},
 			{Key: "spend", Label: "Spend", Href: "/ui/spend", Icon: "navIconSpend"},
 			{Key: "trends", Label: "Trends", Href: "/ui/insights/trends", Icon: "navIconInsight"},
-			{Key: "quality", Label: "Quality", Href: "/ui/insights/quality", Icon: "navIconScorecard"},
-			{Key: "insights", Label: "Tool budget", Href: "/ui/insights/tool-budget", Icon: "navIconGauge"},
 			{Key: "adoption", Label: "Adoption", Href: "/ui/insights/adoption", Icon: "navIconAdoption"},
-			{Key: "trading", Label: "Trading", Href: "/ui/trading", Icon: "navIconTrading", Cap: "trading"},
-			{Key: "audit", Label: "Audit", Href: "/ui/audit", Icon: "navIconAudit", AdminOnly: true},
-			// MCP moved to the control-plane hub's MCP tab (the canonical
-			// management surface). The old top-level /ui/mcp discovery page
-			// was a duplicate nav entry point; it now 302s into the hub
-			// (2026-07-08 nav dedupe).
 		}},
-		{Key: "admin", Label: "Admin", Icon: "navIconAdmin", Href: "/ui/admin/", AdminOnly: true, Dests: []navDest{
+		// Manage holds everything an owner configures (no CLI on SaaS).
+		// Four of the five entries from the old Admin area are AdminOnly:
+		// project users saw none of them, and the owner sees Keys & access
+		// by OwnerHref. My account is the exception (below).
+		{Key: "manage", Label: "Manage", Icon: "navIconManage", Href: "/ui/manage", Dests: []navDest{
+			// The overview of Manage (#759, design §17.2 M1).
+			{Key: "manage-overview", Label: "Overview", Href: "/ui/manage", Icon: "navIconOverview"},
+			{Key: "projects", Label: "Assistants", Href: "/ui/projects", Icon: "navIconProjects"},
+			{Key: "integrations", Label: "Integrations", Href: "/ui/integrations", Icon: "navIconIntegrations", AdminOnly: true},
+			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey", AdminOnly: true, OwnerHref: "/ui/credentials"},
+			{Key: "admin-agents", Label: "Coding agents", Href: "/ui/admin/agents", Icon: "navIconRobot", AdminOnly: true},
+			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill", AdminOnly: true},
+			{Key: "reminders", Label: "Reminders", Href: "/ui/reminders", Icon: "navIconReminders"},
+			{Key: "insights", Label: "Tool budget", Href: "/ui/insights/tool-budget", Icon: "navIconGauge"},
+			{Key: "trading", Label: "Trading", Href: "/ui/trading", Icon: "navIconTrading", Cap: "trading"},
+			// Open to every session (my_account_test: the one screen a
+			// non-admin needs); the old Admin area hid it from them.
+			{Key: "my-account", Label: "My account", Href: "/ui/account", Icon: "navIconUser", OwnerHref: "/ui/account"},
+		}},
+		// Diagnostics: the engineering views, unchanged; it lands on the
+		// overview of the tiles that left the home page (#756).
+		{Key: "diagnostics", Label: "Diagnostics", Short: "Inspect", Icon: "navIconDiagnostics", Href: "/ui/diagnostics", Dests: []navDest{
+			// The tiles that left the home page (#756, design §14.2).
+			{Key: "diagnostics-overview", Label: "Overview", Href: "/ui/diagnostics", Icon: "navIconOverview"},
+			{Key: "live", Label: "Live", Href: "/ui/live", Icon: "navIconLive"},
+			{Key: "tasks", Label: "Tasks", Href: "/ui/tasks", Icon: "navIconTasks"},
+			{Key: "executions", Label: "Executions", Href: "/ui/executions", Icon: "navIconExecutions"},
+			{Key: "swarms", Label: "Swarms", Href: "/ui/swarms", Icon: "navIconSwarms", AdminOnly: true},
+			{Key: "workflows", Label: "Workflows", Href: "/ui/workflows", Icon: "navIconWorkflows", AdminOnly: true},
+			{Key: "memory", Label: "Memory", Href: "/ui/memory", Icon: "navIconMemory"},
+			{Key: "quality", Label: "Quality", Href: "/ui/insights/quality", Icon: "navIconScorecard"},
+			{Key: "audit", Label: "Audit", Href: "/ui/audit", Icon: "navIconAudit", AdminOnly: true},
+		}},
+		// The operator console: whoever runs the instance. Admin-only as
+		// the Admin area was; the owner's entries moved to Manage.
+		{Key: "operator", Label: "Operator console", Short: "Console", Icon: "navIconAdmin", Href: "/ui/admin/", AdminOnly: true, Dests: []navDest{
 			{Key: "admin", Label: "Admin console", Href: "/ui/admin/", Icon: "navIconAdmin"},
-			// My account sits with the other identity surfaces (Accounts,
-			// Keys & access) rather than under Steer, which is live control
-			// of running work — it was never about that (operator, 2026-09-16).
-			//
-			// The dest is NOT AdminOnly: it is the page for the people who
-			// are not admins, the one screen where someone sees every
-			// identity that resolves to them and can unlink one. The AREA
-			// gate is what decides visibility, and it admits every caller on
-			// Community and on any auth-off deployment (allUICallersAdmin),
-			// which is where the Admin area's own CE features — Keys &
-			// access, Control plane — are reached from. The case it does
-			// hide is an Enterprise box with browser sessions and a
-			// non-admin signed in; /ui/account stays reachable by URL there,
-			// and CA-12's Community personal login is the change that will
-			// make this worth revisiting.
-			{Key: "my-account", Label: "My account", Href: "/ui/account", Icon: "navIconUser"},
-			// The canonical account surface. /ui/admin/users 302s here since
-			// the 2026-09-15 nav dedupe — it rendered the same accounts with
-			// fewer actions and only in Enterprise.
 			{Key: "operator", Label: "Accounts", Href: "/ui/operator/accounts", Icon: "navIconUsers", AdminOnly: true},
 			{Key: "regulatory", Label: "Regulatory record", Href: "/ui/operator/regulatory", Icon: "navIconAudit", AdminOnly: true},
-			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill"},
 			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane"},
-			// Integrations Hub (integrations-hub-design.md §0.0a): moved
-			// here from its own one-entry top-level area (the rail's
-			// "Integrations", the mobile bar's "Connect") on 2026-10-03 —
-			// operator: "move integrations from the connect menu to control
-			// plane, to declutter navigation". URL unchanged. Not AdminOnly:
-			// the catalog is scope-filtered for project users (§5.8), and the
-			// area gate decides visibility exactly as for My account above.
-			{Key: "integrations", Label: "Integrations", Href: "/ui/integrations", Icon: "navIconIntegrations"},
-			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey"},
-			{Key: "admin-agents", Label: "Assistants", Href: "/ui/admin/agents", Icon: "navIconRobot"},
 		}},
 	}
 }
@@ -207,6 +190,9 @@ var pageToArea = func() map[string]string {
 	// caller is actually on that page (which can't happen in CE, where the
 	// route 404s), and keeping it edition-independent avoids a second flag here.
 	for _, a := range navModel() {
+		if a.Page != "" {
+			m[a.Page] = a.Key
+		}
 		for _, d := range a.Dests {
 			m[d.Key] = a.Key
 		}
@@ -226,8 +212,8 @@ type navAttentionCounter interface {
 
 // navModelForPage is the template FuncMap's "navModel" entry (wired by
 // NewServer in place of the bare navModelFunc). It returns the same
-// edition-filtered destinations navModelFunc does, plus the "inbox"
-// dest's Badge populated from data's attention count when data
+// edition-filtered destinations navModelFunc does, plus the Needs you
+// door's Badge populated from data's attention count when data
 // implements navAttentionCounter. _partials.html's nav partial calls
 // this as `{{range navModel .}}` (four call sites — rail, panel, mobile
 // tabs, mobile drawer) so `.` (the current page's Data) reaches here.
@@ -249,10 +235,8 @@ func navModelForPage(tradingEnabled func() bool) func(data any) []navAreaDef {
 			return m
 		}
 		for i := range m {
-			for j := range m[i].Dests {
-				if m[i].Dests[j].Key == "inbox" {
-					m[i].Dests[j].Badge = count
-				}
+			if m[i].Key == "needs" {
+				m[i].Badge = count
 			}
 		}
 		return m
@@ -268,4 +252,47 @@ func navAreaForPage(page string) string {
 		return a
 	}
 	return ""
+}
+
+// navInMore reports whether a page's area sits in the phone bar's More sheet
+// (§18): it maps to an area, and that area is not a phone tab. The bar
+// highlights More on such pages.
+func navInMore(page string) bool {
+	key := navAreaForPage(page)
+	if key == "" {
+		return false
+	}
+	for _, a := range navModel() {
+		if a.Key == key {
+			return !a.PhoneTab
+		}
+	}
+	return false
+}
+
+// navOwnerAttr is what the nav partial's navOwnerAttr template renders for one
+// destination: Href for data-owner-href, Hide for data-owner-hide.
+type navOwnerAttr struct {
+	Href string
+	Hide bool
+}
+
+// navOwner decides a destination's owner attribute (GitHub #625 item 1; LLD
+// 18, amendment 2026-11-12). Only the AdminOnly area is the owner's business:
+// elsewhere the owner sees what a project user sees. Inside it, an entry with
+// OwnerHref is shown to the owner at that address; a non-AdminOnly entry
+// without one is hidden from them (AdminOnly ones are already hidden from every
+// non-admin).
+func navOwner(area navAreaDef, d navDest) navOwnerAttr {
+	// OwnerHref counts in any area since #755: the owner's entries moved
+	// from the admin-only Admin area to Manage (design §13.2). An OwnerHref
+	// therefore means "the owner may open this", even on an AdminOnly entry
+	// in an admin-only area: set it only where the owner's gate admits them.
+	if d.OwnerHref != "" {
+		return navOwnerAttr{Href: d.OwnerHref}
+	}
+	if !area.AdminOnly {
+		return navOwnerAttr{}
+	}
+	return navOwnerAttr{Hide: !d.AdminOnly}
 }

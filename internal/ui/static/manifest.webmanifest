@@ -6,8 +6,8 @@
   "scope": "/ui/",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#10141A",
-  "background_color": "#10141A",
+  "theme_color": "#F6F4EF",
+  "background_color": "#F6F4EF",
   "categories": ["productivity", "developer"],
   "icons": [
     {

@@ -136,15 +136,21 @@ environment first (the files under `~/.config/vornik/secrets/`, loaded at
 start), then the **operator credentials**: values stored encrypted in the
 daemon's credential store. A server whose credential exists in neither is not
 registered, and the MCP section of the control plane lists it under
-**Waiting for credentials**.
+**Waiting for credentials**. Every server the daemon refuses to register, for
+this reason or another (an `auth:` block that does not resolve, a project
+entry that names a server `config.yaml` does not define), is also listed
+under **Refused at registration** with the reason. The daemon does not retry
+a refused server; fix the configuration and reload.
 
 **Adding a value without a shell** (any install, and the only way on a hosted
 instance):
 
-- **Admin → Keys & access → Credentials** (`/ui/credentials`): enter the name and the
+- **Manage → Keys & access → Credentials** (`/ui/credentials`): enter the name and the
   value. The value is write-only: it is stored encrypted, never shown again,
   and every change is audited. Saving re-registers the servers waiting for it,
-  with no restart. Remove or replace a value on the same page.
+  with no restart. Remove or replace a value on the same page. On a hosted
+  instance the owner opens it from the same Admin menu, which shows them only
+  My account and Keys & access.
 - **From a shell**: `printf '%s' "$TOKEN" | vornikctl credential set NAME`
   with an admin-class key (`VORNIK_API_KEY`); `vornikctl credential list` and
   `remove NAME` do the rest. The value is read from standard input only, and

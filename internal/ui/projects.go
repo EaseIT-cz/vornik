@@ -19,11 +19,6 @@ type ProjectsData struct {
 	Title       string
 	CurrentPage string
 
-	// AutonomyETAs and ActiveChatCount moved here from the overview (GitHub
-	// #603): each autonomy-enabled project's next evaluation, soonest first,
-	// and the Telegram conversations in flight.
-	AutonomyETAs    []AutonomyProjectETA
-	ActiveChatCount int
 	// Rows pairs each project with its pre-computed lifecycle
 	// view (archive countdown, badge state). Pre-built so the
 	// template stays declarative — no method calls / time math
@@ -115,19 +110,6 @@ func (s *Server) Projects(w http.ResponseWriter, r *http.Request) {
 	// wizard feature is off (no chat provider).
 	s.populateWizardDraftsBanner(r, &data)
 	s.populateDeleteOutcomeBanner(r, &data)
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	// The overview was all-access only; this page is not, so each list keeps
-	// to what the session may see.
-	for _, eta := range s.loadAutonomyETAs(ctx) {
-		if api.RequestAllowsProject(r, eta.ProjectID) {
-			data.AutonomyETAs = append(data.AutonomyETAs, eta)
-		}
-	}
-	if s.activeChatSource != nil && requestHasAllProjectAccess(r) {
-		data.ActiveChatCount = s.activeChatSource.ActiveChatCount()
-	}
-
 	s.render(w, "projects.html", data)
 }
 

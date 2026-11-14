@@ -53,6 +53,40 @@ type swarmRoleCard struct {
 	Sections []schemaSectionView
 }
 
+// HasErr reports whether a row of the section carries an error, so a
+// failed save opens the section that holds it (#748 I).
+func (v schemaSectionView) HasErr() bool {
+	for _, r := range v.Rows {
+		if r.Err != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Model is the card's model value (its row named "<prefix>.model"), shown
+// in the card header so a folded card still says what it runs on (#748 I).
+func (c swarmRoleCard) Model() string {
+	for _, sec := range c.Sections {
+		for _, r := range sec.Rows {
+			if strings.HasSuffix(r.Name, ".model") {
+				return r.Value
+			}
+		}
+	}
+	return ""
+}
+
+// HasErr reports whether any of the card's rows carries an error.
+func (c swarmRoleCard) HasErr() bool {
+	for _, sec := range c.Sections {
+		if sec.HasErr() {
+			return true
+		}
+	}
+	return false
+}
+
 // SwarmSchemaConfigData backs the schema-driven swarm editor template.
 type SwarmSchemaConfigData struct {
 	Title       string

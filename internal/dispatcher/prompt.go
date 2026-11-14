@@ -189,7 +189,8 @@ EXPLICIT SCHEDULING DIRECTIVES — fast path
   Skip everything else and call create_task. After create_task returns
   the task ID, confirm to the user with the ID + brief summary —
   for fast-path scheduling the user is fire-and-forget; they read
-  the result later via Telegram completion notification or the UI.
+  the result later in the channel's completion notice, where the
+  channel has one, or on the task's page.
 
 CHOOSING THE WORKFLOW (the workflow_id on create_task)
   Match the user's INTENT to the workflow archetype below, then set
@@ -367,6 +368,30 @@ RESPONSE STYLE
 `)
 
 	return b.String()
+}
+
+// appendNoLaterDelivery appends, for a channel that cannot send the person a
+// message after this reply (web chat until #771), a block that forbids the
+// follow-up promise the base prompt's WAIT-FOR-DATA advice would make
+// (operator, 2026-11-14: "I'll report back when it lands" on web chat, where
+// nothing reports back). Appended after the identity block: constant per
+// channel, so the cached prefix stays stable (web-chat-design.md §4.2).
+func appendNoLaterDelivery(systemPrompt string, noLater bool) string {
+	if !noLater {
+		return systemPrompt
+	}
+	return systemPrompt + `
+
+THIS CHANNEL CANNOT MESSAGE THE PERSON LATER
+  This channel cannot send the person a message after this reply, and
+  nothing resumes this conversation when a task finishes. Do not promise
+  to report back, to continue later or to let them know when it is done;
+  on this channel, ignore the WAIT-FOR-DATA advice to end with "I'll
+  continue when it completes".
+  - If they are waiting for the answer and the task should finish within
+    a few minutes, wait for it in this turn (wait_for_task) and answer.
+  - Otherwise give the task id, say its result will be on its page
+    (/ui/tasks/<task id>), and that they can ask you here to check on it.`
 }
 
 // appendChannelIdentity appends a channel-identity block naming the address

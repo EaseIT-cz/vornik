@@ -9,7 +9,7 @@
         <div class="space-y-5">
             <div class="flex items-center gap-3">
                 <h1 class="text-xl font-semibold text-gray-100">Email channels</h1>
-                <span class="px-2 py-0.5 text-[10px] uppercase tracking-wider font-mono rounded-md bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-700/40">read-only</span>
+                <span class="px-2 py-0.5 text-xs uppercase tracking-wider font-mono rounded-md bg-amber-900/40 text-amber-700 dark:text-amber-300 ring-1 ring-amber-700/40">read-only</span>
                 <a href="/ui/admin/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Admin</a>
             </div>
             <p class="text-xs text-gray-500">One card per project with a configured <code class="text-gray-300">email</code> block. The session list is in-memory only and clears on daemon restart — the authoritative truth is the IMAP mailbox itself.</p>
@@ -23,12 +23,12 @@
                     <div class="px-5 py-3 border-b border-dark-700 flex flex-wrap items-center gap-3">
                         <div class="text-sm font-mono text-gray-100">{{.ProjectID}}</div>
                         {{if .OutboundConfigured}}
-                        <span class="px-2 py-0.5 text-[10px] uppercase tracking-wider font-mono rounded-md bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-700/40">outbound on</span>
+                        <span class="px-2 py-0.5 text-xs uppercase tracking-wider font-mono rounded-md bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-700/40">outbound on</span>
                         {{else}}
-                        <span class="px-2 py-0.5 text-[10px] uppercase tracking-wider font-mono rounded-md bg-gray-800 text-gray-400 ring-1 ring-gray-700">outbound off</span>
+                        <span class="px-2 py-0.5 text-xs uppercase tracking-wider font-mono rounded-md bg-gray-800 text-gray-400 ring-1 ring-gray-700">outbound off</span>
                         {{end}}
                         {{if .VerifyInboundAuth}}
-                        <span class="px-2 py-0.5 text-[10px] uppercase tracking-wider font-mono rounded-md bg-sky-900/40 text-sky-700 dark:text-sky-300 ring-1 ring-sky-700/40">spf/dkim {{.AuthPolicy}}</span>
+                        <span class="px-2 py-0.5 text-xs uppercase tracking-wider font-mono rounded-md bg-sky-900/40 text-sky-700 dark:text-sky-300 ring-1 ring-sky-700/40">spf/dkim {{.AuthPolicy}}</span>
                         {{end}}
                         <a href="/ui/integrations/email?project={{.ProjectID}}" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">Edit in hub →</a>
                     </div>
@@ -47,7 +47,7 @@
                     <div class="border-t border-dark-700/70 px-5 py-3">
                         <div class="flex items-center gap-3 mb-2">
                             <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400">Threads seen this run</h3>
-                            <span class="text-[10px] font-mono text-gray-500">{{len .Sessions}}</span>
+                            <span class="text-xs font-mono text-gray-500">{{len .Sessions}}</span>
                         </div>
                         {{if .SessionsError}}
                         <p class="text-xs text-rose-800 dark:text-rose-400 font-mono">{{.SessionsError}}</p>

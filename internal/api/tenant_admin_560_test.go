@@ -46,15 +46,17 @@ var allSurfaces = []Surface{
 	SurfaceConfigShow, SurfaceInstinctRetireGlobal, SurfaceMemoryFirewall, SurfaceOperatorAccounts,
 	SurfaceOperatorLinks, SurfaceOperatorProposals, SurfaceOperators, SurfaceSkillSetGlobal,
 	SurfaceOperatorCredentials, SurfaceConfigJournal, SurfaceInflight, SurfaceAgentGrant,
+	SurfaceProjectKeys, SurfaceSetupApply,
 }
 
 var grantedSurfaces = map[Surface]bool{
 	SurfaceWizardConverse: true, SurfaceWizard: true, SurfaceMCPOAuthConnect: true, SurfaceOperatorAudit: true,
 	SurfaceOperatorCredentials: true, // GitHub #623
+	SurfaceProjectKeys:         true, // GitHub #754
 }
 
-// B3: exactly five surfaces are granted (the fifth, operator_credentials,
-// GitHub #623).
+// B3: exactly six surfaces are granted (the fifth, operator_credentials,
+// GitHub #623; the sixth, project_keys, GitHub #754).
 func TestTenantAdmin560_Allowlist(t *testing.T) {
 	n := 0
 	for _, s := range allSurfaces {
@@ -65,8 +67,8 @@ func TestTenantAdmin560_Allowlist(t *testing.T) {
 			n++
 		}
 	}
-	if n != 5 || len(tenantAdminSurfaces) != 5 {
-		t.Fatalf("granted %d surfaces (map holds %d), want 5", n, len(tenantAdminSurfaces))
+	if n != 6 || len(tenantAdminSurfaces) != 6 {
+		t.Fatalf("granted %d surfaces (map holds %d), want 6", n, len(tenantAdminSurfaces))
 	}
 	if TenantAdminMay(Surface("unlisted")) {
 		t.Fatal("an unlisted surface was granted")
@@ -327,8 +329,9 @@ func TestTenantAdmin560_NavRole(t *testing.T) {
 		t.Fatalf("self-hosted admin nav role %q", got)
 	}
 	sb.DemoteAdmin = func(context.Context) bool { return true }
-	if got := s.navRole(r, auth.RoleAdmin); got != auth.RoleUser {
-		t.Fatalf("demoted admin nav role %q, want user", got)
+	// #625 item 1: the demoted admin is the owner, with its own marker.
+	if got := s.navRole(r, auth.RoleAdmin); got != auth.RoleTenantAdmin {
+		t.Fatalf("demoted admin nav role %q, want tenant_admin", got)
 	}
 	if got := s.navRole(r, auth.RoleUser); got != auth.RoleUser {
 		t.Fatalf("user nav role %q", got)

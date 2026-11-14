@@ -23,15 +23,6 @@ const (
 	trendDays      = 14   // trailing window, daily buckets
 )
 
-// Trend chart geometry (px).
-const (
-	trendChartH   = 120
-	trendChartTop = 10
-	trendColW     = 34
-	trendBarW     = 22
-	trendLeftPad  = 4
-)
-
 // dayBucket is one day's task counts + bar geometry.
 type dayBucket struct {
 	Date       string
@@ -39,9 +30,6 @@ type dayBucket struct {
 	Completed  int
 	Failed     int
 	SuccessPct int
-	X          int
-	BarY       int
-	BarH       int
 }
 
 // trendStats is the summarized daily time-series.
@@ -53,8 +41,7 @@ type trendStats struct {
 	TotCompleted      int
 	TotFailed         int
 	OverallSuccessPct int
-	SVGWidth          int
-	SVGHeight         int
+	Chart             barChart // the shared chart (#757); the geometry above stays for the existing tests
 }
 
 func truncateDate(t time.Time) time.Time {
@@ -112,18 +99,15 @@ func summarizeTaskTrends(tasks []*persistence.Task, now time.Time, days int) tre
 			maxCreated = s.Buckets[i].Created
 		}
 	}
-	for i := range s.Buckets {
-		s.Buckets[i].X = trendLeftPad + i*trendColW
-		if maxCreated > 0 {
-			s.Buckets[i].BarH = s.Buckets[i].Created * trendChartH / maxCreated
-		}
-		s.Buckets[i].BarY = trendChartTop + (trendChartH - s.Buckets[i].BarH)
-	}
 	if term := s.TotCompleted + s.TotFailed; term > 0 {
 		s.OverallSuccessPct = s.TotCompleted * 100 / term
 	}
-	s.SVGWidth = trendLeftPad + days*trendColW
-	s.SVGHeight = trendChartTop + trendChartH + 22 // room for x-axis labels
+	vals, dates, tips := make([]float64, len(s.Buckets)), make([]string, len(s.Buckets)), make([]string, len(s.Buckets))
+	for i, b := range s.Buckets {
+		vals[i], dates[i] = float64(b.Created), b.Date
+		tips[i] = fmt.Sprintf("%s: %d created, %d completed, %d failed, %d%% success", b.Date, b.Created, b.Completed, b.Failed, b.SuccessPct)
+	}
+	s.Chart = newBarChart(vals, dates, tips, countUnit("task", "tasks"))
 	return s
 }
 
@@ -135,9 +119,6 @@ type verdictBucket struct {
 	Abstain    int
 	Total      int
 	AbstainPct int
-	X          int
-	BarY       int
-	BarH       int
 }
 
 // verdictTrendStats is the summarized daily judge-verdict time-series.
@@ -150,8 +131,7 @@ type verdictTrendStats struct {
 	TotFail           int
 	TotAbstain        int
 	OverallAbstainPct int
-	SVGWidth          int
-	SVGHeight         int
+	Chart             barChart // the shared chart (#757); the geometry above stays for the existing tests
 }
 
 // summarizeVerdictTrends buckets LLM-as-judge verdicts (pass/fail/abstain) by
@@ -203,19 +183,16 @@ func summarizeVerdictTrends(verdicts []*persistence.TaskJudgeVerdict, now time.T
 			maxTotal = s.Buckets[i].Total
 		}
 	}
-	for i := range s.Buckets {
-		s.Buckets[i].X = trendLeftPad + i*trendColW
-		if maxTotal > 0 {
-			s.Buckets[i].BarH = s.Buckets[i].Total * trendChartH / maxTotal
-		}
-		s.Buckets[i].BarY = trendChartTop + (trendChartH - s.Buckets[i].BarH)
-	}
 	if tot := s.TotPass + s.TotFail + s.TotAbstain; tot > 0 {
 		s.OverallAbstainPct = s.TotAbstain * 100 / tot
 		s.HasData = true
 	}
-	s.SVGWidth = trendLeftPad + days*trendColW
-	s.SVGHeight = trendChartTop + trendChartH + 22
+	vals, dates, tips := make([]float64, len(s.Buckets)), make([]string, len(s.Buckets)), make([]string, len(s.Buckets))
+	for i, b := range s.Buckets {
+		vals[i], dates[i] = float64(b.Total), b.Date
+		tips[i] = fmt.Sprintf("%s: %d verdicts, %d pass, %d fail, %d abstain", b.Date, b.Total, b.Pass, b.Fail, b.Abstain)
+	}
+	s.Chart = newBarChart(vals, dates, tips, countUnit("verdict", "verdicts"))
 	return s
 }
 
@@ -223,20 +200,16 @@ func summarizeVerdictTrends(verdicts []*persistence.TaskJudgeVerdict, now time.T
 type recoveryBucket struct {
 	Date  string
 	Count int
-	X     int
-	BarY  int
-	BarH  int
 }
 
 // recoveryTrendStats is the summarized daily recovery-event time-series.
 type recoveryTrendStats struct {
-	HasData   bool
-	Sample    int
-	Days      int
-	Buckets   []recoveryBucket
-	Total     int
-	SVGWidth  int
-	SVGHeight int
+	HasData bool
+	Sample  int
+	Days    int
+	Buckets []recoveryBucket
+	Total   int
+	Chart   barChart // the shared chart (#757); the geometry above stays for the existing tests
 }
 
 // summarizeRecoveryTrends buckets recovery events by created-date over the
@@ -273,16 +246,13 @@ func summarizeRecoveryTrends(events []*persistence.RecoveryEvent, now time.Time,
 			maxCount = b.Count
 		}
 	}
-	for i := range s.Buckets {
-		s.Buckets[i].X = trendLeftPad + i*trendColW
-		if maxCount > 0 {
-			s.Buckets[i].BarH = s.Buckets[i].Count * trendChartH / maxCount
-		}
-		s.Buckets[i].BarY = trendChartTop + (trendChartH - s.Buckets[i].BarH)
-	}
 	s.HasData = s.Total > 0
-	s.SVGWidth = trendLeftPad + days*trendColW
-	s.SVGHeight = trendChartTop + trendChartH + 22
+	vals, dates, tips := make([]float64, len(s.Buckets)), make([]string, len(s.Buckets)), make([]string, len(s.Buckets))
+	for i, b := range s.Buckets {
+		vals[i], dates[i] = float64(b.Count), b.Date
+		tips[i] = fmt.Sprintf("%s: %d recoveries", b.Date, b.Count)
+	}
+	s.Chart = newBarChart(vals, dates, tips, countUnit("recovery", "recoveries"))
 	return s
 }
 
@@ -291,9 +261,6 @@ type spendBucket struct {
 	Date      string
 	Cost      float64
 	CostLabel string
-	X         int
-	BarY      int
-	BarH      int
 }
 
 // spendTrendStats is the summarized daily LLM-spend time-series.
@@ -303,8 +270,7 @@ type spendTrendStats struct {
 	Buckets    []spendBucket
 	Total      float64
 	TotalLabel string
-	SVGWidth   int
-	SVGHeight  int
+	Chart      barChart // the shared chart (#757); the geometry above stays for the existing tests
 }
 
 // layoutSpendTrend builds the daily-spend chart from per-day cost totals
@@ -323,17 +289,14 @@ func layoutSpendTrend(dayCosts []float64, dates []string) spendTrendStats {
 			maxCost = c
 		}
 	}
-	for i := range s.Buckets {
-		s.Buckets[i].X = trendLeftPad + i*trendColW
-		if maxCost > 0 {
-			s.Buckets[i].BarH = int(s.Buckets[i].Cost * float64(trendChartH) / maxCost)
-		}
-		s.Buckets[i].BarY = trendChartTop + (trendChartH - s.Buckets[i].BarH)
-	}
 	s.HasData = s.Total > 0
 	s.TotalLabel = fmt.Sprintf("$%.2f", s.Total)
-	s.SVGWidth = trendLeftPad + len(dayCosts)*trendColW
-	s.SVGHeight = trendChartTop + trendChartH + 22
+	vals, dates, tips := make([]float64, len(s.Buckets)), make([]string, len(s.Buckets)), make([]string, len(s.Buckets))
+	for i, b := range s.Buckets {
+		vals[i], dates[i] = b.Cost, b.Date
+		tips[i] = fmt.Sprintf("%s: %s", b.Date, b.CostLabel)
+	}
+	s.Chart = newBarChart(vals, dates, tips, dollarUnit)
 	return s
 }
 

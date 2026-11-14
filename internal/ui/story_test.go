@@ -136,8 +136,8 @@ func TestTaskLive_StoryPanelSeedsAndRoleGatesTechnicalDetails(t *testing.T) {
 		}
 		// Collapsed: the <details ...> wrapper must NOT carry the open
 		// attribute for a RoleUser session.
-		if strings.Contains(body, `overflow-hidden" open>`) {
-			t.Errorf("technical details must be collapsed (no `open` attribute) for a RoleUser session")
+		if tag := detailsTagBefore(t, body, ">Show technical details</h2>"); strings.Contains(tag, " open") {
+			t.Errorf("technical details must be collapsed (no `open` attribute) for a RoleUser session; tag=%q", tag)
 		}
 	})
 
@@ -149,8 +149,8 @@ func TestTaskLive_StoryPanelSeedsAndRoleGatesTechnicalDetails(t *testing.T) {
 			t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
 		}
 		body := rr.Body.String()
-		if !strings.Contains(body, `overflow-hidden" open>`) {
-			t.Errorf("technical details must be open by default for a non-RoleUser (admin/no-session) viewer")
+		if tag := detailsTagBefore(t, body, ">Show technical details</h2>"); !strings.Contains(tag, " open") {
+			t.Errorf("technical details must be open by default for a non-RoleUser (admin/no-session) viewer; tag=%q", tag)
 		}
 	})
 }
@@ -229,8 +229,8 @@ func TestTaskDetail_StoryPanelSeedsAndRoleGatesCostTable(t *testing.T) {
 		if !strings.Contains(body, "Show technical details") {
 			t.Errorf("expected the LLM Cost table gated behind 'Show technical details'")
 		}
-		if strings.Contains(body, `panel-ref" open>`) {
-			t.Errorf("LLM Cost details must be collapsed for a RoleUser session")
+		if tag := detailsTagBefore(t, body, "LLM Cost\n"); strings.Contains(tag, " open") {
+			t.Errorf("LLM Cost details must be collapsed for a RoleUser session; tag=%q", tag)
 		}
 
 		// companion-review review-20260710-d9af.md finding #2: the
@@ -256,8 +256,8 @@ func TestTaskDetail_StoryPanelSeedsAndRoleGatesCostTable(t *testing.T) {
 			t.Fatalf("expected 200, got %d (body: %s)", rr.Code, rr.Body.String())
 		}
 		body := rr.Body.String()
-		if !strings.Contains(body, `panel-ref" open>`) {
-			t.Errorf("LLM Cost details must be open by default for a non-RoleUser (admin/no-session) viewer")
+		if tag := detailsTagBefore(t, body, "LLM Cost\n"); !strings.Contains(tag, " open") {
+			t.Errorf("LLM Cost details must be open by default for a non-RoleUser (admin/no-session) viewer; tag=%q", tag)
 		}
 
 		leaseTag := detailsTagBefore(t, body, ">Lease</h2>")

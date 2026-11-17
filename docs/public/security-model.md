@@ -35,14 +35,20 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 11 November 2026, against `main` before release 2026.11.4.
+**Last reviewed:** 16 November 2026, against `main` before release 2026.11.6.
 
-What Vornik defends against, its trust boundaries, and the controls in place
-today, with what each does **not** cover. It applies to both editions;
-Enterprise-only controls are marked **(Enterprise)**. Everything here is
-product behaviour; where an operator's deployment choice (proxy, model
-providers, host) changes the outcome, the page says so. To report a
-vulnerability, see [Security policy](security.md).
+**In short:** models run in locked-down containers and only propose. The
+daemon decides what takes effect, holds the credentials, and scans
+everything that leaves a container. Each control below says what it does
+**not** cover, and [Residual risks](#residual-risks) lists what no control
+here solves.
+
+This page covers what Vornik defends against, its trust boundaries, and the
+controls in place today. It applies to both editions; Enterprise-only
+controls are marked **(Enterprise)**. Everything here is product behaviour.
+Where an operator's choice (proxy, model providers, host) changes the
+outcome, the page says so. To report a vulnerability, see
+[Security policy](security.md).
 
 ---
 
@@ -99,22 +105,73 @@ connected assistants, and upstream services.
 
 ## Trust boundaries
 
+```mermaid
+flowchart LR
+    client["Network client<br/>key, session or approver device"] --> api["HTTP API and console"]
+    assistant["Connected assistant"] -->|"MCP, scoped key"| companion["Companion endpoint"]
+    phone["Paired phone"] --> approvals["Approval pages<br/>device-bound session"]
+    api --> daemon
+    companion --> daemon
+    approvals --> daemon
+    subgraph trusted["Trusted"]
+        daemon["Vornik daemon<br/>scheduler, executor, guards"]
+        db[("Database")]
+    end
+    daemon --> db
+    daemon -->|"outbound; responses untrusted"| outside["Model providers, MCP servers,<br/>forges, chat platforms, gateway"]
+    daemon -->|"podman run"| agent["Agent container<br/>untrusted"]
+    daemon -->|"podman run, one-shot, no network"| sandbox["Sandbox tool run<br/>untrusted input"]
 ```
- network client ──▶ HTTP API / console ──▶ database (trusted)
- (key, session,          │
-  approver device)       ▼
-                    Vornik daemon ──────────▶ model providers, MCP servers,
-                    (scheduler,                forges, chat platforms, gateway
-                     executor, guards)         (outbound, untrusted responses)
-                     │            │
-         podman run  │            │ podman run (one-shot, no network)
-                     ▼            ▼
-             agent container   sandbox tool run
-             (untrusted)       (untrusted input)
 
- connected assistant ──MCP──▶ companion endpoint (scoped key) ──▶ daemon
- paired phone ──────────────▶ approval pages (device-bound session)
+Every caller outside the daemon (network clients, connected assistants,
+paired phones) must authenticate to reach it. Every program it starts and
+every response it receives is treated as untrusted.
+
+### Where each credential lives
+
+The daemon holds the credentials. An agent container receives only what the
+operator decided it needs, and a model sees only what reaches its container.
+
+```mermaid
+flowchart TB
+    subgraph daemon["Held by the daemon: never sent into an agent container"]
+        provider["Model provider keys"]
+        mcpcred["MCP server credentials"]
+        sealed["Credentials an assistant provided<br/>(sealed in the secret store)"]
+    end
+    gateway["Gateway<br/>holds third-party API credentials"]
+    subgraph container["Agent container: what the model can read"]
+        perTask["A short-lived per-task key<br/>bound to one project"]
+        named["Named secrets the operator granted<br/>to this project (environment variables;<br/>a value may come from the credential store)"]
+    end
+    perTask -->|"model calls, tool calls"| proxy["Daemon proxy"]
+    proxy -.->|"adds the provider key"| models["Model provider"]
+    proxy -.->|"adds the MCP credential"| mcp["MCP server"]
+    proxy -.->|"API calls through"| gateway
+    container -->|"results, logs, artifacts"| scan["Secret scan and redaction"] --> stored[("Stored and shown<br/>in redacted form")]
 ```
+
+- **Never in a container:** model provider keys, MCP server credentials,
+  third-party API credentials, and the credentials an assistant provided.
+  The agent calls models through the daemon with its per-task key. That key
+  overwrites both key variables before the container starts. If it cannot be
+  minted, the step does not start. The daemon makes each MCP call, and the
+  gateway adds third-party credentials. An assistant's credentials are
+  sealed, and the assistant never sees one either. A named secret cannot
+  carry one: its value resolves only from the daemon's environment and the
+  operator credential store.
+- **Operator credentials stay in the daemon** unless the operator uses one
+  as a named secret's value (a `${NAME}` placeholder resolves from the
+  daemon's environment, then the operator credential store).
+- **The deliberate exception: what the operator puts in a container.** An
+  operator can declare a named secret and grant it to projects. It is then injected into those projects'
+  agent containers as an environment variable, so a model running there can
+  read it. Grant one only to a project that needs it; an empty project list
+  grants it to every project. A role's static environment, also operator
+  configuration, reaches its containers the same way. See
+  [Secrets](guides/secrets.md).
+- **On the way out,** everything a container produces passes the secret scan
+  before it is stored or shown (see [Secrets](#secrets) below).
 
 ---
 
@@ -182,17 +239,20 @@ connected assistants, and upstream services.
   capped role can retrieve. What it does not cover: companion and console
   recall have no role policy and are not capped.
 - **An A2A caller key is bounded.** Each task it submits records the key.
-  A submit is refused once the key's attributed spend reaches its
-  `budget_cap_usd` (402), or once it has created the workflow's
-  `a2a.dailyQuotaPerKey` tasks since 00:00 UTC (429; 50 unless set). A key
-  with a workflow list and no rate limit of its own gets 1 request per
-  second, burst 10. A spend or count that cannot be read refuses the submit.
+  - A submit is refused once the key's attributed spend reaches its
+    `budget_cap_usd` (402), or once it has created the workflow's
+    `a2a.dailyQuotaPerKey` tasks since 00:00 UTC (429; 50 unless set).
+  - A key with a workflow list and no rate limit of its own gets 1 request
+    per second, burst 10.
+  - A spend or count that cannot be read refuses the submit.
+  - `vornikctl doctor` (`a2a_corpus_walk`) names a caller key whose A2A
+    tasks retrieved more than 500 distinct memory chunks in the last 24
+    hours. That volume is a sign the caller is walking the expert's corpus. It reports
+    after the fact and blocks nothing; the quota and the rate bound how fast
+    a walk can go.
+
   What it does not cover: concurrent submits can pass the quota by up to
   10, and spend from before 2026.11.2 is not attributed.
-  `vornikctl doctor` (`a2a_corpus_walk`) names a caller key whose A2A tasks
-  retrieved more than 500 distinct memory chunks in the last 24 hours: a
-  sign the caller is walking the expert's corpus. It reports after the fact
-  and blocks nothing; the quota and the rate bound how fast a walk can go.
 - Request bodies are size-capped and strictly decoded. The configuration dump
   redacts every credential-shaped field; a test plants a marker in every
   string field of the configuration and requires each credential-shaped one
@@ -214,22 +274,45 @@ connected assistants, and upstream services.
   a warning at startup. Rate limits and login lockouts key on this value.
 - **Managed hosting** (`hosting.mode: managed`, for hosted instances; off by
   default) splits the daemon into a public listener and an operations
-  listener. The public listener refuses every admin-class key, in any header
-  it can be presented in, before routing, serves no metrics, and treats an
-  administrator's browser session there as the instance owner, who may use a
-  short, closed list of operator surfaces (the project wizard, the template
-  gallery, MCP OAuth connections, the operator audit, the Credentials page,
-  and creating, rotating and revoking keys on a project's Keys page) and no
-  other. Each key action is audited and the key list shows who made each key;
-  a key the owner makes is a full key for its project, which cannot manage
-  keys, until revoked;
-  administrator access exists only on the operations listener, which must
-  bind a loopback or private address. Managed mode refuses to start with authentication off.
-  It also requires the per-IP request limit and a narrow trusted-proxy list,
-  starts no stdio MCP server, limits model endpoints to public addresses
-  (except the listed model gateway names, which may resolve to private
-  addresses but never to loopback or metadata addresses), and limits every MCP
-  server it dials to public addresses and same-host redirects.
+  listener. Administrator access exists only on the operations listener,
+  which must bind a loopback or private address.
+  - **The public listener** refuses every admin-class key, in any header it
+    can be presented in, before routing. It serves no metrics.
+  - **The instance owner.** An administrator's browser session on the public
+    listener is the instance owner. The owner may use a closed list of
+    operator surfaces and no other:
+    - the project wizard and the template gallery;
+    - MCP OAuth connections;
+    - the operator audit;
+    - the Credentials page;
+    - creating, rotating and revoking keys on a project's Keys page;
+    - choosing which roles of a project may call an MCP server's tools, on
+      its MCP tools page;
+    - reading the operator console's observation pages, never changing
+      anything through it;
+    - connecting the instance's model provider (`/ui/model-provider`). The
+      provider is checked before saving under managed mode's own dial rule
+      (public addresses, plus the vouched model gateway names), so the page
+      cannot reach the instance's private network. The key is sealed in the
+      credential store and never shown again. Each change is audited with
+      the provider's host, never the key, and takes effect at the restart
+      the hosting service performs.
+
+    The console pages that show the daemon's configuration, its MCP server
+    catalog, admin keys or accounts stay closed to the owner, even for
+    reading.
+  - **Owner actions are recorded.** Each key action is audited, and the key
+    list shows who made each key. A key the owner makes is a full key for
+    its project, which cannot manage keys, until revoked. A tool grant is
+    recorded as an applied proposal naming the owner, which the operator can
+    roll back.
+  - **Start-up refusals.** Managed mode refuses to start with authentication
+    off. It also requires the per-IP request limit and a narrow
+    trusted-proxy list, and starts no stdio MCP server.
+  - **Outbound limits.** Model endpoints must be public addresses, except
+    the listed model gateway names, which may resolve to private addresses
+    but never to loopback or metadata addresses. Every MCP server it dials
+    must be a public address, with same-host redirects only.
 - **Binding a managed instance to its customer.** A managed instance gets
   its owner and models from one setup operation on the operations listener,
   never from the public one.
@@ -411,7 +494,8 @@ connected assistants, and upstream services.
   symlink cannot be read outside the workspace.
 - **Credentials stay out of containers.** Third-party API credentials live in
   the gateway, MCP credentials in the daemon, and an agent's tool arguments
-  carry none.
+  carry none. The exceptions are the ones an operator configures; see
+  [Where each credential lives](#where-each-credential-lives).
 
 ### No daemon surface chooses a program
 
@@ -506,12 +590,14 @@ connected assistants, and upstream services.
   every guard. An operator-listed allowed host is an explicit vouch and
   bypasses the list, metadata addresses included.
   Operator-listed private ranges are allowed only where a feature needs them.
-- An agent project's approved API reaches a private address only on a host
-  the operator names in `agent_admin.private_api_hosts`, and only over https.
-  A listed host still never reaches loopback, link-local or metadata
-  addresses, each API still needs its approval on an approver device, and a
-  managed instance refuses the setting. `test_connection` reports a refused
-  address as `blocked_private_address`.
+- An agent project's approved API or MCP server reaches a private address
+  only on a host the operator names in `agent_admin.private_api_hosts`, and
+  only over https. A listed host still never reaches loopback, link-local or
+  metadata addresses, each API or server still needs its approval on an
+  approver device, and a managed instance refuses the setting. Before
+  approval, a failed tool listing on a listed host tells the agent only that
+  it could not connect. `test_connection` reports a refused address as
+  `blocked_private_address`.
 - Redirects that would carry secrets are refused; gateway redirects stay on
   the same origin.
 
@@ -605,22 +691,25 @@ connected assistants, and upstream services.
   to keep logs) and an AI-disclosure log that is never pruned.
 - **Data-subject rights**: a register of whom a record concerns,
   identity-verified access and portability reports, erasure with a preview,
-  and a breach ledger with the 72-hour clock. Exclusive records are deleted;
-  records that also concern other people are redacted, not destroyed, and
-  re-embedded. In a multi-person conversation transcript, the messages the
-  person wrote are replaced by a dated removal note under a pseudonym, and
-  their known identifiers are masked in everyone else's messages and in the
-  instructions of tasks those messages started; nobody's words are rewritten
-  by a model. What remains of the person in others' messages is kept only on
-  a ground the operator assesses and records for each request. A chat
-  channel's stored conversation is deleted or masked the same way (deleted
-  in full where the channel does not record who wrote each message), and every daemon node checks a version on the stored row before
-  serving its cached copy and saves only over the version it read, so an
-  erased conversation is neither served from memory nor written back. A record
-  a running task still uses, a conversation that keeps changing during the
-  erasure, and a session held only in memory (single-process installs) are
-  deferred, and the request is reported as not fully actioned rather than
-  marked done.
+  and a breach ledger with the 72-hour clock.
+  - **Erasure.** Exclusive records are deleted. Records that also concern
+    other people are redacted, not destroyed, and re-embedded.
+  - **Shared transcripts.** In a multi-person conversation, the messages the
+    person wrote are replaced by a dated removal note under a pseudonym.
+    Their known identifiers are masked in everyone else's messages and in
+    the instructions of tasks those messages started. No model rewrites
+    anyone's words. What remains of the person in others' messages is kept
+    only on a ground the operator assesses and records for each request.
+  - **Chat channels.** A channel's stored conversation is deleted or masked
+    the same way, and deleted in full where the channel does not record who
+    wrote each message. Every daemon node checks a version on the stored row
+    before serving its cached copy, and saves only over the version it read,
+    so an erased conversation is neither served from memory nor written
+    back.
+  - **Deferred, not claimed.** A record a running task still uses, a
+    conversation that keeps changing during the erasure, and a session held
+    only in memory (single-process installs) are deferred. The request is
+    then reported as not fully actioned, not marked done.
 - **AI Act Art 5**: the vision agent refuses identification, emotion
   inference and inference of sensitive characteristics.
 
@@ -684,4 +773,4 @@ connected assistants, and upstream services.
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.5 -->
+<!-- summary-reviewed-through: 2026.11.6 -->

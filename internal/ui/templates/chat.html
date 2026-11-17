@@ -11,10 +11,10 @@
          without a page load and polls the turn (§2.2 to §2.4); without it
          the form posts and the page loads when the reply is ready. */}}
     <main id="main" tabindex="-1" class="flex-1 shell-offset">
-        <div class="chat-shell" data-chat data-chat-turns="/ui/projects/{{.ProjectID}}/chat/turns">
-            <header class="flex items-center justify-between gap-3 border-b border-surface-600/60 py-3">
+        <div class="chat-shell" data-chat data-chat-turns="/ui/projects/{{.ProjectID}}/chat/turns" data-chat-notices="/ui/projects/{{.ProjectID}}/chat/notices">
+            <header class="flex items-center justify-between gap-3 border-b border-surface-600/60">
                 <div class="min-w-0">
-                    <h1 class="truncate text-base font-semibold text-ink-100">{{if .ProjectName}}{{.ProjectName}}{{else}}{{.ProjectID}}{{end}}</h1>
+                    <h1 class="truncate font-semibold text-ink-100">{{if .ProjectName}}{{.ProjectName}}{{else}}{{.ProjectID}}{{end}}</h1>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
                     {{if .ContextTier}}
@@ -41,7 +41,7 @@
             <div class="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap" data-testid="chat-error">{{.Error}}</div>
             {{end}}
 
-            <section class="chat-thread" id="chat-thread" data-testid="chat-message-list" aria-live="polite">
+            <section class="chat-thread" id="chat-thread" data-testid="chat-message-list" aria-live="polite" data-notices="{{.NoticeCount}}">
                 {{template "chatExchanges" (dict "Exchanges" .Exchanges "ProjectID" .ProjectID)}}
                 {{with .Pending}}
                 <div class="chat-exchange space-y-3" data-chat-pending>
@@ -52,8 +52,8 @@
                 </div>
                 {{end}}
                 {{if not (or .Exchanges .Pending)}}
-                <div class="flex flex-col items-center gap-4 py-16 text-center" data-testid="chat-empty-state" data-chat-empty>
-                    <h2 class="text-2xl font-semibold text-ink-100">How can I help?</h2>
+                <div class="flex flex-col items-center gap-3 py-8 text-center sm:gap-4 sm:py-16" data-testid="chat-empty-state" data-chat-empty>
+                    <h2 class="text-xl font-semibold text-ink-100 sm:text-2xl">How can I help?</h2>
                     <div class="grid w-full max-w-xl gap-2 sm:grid-cols-3">
                         <button type="button" class="v-btn v-btn--secondary chat-suggest" data-chat-suggest>What needs my attention today?</button>
                         <button type="button" class="v-btn v-btn--secondary chat-suggest" data-chat-suggest>Summarise what got done this week.</button>
@@ -99,7 +99,13 @@
         {{range .Interim}}<p{{with .Mark}} data-ai-mark="{{.}}"{{end}}>{{.Text}}</p>{{end}}
     </details>
     {{else}}{{range .Interim}}<p class="chat-steps"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>{{.Text}}</p>{{end}}{{end}}
-    {{if .Reply}}
+    {{if .Notice}}
+    {{/* A task completion notice (web-chat-design.md §5 N5). */}}
+    <div class="chat-assistant chat-notice" data-role="notice"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>
+        <div class="text-xs font-semibold uppercase tracking-wide text-ink-500">Task update</div>
+        <div class="chat-md">{{renderChatMarkdown .Reply}}</div>
+    </div>
+    {{else if .Reply}}
     <div class="chat-assistant" data-role="assistant"{{with .Mark}} data-ai-mark="{{.}}"{{end}}>
         <div class="chat-md">{{renderChatMarkdown .Reply}}</div>
         <div class="chat-actions">

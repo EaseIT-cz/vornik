@@ -136,6 +136,12 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 	// instance always reaches the setup wizard, even in the edge case of
 	// a RoleUser session existing before setup completes.
 	if r.URL.Path == "/" && s.onboardingDetector.Config != nil && s.setupStatus(r).FreshInstall {
+		// GitHub #779: /ui/setup refuses a managed instance's owner, so the
+		// owner of a fresh managed instance connects a model provider instead.
+		if s.managedHosting && api.SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
+			http.Redirect(w, r, "/ui/model-provider", http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, "/ui/setup", http.StatusFound)
 		return
 	}
@@ -174,7 +180,9 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 	data.Doctor = s.overviewDoctor(time.Now())
 
 	// 2. Health: problems only.
-	data.SpendSpike, data.SpendSpikeRatio = s.overviewSpendSpike(ctx, r)
+	homeSpend := s.loadHomeSpend(ctx, r)
+	data.Spend = homeSpend.DashboardSpend
+	data.SpendSpike, data.SpendSpikeRatio = homeSpend.spike()
 	if s.adminReadiness != nil {
 		for _, c := range s.adminReadiness.ReadinessChecks(ctx) {
 			if !strings.EqualFold(c.Status, "ok") {
@@ -210,24 +218,40 @@ func (s *Server) overviewDoctor(now time.Time) DashboardDoctor {
 	return DashboardDoctor{Shown: true, Errors: names, Age: humanizeAgo(now.Sub(at))}
 }
 
-// overviewSpendSpike reports whether the last 24 h spend is at least twice the
-// 7-day daily average, the overview's one spend signal. The 7-day spend must
-// exceed $1, so a fresh install never reads as a spike. Instance-wide, so only
-// for all-access sessions.
-func (s *Server) overviewSpendSpike(ctx context.Context, r *http.Request) (bool, float64) {
+// homeSpend is Home's spend: the two figures it shows, read once (§20.2).
+type homeSpend struct {
+	DashboardSpend
+	ok bool // both sums were read
+}
+
+// loadHomeSpend reads the last 24 h and 7 d spend, instance-wide, so only for
+// all-access sessions: two SumCost calls, which the spend spike shares
+// (ui-design-refresh-design.md §20; before it, Home ran six through
+// overviewSpendSpike and loadSpendWindows, and listed up to 5,000 usage rows).
+func (s *Server) loadHomeSpend(ctx context.Context, r *http.Request) homeSpend {
 	if s.llmUsageRepo == nil || !requestHasAllProjectAccess(r) {
-		return false, 0
+		return homeSpend{}
 	}
 	now := time.Now().UTC()
 	day, err := s.llmUsageRepo.SumCost(ctx, now.Add(-24*time.Hour), time.Time{})
 	if err != nil {
-		return false, 0
+		return homeSpend{}
 	}
 	week, err := s.llmUsageRepo.SumCost(ctx, now.Add(-7*24*time.Hour), time.Time{})
-	if err != nil || week <= 1.0 {
+	if err != nil {
+		return homeSpend{DashboardSpend: DashboardSpend{Day24hUSD: day}}
+	}
+	return homeSpend{DashboardSpend: DashboardSpend{Day24hUSD: day, Day7USD: week}, ok: true}
+}
+
+// spike reports whether the last 24 h spend is at least twice the 7-day daily
+// average, the overview's one spend signal. The 7-day spend must exceed $1,
+// so a fresh install never reads as a spike.
+func (h homeSpend) spike() (bool, float64) {
+	if !h.ok || h.Day7USD <= 1.0 {
 		return false, 0
 	}
-	if ratio := day / (week / 7.0); ratio >= 2.0 {
+	if ratio := h.Day24hUSD / (h.Day7USD / 7.0); ratio >= 2.0 {
 		return true, ratio
 	}
 	return false, 0

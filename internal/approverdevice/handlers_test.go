@@ -829,7 +829,8 @@ func TestDevicesPage_ShowsShortIDAndLastUse(t *testing.T) {
 		t.Fatalf("ids = %v", ids)
 	}
 	f.advance(time.Minute) // a used device has LastUsedAt after PairedAt
-	res, body := last.do(http.MethodGet, "/ui/approve/devices", nil, nil)
+	// ?status=all: the first device is revoked, hidden by default (#489).
+	res, body := last.do(http.MethodGet, "/ui/approve/devices?status=all", nil, nil)
 	if res.StatusCode != 200 {
 		t.Fatalf("devices page: %d", res.StatusCode)
 	}

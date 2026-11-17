@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/repotest"
 	"vornik.io/vornik/internal/persistence/sqlite"
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
@@ -279,5 +280,38 @@ func TestAccountTransition571_SignInDeletedWithTheRemoval(t *testing.T) {
 	}
 	if a, err := grants.GetIntegration(ctx, "hermes--mail", "gmail"); err != nil || a.RemovedAt == nil {
 		t.Fatalf("the approval after the published removal: %+v %v", a, err)
+	}
+}
+
+// GitHub #669 item 3 (design 22 §22.2.16b): the recovery CAS on SQLite.
+func TestAccountTransition_RecoveryContract_669(t *testing.T) {
+	repotest.RunAccountTransitionRecoverySuite(t, func(t *testing.T) repotest.AccountTransitionRecoveryRepo {
+		return sqlite.NewAccountTransitionRepository(sqlitetest.Memory(t).DB)
+	})
+}
+
+// GitHub #669 item 3 (design 22 §22.2.16b): a recovery activates nothing. A
+// grant suspended on the scope stays suspended; the device confirms it.
+func TestAccountTransition_RecoveryLeavesGrantsSuspended_669(t *testing.T) {
+	db := sqlitetest.Memory(t)
+	ctx := context.Background()
+	_, err := db.Exec(`INSERT INTO broker_standing_grants(id,project_id,namespace,workflow_id,action,key_paths,key_values,key_hash,max_uses,uses_left,expires_at,created_at,created_by,seed_action_id,reach_hash_at_creation,digest_through,suspended_at) VALUES('paused','hermes--mail','hermes','reply','send','[]','sealed','hash',5,5,'2027-01-01T00:00:00Z','2026-01-01T00:00:00Z','device','seed','reach','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := sqlite.NewAccountTransitionRepository(db.DB)
+	tk, err := r.Begin(ctx, persistence.AccountNamespaceScope("hermes"), "dead", "rotation", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Recover(ctx, tk.Scope, tk.Epoch, "dead"); err != nil {
+		t.Fatal(err)
+	}
+	var suspended string
+	if err := db.QueryRow(`SELECT COALESCE(suspended_at,'') FROM broker_standing_grants WHERE id='paused'`).Scan(&suspended); err != nil {
+		t.Fatal(err)
+	}
+	if suspended == "" {
+		t.Fatal("a recovery lifted a grant's suspension")
 	}
 }

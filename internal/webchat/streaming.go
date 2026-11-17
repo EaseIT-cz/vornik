@@ -17,8 +17,8 @@ type StreamingChannel struct {
 }
 
 // NewStreaming returns a web chat channel that streams into sink.
-func NewStreaming(projectID string, speaker conversation.Speaker, sink func(delta string)) *StreamingChannel {
-	return &StreamingChannel{Channel: New(projectID, speaker), sink: sink}
+func NewStreaming(projectID string, speaker conversation.Speaker, sink func(delta string), opts ...Option) *StreamingChannel {
+	return &StreamingChannel{Channel: New(projectID, speaker, opts...), sink: sink}
 }
 
 // StreamingSend opens the stream for this turn.

@@ -26,6 +26,9 @@ type VerificationSeedChunk struct {
 	ProducerRole, ValidatorRole       string
 	Status, SourceName, RepoScope     string
 	Content                           string
+	// Confidence is the chunk's confidence; 0 seeds the column default
+	// (0.5), as an ingest that sets none does (GitHub #550).
+	Confidence float64
 }
 
 // MemoryVerificationHarness is what a driver supplies.
@@ -45,6 +48,10 @@ type MemoryVerificationHarness struct {
 	SetParent func(ctx context.Context, taskID, parentID string) error
 	// CountBackup counts an event's backup rows.
 	CountBackup func(ctx context.Context, eventID string) (int, error)
+	// ReadConfidence and SetConfidence read and overwrite a chunk's
+	// confidence (GitHub #550).
+	ReadConfidence func(ctx context.Context, id string) (float64, error)
+	SetConfidence  func(ctx context.Context, id string, v float64) error
 	// SeedKey plants an api_keys row: a companion key has a client kind,
 	// an agent-admin key agentAdmin or a namespace.
 	SeedKey func(ctx context.Context, id, project, clientKind string, agentAdmin bool, namespace string) error
@@ -231,6 +238,9 @@ func mvChunk(t *testing.T, h MemoryVerificationHarness, c VerificationSeedChunk)
 	if c.SourceName == "" {
 		c.SourceName = "seed.md" // NOT NULL on Postgres
 	}
+	if c.Confidence == 0 {
+		c.Confidence = 0.5 // the column default on both drivers
+	}
 	if err := h.SeedChunk(context.Background(), c); err != nil {
 		t.Fatalf("seed chunk %s: %v", c.ID, err)
 	}
@@ -260,6 +270,9 @@ func RunMemoryVerificationSuite(t *testing.T, repo persistence.MemoryVerificatio
 	t.Run("Unattributed_roots_are_delegated", func(t *testing.T) { mvCaseUnattributedRootsAreDelegated(t, h) })
 	t.Run("Operator_principals", func(t *testing.T) { mvCaseOperatorPrincipals(t, h) })
 	t.Run("Heal_stamps_only_never_stamped_chunks", func(t *testing.T) { mvCaseHealStampsOnlyNeverStampedChunks(t, h) })
+	t.Run("Survey_selects_each_class_and_nothing_else_550", func(t *testing.T) { mvCaseSurveySelectsEachClassAndNothingElse(t, h) })
+	t.Run("Demote_changes_the_classes_and_restores_exactly_550", func(t *testing.T) { mvCaseDemoteChangesTheClassesAndRestoresExactly(t, h) })
+	t.Run("Restore_of_an_older_event_leaves_confidence_550", func(t *testing.T) { mvCaseRestoreOfAnOlderEventLeavesConfidence(t, h) })
 }
 
 // GitHub #506 (security review 2026-10-23): the sweep's heal stamps

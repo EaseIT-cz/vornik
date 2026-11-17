@@ -991,3 +991,19 @@ func (*memAPIKeyRepo) UpdateCapabilities(context.Context, string, persistence.AP
 func (*memAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (m *memAPIKeyRepo) DeleteRetired(_ context.Context, projectID, keyID string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, r := range m.rows {
+		if r.ID != keyID || r.ProjectID != projectID {
+			continue
+		}
+		if r.RevokedAt == nil && (r.ExpiresAt == nil || r.ExpiresAt.After(now)) {
+			return persistence.ErrAPIKeyLive
+		}
+		m.rows = append(m.rows[:i], m.rows[i+1:]...)
+		return nil
+	}
+	return persistence.ErrAPIKeyNotFound
+}

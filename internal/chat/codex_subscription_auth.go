@@ -109,9 +109,7 @@ func (m *codexAuthManager) recordRefresh(outcome string) {
 // then fall back to $HOME/.codex/auth.json, the Codex CLI default.
 func newCodexAuthManager(path string) *codexAuthManager {
 	if path == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, ".codex", "auth.json")
-		}
+		path = defaultCodexAuthPath()
 	}
 	return &codexAuthManager{
 		path:       path,
@@ -146,7 +144,7 @@ func (m *codexAuthManager) Token(ctx context.Context) (accessToken, accountID st
 	// network call, so a terminated session doesn't flood retries.
 	if m.dead {
 		if !m.recoverFromNewLoginLocked() {
-			return "", "", fmt.Errorf("%w: %s", ErrCodexSessionEnded, m.deadReason)
+			return "", "", m.sessionEndedErr()
 		}
 	}
 
@@ -165,6 +163,30 @@ func (m *codexAuthManager) Token(ctx context.Context) (accessToken, accountID st
 	}
 
 	return m.cached.Tokens.AccessToken, m.accountID, nil
+}
+
+// sessionEndedErr is the quarantine error. It names the file this daemon
+// reads when that is not the Codex CLI's default: `codex login` writes
+// ~/.codex/auth.json, so with a separate codex_subscription.auth_path a
+// login reaches the daemon only when it is copied over (2026-11-14: two
+// logins never did; subscription-auth.md, amendment 2026-11-14). No
+// automatic copy: the separate file keeps the CLI and the daemon from
+// spending each other's single-use refresh tokens. Caller holds m.mu.
+func (m *codexAuthManager) sessionEndedErr() error {
+	if m.path != "" && m.path != defaultCodexAuthPath() {
+		return fmt.Errorf("%w. This daemon reads %s, not the CLI default: run `codex login`, then copy ~/.codex/auth.json to %s (mode 0600); it picks it up within a minute. Reason: %s",
+			ErrCodexSessionEnded, m.path, m.path, m.deadReason)
+	}
+	return fmt.Errorf("%w: %s", ErrCodexSessionEnded, m.deadReason)
+}
+
+// defaultCodexAuthPath is where the Codex CLI keeps its login.
+func defaultCodexAuthPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "auth.json")
 }
 
 // recoverFromNewLoginLocked re-reads auth.json; if its refresh_token
@@ -354,7 +376,7 @@ func (m *codexAuthManager) doRefreshPOSTInner(ctx context.Context) error {
 			m.dead = true
 			m.deadRefreshToken = m.cached.Tokens.RefreshToken
 			m.deadReason = fmt.Sprintf("oauth/token %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-			return fmt.Errorf("%w: %s", ErrCodexSessionEnded, m.deadReason)
+			return m.sessionEndedErr()
 		}
 		return fmt.Errorf("oauth/token returned %d: %s", resp.StatusCode, string(body))
 	}

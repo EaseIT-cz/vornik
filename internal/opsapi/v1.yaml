@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vornik operations API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     The operations a hosting control plane calls on a managed Vornik instance,
     over the instance's operations listener, authenticated with the
@@ -170,6 +170,21 @@ paths:
                 required: [fresh_install]
                 properties:
                   fresh_install: {type: boolean}
+                  restart_pending:
+                    type: boolean
+                    description: |
+                      A change waits for a daemon restart to take effect (1.4.0,
+                      GitHub #794). The control plane drains and restarts the
+                      daemon in an idle window. Absent (an older daemon) means false.
+                  restart_reasons:
+                    type: array
+                    items: {type: string}
+                    description: |
+                      Why, sorted and unique: `model_provider` (the owner saved a
+                      model provider), `reload` (a live reload after a config edit
+                      did not apply), and `config:<path>` for each restart-only
+                      setting whose value on disk differs from the running one.
+                      Names only, never a value (1.4.0).
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/setup/models:
@@ -303,6 +318,11 @@ paths:
               type: object
               properties:
                 enabled: {type: boolean}
+                embedding_endpoint: {type: string, description: "OpenAI-compatible embeddings base URL; with enabled true (1.4.0 documents it, GitHub #779)."}
+                embedding_api_key: {type: string, description: "The embedding endpoint's key; stored in the instance's secrets, never returned."}
+                embedding_model: {type: string}
+                embedding_dimension: {type: integer, description: "The embedding vectors' dimension."}
+                embedding_provider: {type: string}
       responses:
         '200':
           description: Committed.

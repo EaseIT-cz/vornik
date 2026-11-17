@@ -28,17 +28,19 @@ func TestMemoryVerification_PostgresContract(t *testing.T) {
 	repotest.RunMemoryVerificationSuite(t, NewMemoryVerificationRepository(raw), repotest.MemoryVerificationHarness{
 		Tasks: NewTaskRepository(raw),
 		SeedChunk: func(ctx context.Context, c repotest.VerificationSeedChunk) error {
-			if _, err := raw.ExecContext(ctx, `INSERT INTO artifacts (id, project_id, name, artifact_class, storage_path)
-				VALUES ($1, $2, $3, 'OUTPUT', $4) ON CONFLICT (id) DO NOTHING`,
-				c.ArtifactID, c.ProjectID, "seed", "/dev/null/"+c.ArtifactID); err != nil {
-				return err
+			if c.ArtifactID != "" {
+				if _, err := raw.ExecContext(ctx, `INSERT INTO artifacts (id, project_id, name, artifact_class, storage_path)
+					VALUES ($1, $2, $3, 'OUTPUT', $4) ON CONFLICT (id) DO NOTHING`,
+					c.ArtifactID, c.ProjectID, "seed", "/dev/null/"+c.ArtifactID); err != nil {
+					return err
+				}
 			}
 			_, err := raw.ExecContext(ctx, `INSERT INTO project_memory_chunks
 				(id, project_id, content, content_hash, artifact_id, task_id,
-				 producer_role, validator_role, validation_status, source_name, repo_scope)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-				c.ID, c.ProjectID, c.Content, "h-"+c.ID, c.ArtifactID, nullStr(c.TaskID),
-				nullStr(c.ProducerRole), nullStr(c.ValidatorRole), c.Status, nullStr(c.SourceName), nullStr(c.RepoScope))
+				 producer_role, validator_role, validation_status, source_name, repo_scope, confidence)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+				c.ID, c.ProjectID, c.Content, "h-"+c.ID, nullStr(c.ArtifactID), nullStr(c.TaskID),
+				nullStr(c.ProducerRole), nullStr(c.ValidatorRole), c.Status, nullStr(c.SourceName), nullStr(c.RepoScope), c.Confidence)
 			return err
 		},
 		ReadChunk: func(ctx context.Context, id string) (string, string, error) {
@@ -50,6 +52,15 @@ func TestMemoryVerification_PostgresContract(t *testing.T) {
 		SetChunk: func(ctx context.Context, id, status, validator string) error {
 			_, err := raw.ExecContext(ctx, `UPDATE project_memory_chunks SET validation_status = $1, validator_role = $2 WHERE id = $3`,
 				status, nullStr(validator), id)
+			return err
+		},
+		ReadConfidence: func(ctx context.Context, id string) (float64, error) {
+			var v float64
+			err := raw.QueryRowContext(ctx, `SELECT confidence FROM project_memory_chunks WHERE id = $1`, id).Scan(&v)
+			return v, err
+		},
+		SetConfidence: func(ctx context.Context, id string, v float64) error {
+			_, err := raw.ExecContext(ctx, `UPDATE project_memory_chunks SET confidence = $1 WHERE id = $2`, v, id)
 			return err
 		},
 		SetParent: func(ctx context.Context, taskID, parentID string) error {

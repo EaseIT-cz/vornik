@@ -150,7 +150,9 @@ flowchart LR
 
 Vornik ships its benchmark harness, `vornikctl bench memory` and `vornikctl bench
 agent`, and publishes every result with its **spread** and a comparability key: change
-the dataset, the models or the budget and two results refuse to be compared.
+the dataset, the models or the budget and two results refuse to be compared. The agent
+benchmark's task sets, answer keys, pre-registrations and reproduce script ship in this
+repository, so you can re-run a published result yourself.
 
 **Benchmark models on your own agent work.** The agent benchmark runs software tasks
 through a multi-agent swarm and scores what the agents did, not just whether they
@@ -238,4 +240,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.5 -->
+<!-- summary-reviewed-through: 2026.11.6 -->

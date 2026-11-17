@@ -881,13 +881,19 @@ func (s *Server) adminRouter(w http.ResponseWriter, r *http.Request) {
 	// IsAdmin=true for every caller when auth is disabled, and the
 	// explicit IsAuthEnabledFromContext guard means even a regression
 	// that drops that stamp still admits the single-tenant operator.
-	if !admin.IsAdminFromContext(r.Context()) && api.IsAuthEnabledFromContext(r.Context()) {
+	path := api.AdminRouterPath(r.URL.Path)
+	// GitHub #787: the instance owner's read, admitted by the gate as
+	// read-only, is re-checked here with the same function, role and
+	// surface included, so a gate that marked a non-owner still gets 403.
+	ownerRead := !admin.IsAdminFromContext(r.Context()) && admin.OwnerReadOnlyFromContext(r.Context()) && api.OwnerConsoleRead(r, path)
+	if !admin.IsAdminFromContext(r.Context()) && !ownerRead && api.IsAuthEnabledFromContext(r.Context()) {
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/admin")
-	if path == "" {
-		path = "/"
+	if ownerRead {
+		rw := &ownerReadOnlyWriter{ResponseWriter: w}
+		defer rw.flush()
+		w = rw
 	}
 	switch path {
 	case "/", "":
@@ -937,6 +943,9 @@ func (s *Server) adminRouter(w http.ResponseWriter, r *http.Request) {
 		s.AdminControlPlaneMCPWrite(w, r)
 	case "/control-plane/mcp/probe", "/control-plane/mcp/probe/":
 		s.AdminControlPlaneMCPProbe(w, r)
+	case "/control-plane/mcp/use", "/control-plane/mcp/use/":
+		// Use a server's tools in a project (#627).
+		s.AdminControlPlaneMCPUse(w, r)
 	case "/blackbox", "/blackbox/":
 		s.AdminBlackBox(w, r)
 	case "/blackbox/overrides", "/blackbox/overrides/":

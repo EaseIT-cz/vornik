@@ -37,9 +37,7 @@ func (s *Server) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	if detector.Config == nil {
 		detector.Config = s.config
 	}
-	status := detector.Detect(r.Context())
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(status)
+	writeSetupStatus(w, detector.Detect(r.Context()), s.restartReasons())
 }
 
 // setupModelLister is the optional capability the concrete chat validator

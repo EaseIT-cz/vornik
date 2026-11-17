@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/report"
+	"vornik.io/vornik/internal/webchat"
 )
 
 // CUSTOMER REPORT 2026-07-30, remote installation: "vornik said on Slack it would
@@ -66,6 +68,11 @@ type chatCompletionNotifier struct {
 	taskTextScrub report.LineScrubber
 
 	logger zerolog.Logger
+
+	// webChat returns the UI's web chat notice sink, nil until the UI server
+	// exists (web-chat-design.md §5, GitHub #771). Web chat registers no
+	// channel with the resolver, so its notices go here instead.
+	webChat func() webChatNoticeSink
 
 	// The executor calls NotifyTaskCompleted TWICE for a COMPLETED task (lead_handoff
 	// plus the terminal transition — see internal/telegram/forum.go's note on the same
@@ -119,6 +126,10 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 
 	// DB-backed resolution, which is what makes this survive a restart.
 	origin, ok := chatorigin.Resolve(ctx, task, n.tasks, n.audit, n.resolver)
+	if !ok && origin.Reason == chatorigin.ReasonChannelUnavailable && origin.ChannelName == webchat.ChannelName {
+		n.notifyWebChat(ctx, task, success, message, origin.SessionID)
+		return
+	}
 	if !ok {
 		// API / autonomy / A2A tasks have no chat origin. Not an error — there is
 		// simply nobody to tell.
@@ -159,6 +170,40 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 		Msg("chat completion notice delivered to the originating session")
 }
 
+// webChatNoticeSink is what *ui.Server implements for web chat notices: it
+// stores the notice in the chat history the key names (web-chat-design.md §5
+// N3, N4).
+type webChatNoticeSink interface {
+	DeliverWebChatNotice(ctx context.Context, historyKey, text string) error
+}
+
+// notifyWebChat hands a web chat task's notice to the UI (§5 N1). The session
+// is the history key; its view follows the key, as the page's does (#480
+// J4): raw for the operator view, scrubbed for a member's.
+func (n *chatCompletionNotifier) notifyWebChat(ctx context.Context, task *persistence.Task, success bool, message, historyKey string) {
+	if n.webChat == nil {
+		return
+	}
+	sink := n.webChat()
+	if sink == nil {
+		return
+	}
+	view := chatview.View(strings.HasPrefix(historyKey, "operator:"), n.taskTextScrub)
+	err := sink.DeliverWebChatNotice(ctx, historyKey, n.composeText(webchat.ChannelName, task, success, message, view))
+	// Marked sent after the write, so a transient store failure is retried
+	// by the executor's second call (code review 2756 F1); an unknown history
+	// never will be, so it is marked too.
+	if err == nil || errors.Is(err, webchat.ErrUnknownSession) {
+		n.markSent(task.ID)
+	}
+	if err != nil {
+		n.logger.Warn().Err(err).Str("task_id", task.ID).Msg("chat completion notice could not be stored in the web chat")
+		return
+	}
+	n.logger.Info().Str("task_id", task.ID).Str("channel", webchat.ChannelName).Bool("success", success).
+		Msg("chat completion notice delivered to the originating web chat")
+}
+
 // composeText renders the notice.
 //
 // Status comes from the `success` bool rather than task.Status: the executor's in-memory
@@ -166,6 +211,9 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 // 2026-05-21 incident recorded in telegram/bot.go's triggerFollowup.
 func (n *chatCompletionNotifier) composeText(channelName string, task *persistence.Task, success bool, message string, view func(string) string) string {
 	var sb strings.Builder
+	if channelName == webchat.ChannelName {
+		return composeWebChatText(task, success, message, view)
+	}
 	// Formatted for reading: an emoji carries the outcome at a glance in a busy
 	// channel, and the identifiers are code-spanned so they can be copied. The TTS
 	// path strips all of it — see internal/voice.ForSpeech.
@@ -195,6 +243,31 @@ func (n *chatCompletionNotifier) composeText(channelName string, task *persisten
 		fmt.Fprintf(&sb, "%s\n", conversation.Link(channelName, url, "open the task"))
 	}
 	sb.WriteString("\n_Ask me about it and I can summarise the result._")
+	return sb.String()
+}
+
+// composeWebChatText is the notice in the web chat's markdown (§5 N2): the
+// page renders it with goldmark, so Slack's emoji codes and single-asterisk
+// bold would show raw. The link is relative: the page is same-origin.
+func composeWebChatText(task *persistence.Task, success bool, message string, view func(string) string) string {
+	var sb strings.Builder
+	if success {
+		fmt.Fprintf(&sb, "✅ **Finished** the job you asked for: task `%s`", task.ID)
+	} else {
+		fmt.Fprintf(&sb, "❌ **That job did not finish**: task `%s` (status %s)", task.ID, task.Status)
+	}
+	if task.ProjectID != "" {
+		fmt.Fprintf(&sb, " in project `%s`", task.ProjectID)
+	}
+	sb.WriteString(".\n\n")
+	if !success && task.LastError != nil && strings.TrimSpace(*task.LastError) != "" {
+		fmt.Fprintf(&sb, "**Error:** %s\n\n", truncateForChat(view(*task.LastError), 800))
+	}
+	if strings.TrimSpace(message) != "" {
+		fmt.Fprintf(&sb, "**Last status:** %s\n\n", truncateForChat(view(message), 500))
+	}
+	fmt.Fprintf(&sb, "%s\n\n", conversation.Link(webchat.ChannelName, "/ui/tasks/"+task.ID, "Open the task"))
+	sb.WriteString("Ask me about it and I can summarise the result.")
 	return sb.String()
 }
 
@@ -235,8 +308,15 @@ var _ executor.CompletionNotifier = (*chatCompletionNotifier)(nil)
 // Gated by SteeringNotificationsEnabled: it is the same class of daemon-initiated
 // outbound to a person's chat session, and an operator who turned those off did not mean
 // "except for completions".
+// chatCompletionEnabled reports whether chatCompletionSink builds a notifier:
+// the chat audit is wired and steering notifications are on. The web chat
+// tells the dispatcher it can report back only then (web-chat-design.md §5 N8).
+func (c *Container) chatCompletionEnabled() bool {
+	return c != nil && c.repos != nil && c.repos.ChatAudit != nil && c.Config != nil && c.Config.SteeringNotificationsEnabled
+}
+
 func (c *Container) chatCompletionSink() executor.CompletionNotifier {
-	if c == nil || c.repos == nil || c.repos.ChatAudit == nil {
+	if !c.chatCompletionEnabled() {
 		return nil
 	}
 	baseURL := ""
@@ -275,6 +355,13 @@ func (c *Container) chatCompletionSink() executor.CompletionNotifier {
 	)
 	n.disclosure = c.AIDisclosure
 	n.taskTextScrub = c.taskTextScrubber()
+	// Web chat's notices go to the UI server once it exists (§5 N1).
+	n.webChat = func() webChatNoticeSink {
+		if s := c.uiServer.Load(); s != nil {
+			return s
+		}
+		return nil
+	}
 	return n
 }
 

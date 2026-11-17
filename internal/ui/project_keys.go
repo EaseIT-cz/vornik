@@ -68,7 +68,7 @@ type ProjectKeyRow struct {
 	Created   string
 	LastUsed  string
 	Expires   string
-	Status    string // "active" or "revoked"
+	Status    string // "active", "revoked" or "expired" (#489)
 	CreatedBy string
 
 	// AllowPush is true when this key may push to the git-over-HTTPS
@@ -345,6 +345,8 @@ func (s *Server) handleProjectKeysAction(r *http.Request, data *ProjectKeysData,
 		} else {
 			data.Success = "Disabled git push for key " + keyID + "."
 		}
+	case "remove":
+		s.removeRetiredKey(r, data, projectID)
 	default:
 		data.Error = "unknown action " + r.FormValue("action")
 	}
@@ -385,13 +387,15 @@ func sortKeysNewestFirst(in []*persistence.APIKey) {
 // Pure-function variant kept so unit tests can build rows without a
 // Server. Production callers go through renderKeyRowsWithLimiter
 // so the per-row rate-limit headroom columns are populated.
-func renderKeyRows(in []*persistence.APIKey) []ProjectKeyRow {
+func renderKeyRows(in []*persistence.APIKey, now time.Time) []ProjectKeyRow {
 	out := make([]ProjectKeyRow, 0, len(in))
 	const layout = "2006-01-02 15:04 MST"
 	for _, k := range in {
 		status := "active"
 		if k.RevokedAt != nil {
 			status = "revoked"
+		} else if k.ExpiresAt != nil && !k.ExpiresAt.After(now) {
+			status = "expired" // #489: it read "active" and offered Revoke
 		}
 		row := ProjectKeyRow{
 			ID:        k.ID,
@@ -435,7 +439,7 @@ func renderKeyRows(in []*persistence.APIKey) []ProjectKeyRow {
 // for each key's current bucket level. Renders "tokens" and "last
 // refill ago" as strings so the template stays declarative.
 func (s *Server) renderKeyRowsWithLimiter(in []*persistence.APIKey) []ProjectKeyRow {
-	rows := renderKeyRows(in)
+	rows := renderKeyRows(in, time.Now().UTC())
 	if s == nil || s.apiKeyLimiter == nil {
 		return rows
 	}
@@ -570,3 +574,43 @@ var errKeyAuditNotRecorded = errors.New("revoked, but the audit record could not
 // keysAuditNotRecorded is the page's sentence when a mutation succeeded but
 // its audit row could not be written.
 const keysAuditNotRecorded = "The change was made, but its audit record could not be written; tell your operator."
+
+// removeRetiredKey deletes a revoked or expired key of the page's project at
+// once and records who did (18-security-and-tenancy.md, amendment 2026-11-15,
+// #489 R2). The repository refuses a live key and another project's key in
+// the same statement, so this needs no IDOR read of its own; it reads the
+// row first only for the audit detail.
+func (s *Server) removeRetiredKey(r *http.Request, data *ProjectKeysData, projectID string) {
+	keyID := r.FormValue("key_id")
+	if keyID == "" {
+		data.Error = "key_id required"
+		return
+	}
+	if s.adminAuditRepo == nil {
+		// A removal is never unrecorded (code review 149d F1).
+		data.Error = "Removing a key needs the admin audit, which is not configured."
+		return
+	}
+	prior, err := s.apiKeyRepo.GetByID(r.Context(), keyID)
+	if err != nil || prior.ProjectID != projectID {
+		data.Error = "key not found in this project"
+		return
+	}
+	switch err := s.apiKeyRepo.DeleteRetired(r.Context(), projectID, keyID, time.Now().UTC()); {
+	case errors.Is(err, persistence.ErrAPIKeyLive):
+		data.Error = "This key is still live. Revoke it first."
+		return
+	case errors.Is(err, persistence.ErrAPIKeyNotFound):
+		data.Error = "key not found in this project"
+		return
+	case err != nil:
+		// A fixed sentence, as the REST route answers (code review b911 F3).
+		s.logger.Warn().Err(err).Str("key_id", keyID).Msg("keys page: remove failed")
+		data.Error = "The key could not be removed. Try again in a moment."
+		return
+	}
+	data.Success = "Removed key " + prior.Name + "."
+	if err := s.auditKeyAction(r, "key.remove", keyID, prior.RemovalAuditDetail()); err != nil {
+		data.Error = keysAuditNotRecorded
+	}
+}

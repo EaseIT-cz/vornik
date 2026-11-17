@@ -622,6 +622,7 @@ func TestIdentityRepository_PostgresContract(t *testing.T) {
 func TestAPIKeyAttributable_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunAPIKeyAttributableSuite(t, NewAPIKeyRepository(db.DB))
+	repotest.RunAPIKeyDeleteRetiredSuite(t, NewAPIKeyRepository(db.DB))
 }
 
 func TestOperatorIdentityLinkRepository_PostgresContract(t *testing.T) {

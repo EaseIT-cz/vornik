@@ -146,7 +146,7 @@ func TestAgentAdmin_UnreachableServerSentenceNamesTheClass(t *testing.T) {
 func showProbeOutcomes(t *testing.T) {
 	t.Helper()
 	prev := probeOutcomeVisible
-	probeOutcomeVisible = func(string) bool { return true }
+	probeOutcomeVisible = func(string, []string) bool { return true }
 	t.Cleanup(func() { probeOutcomeVisible = prev })
 }
 
@@ -194,7 +194,7 @@ func TestAgentDialGuard_CoversSSE(t *testing.T) {
 		t.Fatalf("an sse server at a private address was dialled: %v", err)
 	}
 	cfg := mcp.ServerConfig{Transport: "sse", URL: "https://bank.example/sse"}
-	guardAgentServer(&cfg, "hermes--fin")
+	c.guardAgentServer(&cfg, "hermes--fin")
 	if cfg.HTTPClient == nil {
 		t.Fatal("an agent sse server is dialled unguarded")
 	}

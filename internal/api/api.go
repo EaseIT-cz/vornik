@@ -758,6 +758,10 @@ type Server struct {
 	// install-scoped onboarding page. Zero value means the
 	// endpoint renders a conservative "fresh install" heuristic.
 	setupDetector onboarding.Detector
+	// restartPendingSource reads the one restart-pending registry for
+	// setup/status (GitHub #794, operations-API design §6.12). Nil reports
+	// nothing pending.
+	restartPendingSource func() []string
 	// setupSessions backs POST /api/v1/setup/session, /validate, /commit.
 	// nil → the endpoints return 503. Wired by the service container.
 	setupSessions persistence.InstallationOnboardingSessionRepository
@@ -1281,6 +1285,8 @@ type Server struct {
 	// proposalApplier is the control-plane apply/rollback engine (Phase 2).
 	// Nil-safe: apply/rollback endpoints return "not wired" when unset.
 	proposalApplier proposalApplier
+	// accountRecovery backs /api/v1/operator/account-transitions (#669).
+	accountRecovery AccountTransitionRecoverer
 	// diagnoser powers POST /api/v1/operator/diagnose (control-plane Phase
 	// 3a). Nil-safe: the endpoint returns "not wired" when unset.
 	diagnoser                proposalDiagnoser

@@ -341,14 +341,6 @@ tool_read_cache_after_call() {
     FILE_READ_MISSES=()
 }
 
-# ms_now returns milliseconds-since-epoch as a portable 13-digit value.
-# The agent image's `date` is from coreutils-rust, which silently
-# treats `%3N` as `%N` and emits the FULL nanosecond count (9 digits)
-# instead of the requested millisecond count (3 digits). The result is
-# a 19-digit nanosecond-since-epoch string. Tool-call duration deltas
-# computed against that value overflow the daemon's `duration_ms`
-# integer column (max ~2.1B); the daemon then fails the audit ingest
-# with `pq: value "..." is out of range for type integer` and the
 # tool_is_cacheable_read — true when (tool_name) is a read-only
 # read-idempotent tool whose response can be safely served from
 # the per-turn TOOL_READ_CACHE on a duplicate call. Excludes:
@@ -375,6 +367,14 @@ tool_is_cacheable_read() {
     return 1
 }
 
+# ms_now returns milliseconds-since-epoch as a portable 13-digit value.
+# The agent image's `date` is from coreutils-rust, which silently
+# treats `%3N` as `%N` and emits the FULL nanosecond count (9 digits)
+# instead of the requested millisecond count (3 digits). The result is
+# a 19-digit nanosecond-since-epoch string. Tool-call duration deltas
+# computed against that value overflow the daemon's `duration_ms`
+# integer column (max ~2.1B); the daemon then fails the audit ingest
+# with `pq: value "..." is out of range for type integer` and the
 # row only lands via the post-step batch (degraded audit fidelity).
 # Detect the over-precise output and divide back to ms.
 ms_now() {

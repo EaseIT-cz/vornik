@@ -21,6 +21,7 @@ import (
 var configWriterSites = map[string]string{
 	"internal/api/credentials_rotate_582.go":       "RotateOperationsCredential holds configlock",
 	"internal/api/setup_managed_582.go":            "SetupManaged holds configlock in both phases (the probe runs between them, unlocked)",
+	"internal/ui/model_provider_794.go":            "modelProviderPost probes unlocked, then holds configlock.LockAsWriter across the read, write, validate and reload (#794)",
 	"internal/api/setup_handlers.go":               "writeChatConfig and writeDispatcherProjectConfig hold configlock",
 	"internal/api/setup_memory_handlers.go":        "writeMemoryConfig holds configlock",
 	"internal/api/featuredoctor_enable_handler.go": "passes the writer to featuredoctor.ApplyEnable, which holds LockConfigFile (configlock)",

@@ -1,0 +1,16 @@
+{
+  "arms": [
+    "2026.9.4-rc",
+    "2026.9.5-d6"
+  ],
+  "metric": "pinned_case_validation_score",
+  "targetDelta": 0.05,
+  "sigmaD": 0.0604,
+  "sigmaN": 10,
+  "computedPairs": 12,
+  "independentAxes": [
+    "binary_sha256",
+    "agent_images"
+  ],
+  "rationale": "PURPOSE: the D6 receipt-side enum backstop (fe75a61c6, b55444acf) shipped on 2026-09-18 with a demonstrated MECHANISM and an undemonstrated REMEDY — the 2026.9.4 losses were verifier id deviation, and forcing the id space closed at receipt is not the same as having shown the score now measures quality. This arm is the measurement that was named as the only remaining step. TWO NUMBERS ARE THE POINT, read beside each other on the bench daemon: vornik_executor_output_enum_violation_total and vornik_executor_pinned_case_enum_installed_total. Violations WITH installs mean something on the provider side ignored or replaced the emitted schema; violations WITHOUT installs mean the daemon never pinned and the defect is ours. A NON-ZERO violation count with installs is the expected steady state and is the counter working, not a regression — provider enforcement was probed directly on 2026-09-18 and is not reliable (zai.glm-5, the tester's fallback, leaked a forbidden value 9 of 15 times). LIMITS, registered BEFORE the run. FIRST: sigmaD 0.0604 is INHERITED from the 2026-08-14 n=10 noise floor over a 3-task subset, exactly as v7 carried it, and is wrong in an unknown direction for this 30-task set. It is carried so computedPairs derives from a real measurement rather than a guess. Nothing here licenses a gate decision; the gate's own artifacts (calibration.json, noise-floor.json) still do not exist. SECOND: repeats=3 is the CALIBRATION minimum (MinimumCalibrationAttempts), not a noise floor. This arm is intended to double as the repeated journal `bench agent calibrate` consumes; the noise floor needs two same-config arms at ten repeats and is a multi-day commitment that has not been authorised. THIRD: the bench deployment's pricing.yaml was synced from the repo on 2026-09-19 (it was stale on the 2026-09-17 Ollama Cloud repricing) and the bench daemon restarted onto the corrected table. COST figures from this arm are therefore NOT comparable with the 2026.9.4-rc journals, whose recorded costs used a table that billed the observed model at the `default` rate and omitted its cache tier — a 7.3x overstatement. The QUALITY metric is unaffected by the pricing change. FOURTH: the agent image was rebuilt for this pass (2d0b2583fba2); the 2026.9.4-rc baseline ran 2e615f728fc5. Declared as an independent axis, as before. FIFTH: gold is REUSED from internal/agentbench/baselines/2026.9.4-rc/gold.json, recorded under the older image, rather than re-recorded. That keeps the answer key constant across the pair — the comparison is the point — but it means a tool-grant difference caused by the image rebuild would read as a behaviour change. SIXTH: extraCaseCount is zero by construction on any arm after D6 and carries no information here; read the enum counters instead. Context policy under test is identical to the 2026.9.4-rc baseline."
+}

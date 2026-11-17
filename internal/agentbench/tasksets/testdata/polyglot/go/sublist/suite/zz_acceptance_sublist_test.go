@@ -1,0 +1,23 @@
+package sublist
+
+import (
+	"testing"
+)
+
+func TestAcceptance_Sublist(t *testing.T) {
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			if actual := Sublist(tc.listOne, tc.listTwo); actual != tc.expected {
+				t.Fatalf("Sublist(%#v,%#v) = %v, want: %v", tc.listOne, tc.listTwo, actual, tc.expected)
+			}
+		})
+	}
+}
+
+func BenchmarkSublist(b *testing.B) {
+	for b.Loop() {
+		for _, tc := range testCases {
+			Sublist(tc.listOne, tc.listTwo)
+		}
+	}
+}

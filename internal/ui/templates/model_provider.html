@@ -1,0 +1,55 @@
+{{define "model_provider.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5 max-w-3xl">
+            <h1 class="text-xl font-semibold text-gray-100">Model provider</h1>
+            <p class="text-sm text-gray-400">Connect the model provider your assistants use: an OpenAI-compatible base URL, an API key and a default model. Vornik checks the provider before saving. The key is stored encrypted and is never shown again.</p>
+
+            {{if .Saved}}
+            <div class="bg-emerald-900/30 border border-emerald-700/50 rounded-xl p-3 text-emerald-600 dark:text-emerald-200 text-sm" role="status">Saved. The new provider applies when the instance restarts; your hosting service restarts it shortly.</div>
+            {{else if .RestartPending}}
+            <div class="bg-amber-900/30 border border-amber-700/50 rounded-xl p-3 text-amber-700 dark:text-amber-200 text-sm" role="status">A new provider is saved and applies when the instance restarts.</div>
+            {{end}}
+            {{if .Notice}}
+            <div class="bg-amber-900/30 border border-amber-700/50 rounded-xl p-3 text-amber-700 dark:text-amber-200 text-sm" role="status">{{.Notice}}</div>
+            {{end}}
+            {{if .Error}}
+            <div class="bg-rose-900/30 border border-rose-700/50 rounded-xl p-3 text-rose-600 dark:text-rose-200 text-sm" role="alert">{{.Error}}</div>
+            {{end}}
+
+            <div class="glass rounded-xl border border-dark-700 p-5 text-sm space-y-1">
+                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Running now</h2>
+                {{if .Endpoint}}
+                <p class="text-gray-300">Provider: <span class="font-mono">{{.Endpoint}}</span></p>
+                <p class="text-gray-300">Model: <span class="font-mono">{{.Model}}</span></p>
+                {{else}}
+                <p class="text-gray-400">No model provider is connected yet.</p>
+                {{end}}
+            </div>
+
+            <form method="post" action="/ui/model-provider" class="glass rounded-xl border border-dark-700 p-5 space-y-3" autocomplete="off">
+                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Connect a provider</h2>
+                <div>
+                    <label for="mp-endpoint" class="block text-xs text-gray-400 mb-1">Base URL (https)</label>
+                    <input id="mp-endpoint" name="endpoint" type="url" required maxlength="2048" value="{{.FormEndpoint}}" placeholder="https://api.example.com/v1" class="w-full bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                </div>
+                <div>
+                    <label for="mp-model" class="block text-xs text-gray-400 mb-1">Default model</label>
+                    <input id="mp-model" name="model" required maxlength="200" value="{{.FormModel}}" placeholder="model-id" class="w-full max-w-md bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                </div>
+                <div>
+                    <label for="mp-key" class="block text-xs text-gray-400 mb-1">API key</label>
+                    <input id="mp-key" name="api_key" type="password" required autocomplete="off" maxlength="4096" class="w-full max-w-md bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                </div>
+                <button class="v-btn v-btn--primary">Check and save</button>
+            </form>
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

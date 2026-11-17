@@ -59,6 +59,12 @@ func (s *Server) manageCards(r *http.Request, tradingEnabled func() bool) []mana
 			cards = append(cards, manageCard{Key: d.Key, Label: d.Label, Purpose: managePurpose[d.Key], Href: href})
 		}
 	}
+	// GitHub #794: on a managed instance the owner (and an admin) changes the
+	// model provider here; the page is not in the nav (it would need its own
+	// icon and nav-design amendment), so the overview links it.
+	if s.managedHosting && (isAdmin || isOwner) {
+		cards = append(cards, manageCard{Key: "model-provider", Label: "Model provider", Purpose: "The model provider your assistants use, and its key.", Href: "/ui/model-provider"})
+	}
 	return cards
 }
 

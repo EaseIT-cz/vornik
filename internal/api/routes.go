@@ -409,6 +409,10 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// gated inside the handler; both editions.
 		mux.HandleFunc("/api/v1/operator/journal", server.OperatorJournal)
 		mux.HandleFunc("/api/v1/operator/journal/", server.OperatorJournal)
+		// Account-transition recovery (design 22 §22.2.16b, GitHub #669 item
+		// 3): list busy rows, recover one. Admin class only, gated inside.
+		mux.HandleFunc("/api/v1/operator/account-transitions", server.OperatorAccountTransitions)
+		mux.HandleFunc("/api/v1/operator/account-transitions/", server.OperatorAccountTransitions)
 
 		// CE operator shell — account management (2026-09-13 identity work,
 		// review R1/R2). Community: NOT under /api/v1/admin/. Gated on
@@ -1281,8 +1285,8 @@ func (s *Server) apiV1ProjectsHandler(w http.ResponseWriter, r *http.Request) {
 		s.ExtractArtifact(w, r)
 		return
 	} else if strings.HasPrefix(remaining, "/keys/") {
-		// /keys/{kid}/rotate (POST), /keys/{kid}/workflows (PUT), or
-		// /keys/{kid} (DELETE / PATCH).
+		// /keys/{kid}/rotate (POST), /keys/{kid}/workflows (PUT),
+		// /keys/{kid}/remove (POST), or /keys/{kid} (DELETE / PATCH).
 		keyID, action, ok := splitKeyActionPath(remaining)
 		if !ok {
 			respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid keys path")
@@ -1312,6 +1316,11 @@ func (s *Server) apiV1ProjectsHandler(w http.ResponseWriter, r *http.Request) {
 				s.UpdateAPIKeyAllowedWorkflows(w, r, keyID)
 				return
 			}
+		case "remove":
+			// POST /keys/{kid}/remove deletes a retired (revoked or
+			// expired) key at once, audited (#489).
+			s.RemoveRetiredAPIKey(w, r, keyID)
+			return
 		case "":
 			if r.Method == http.MethodDelete {
 				s.RevokeAPIKey(w, r, keyID)

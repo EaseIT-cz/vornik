@@ -68,13 +68,42 @@ caller.
 
 ## Roles, groups, and project scope
 
+```mermaid
+flowchart LR
+    subgraph creds["A credential"]
+        sso["Browser sign-in (SSO)<br/>session cookie"]
+        key["API key<br/>static or per-project"]
+        glass["Break-glass admin key"]
+        companionKey["Companion key<br/>scoped to one project"]
+        device["Approver device<br/>device-bound session"]
+        chat["Chat identity<br/>linked to an account"]
+        hook["Webhook signature"]
+    end
+    creds --> chain["Identity resolver<br/>HTTP: ordered backend chain,<br/>first match wins, fails closed"]
+    chain --> principal["Principal<br/>a role and a set of projects"]
+    groups["Groups<br/>each a role and projects"] --> principal
+    owner["A key's owner<br/>narrows, never widens"] --> principal
+    principal --> guard{"Project scope guard"}
+    guard -->|"allowed project"| ok["Request served"]
+    guard -->|"anything else"| no["403, or 404 for a hidden admin surface"]
+```
+
+Every route is reached the same way: one credential, one resolver, one guard.
+A role is never inferred from a channel, and no request header can widen a
+key's project.
+
 Identities resolve to a **principal** with a role and a set of projects:
 
 - **Roles.** There are two — `admin` (instance-wide) and `user` (project-scoped).
-  A managed (hosted) instance adds a third for its owner: an administrator's
-  browser session on the public address is a `tenant_admin`, who may use the
-  project wizard and gallery, connect MCP servers through OAuth and read the
-  operator audit, and nothing else of the operator surface.
+  A managed (hosted) instance adds a third for its owner. On the public
+  address, an administrator's browser session is a `tenant_admin`. A
+  `tenant_admin` may use a closed list of operator surfaces: the project
+  wizard and gallery, MCP OAuth connections, the operator audit, the
+  Credentials page, a project's Keys and MCP tools pages, and reading (never
+  changing) the operator console's observation pages. The pages that show the
+  daemon's configuration, its MCP server catalog, admin keys or accounts stay
+  closed to it, even for reading. The full list:
+  [Security model](../security-model.md#http-api-and-console).
 - **Groups.** Users belong to groups; a group carries a role and a set of
   projects. Membership in any admin-role group makes a user an admin with access
   to everything. Otherwise a user's accessible projects are the union of their

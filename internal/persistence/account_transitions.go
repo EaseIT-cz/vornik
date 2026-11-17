@@ -75,3 +75,27 @@ type AccountGuardedGrants interface {
 	ConfirmGuarded(context.Context, string, string, AccountDecisionGuard) error
 	ConfirmAccountGuarded(context.Context, string, string, string, string, string, string, AccountDecisionGuard) error
 }
+
+// AccountTransitionRow is one account-transition row as stored (design 22
+// §22.2.16b, GitHub #669 item 3).
+type AccountTransitionRow struct {
+	Scope     string
+	Epoch     int64
+	Busy      bool
+	Owner     string
+	Operation string
+	StartedAt string
+}
+
+// AccountTransitionRecovery lists busy rows and runs the controlled-recovery
+// CAS (design 22, "Crash, error, abort and controlled recovery", automated by
+// §22.2.16b). Both drivers implement it.
+type AccountTransitionRecovery interface {
+	// ListBusy returns the busy rows, by scope, and how many rows it examined.
+	ListBusy(ctx context.Context) (busy []AccountTransitionRow, examined int, err error)
+	// Recover clears one busy row in one transaction: epoch+1, busy false,
+	// owner and operation empty, WHERE scope, epoch, owner and busy match.
+	// It returns the row's before-values; when the CAS matches no row it
+	// changes nothing and returns ErrAccountTransition.
+	Recover(ctx context.Context, scope string, epoch int64, owner string) (AccountTransitionRow, error)
+}

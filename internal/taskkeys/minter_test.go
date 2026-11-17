@@ -263,3 +263,5 @@ func TestInMemAPIKeyRepo_MissContract(t *testing.T) {
 func (*inMemAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (r *inMemAPIKeyRepo) DeleteRetired(context.Context, string, string, time.Time) error { return nil }

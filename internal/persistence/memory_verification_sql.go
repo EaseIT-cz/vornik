@@ -602,13 +602,15 @@ func (r *SQLMemoryVerificationRepository) GetVerificationEvent(ctx context.Conte
 }
 
 // restorableSQL selects an event's backup rows whose chunk is still in the
-// state the event left it in.
+// state the event left it in: status, validator and, where the event
+// recorded one, confidence (GitHub #550, review-20261115-9143 F1).
 const restorableSQL = `
 	FROM memory_verification_backup b
 	JOIN project_memory_chunks c ON c.id = b.chunk_id AND c.project_id = b.project_id
 	WHERE b.event_id = $1
 	  AND c.validation_status = b.new_status
-	  AND COALESCE(c.validator_role, '') = COALESCE(b.new_validator_role, '')`
+	  AND COALESCE(c.validator_role, '') = COALESCE(b.new_validator_role, '')
+	  AND (b.new_confidence IS NULL OR c.confidence = b.new_confidence)`
 
 // CountRestorableSelfCertified implements MemoryVerificationRepository.
 func (r *SQLMemoryVerificationRepository) CountRestorableSelfCertified(ctx context.Context, eventID string) (int, error) {
@@ -665,11 +667,14 @@ func (r *SQLMemoryVerificationRepository) RestoreVerificationEvent(ctx context.C
 	if err := r.insertEvent(ctx, db, ev); err != nil {
 		return nil, fmt.Errorf("memory verification: record restore event: %w", err)
 	}
-	// Back up what the restore changes, so the restore is itself recoverable.
+	// Back up what the restore changes, so the restore is itself recoverable;
+	// the confidence pair only where the restored event recorded one.
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO memory_verification_backup
-			(event_id, chunk_id, project_id, prior_status, prior_validator_role, new_status, new_validator_role)
-		SELECT $2, c.id, c.project_id, c.validation_status, c.validator_role, b.prior_status, b.prior_validator_role
+			(event_id, chunk_id, project_id, prior_status, prior_validator_role, new_status, new_validator_role,
+			 prior_confidence, new_confidence)
+		SELECT $2, c.id, c.project_id, c.validation_status, c.validator_role, b.prior_status, b.prior_validator_role,
+		       CASE WHEN b.prior_confidence IS NULL THEN NULL ELSE c.confidence END, b.prior_confidence
 		`+restorableSQL, eventID, ev.ID); err != nil {
 		return nil, fmt.Errorf("memory verification: back up restore: %w", err)
 	}
@@ -678,7 +683,9 @@ func (r *SQLMemoryVerificationRepository) RestoreVerificationEvent(ctx context.C
 		   SET validation_status = (SELECT b.prior_status FROM memory_verification_backup b
 		                             WHERE b.event_id = $1 AND b.chunk_id = project_memory_chunks.id),
 		       validator_role    = (SELECT b.prior_validator_role FROM memory_verification_backup b
-		                             WHERE b.event_id = $1 AND b.chunk_id = project_memory_chunks.id)
+		                             WHERE b.event_id = $1 AND b.chunk_id = project_memory_chunks.id),
+		       confidence        = COALESCE((SELECT b.prior_confidence FROM memory_verification_backup b
+		                             WHERE b.event_id = $1 AND b.chunk_id = project_memory_chunks.id), confidence)
 		 WHERE id IN (SELECT chunk_id FROM memory_verification_backup WHERE event_id = $2)
 		   AND project_id = $3`, eventID, ev.ID, orig.ProjectID)
 	if err != nil {
@@ -702,6 +709,132 @@ func (r *SQLMemoryVerificationRepository) RestoreVerificationEvent(ctx context.C
 	if owned {
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("memory verification: commit restore: %w", err)
+		}
+	}
+	return ev, nil
+}
+
+// The two self-certified classes (GitHub #550), over alias c. They are
+// disjoint: roleOfRecordFilter, which class B shares with reverify-delegated
+// so the rule lives once, excludes a companion: producer.
+const (
+	selfCertifiedCompanionSQL = `c.validation_status = 'verified'
+   AND SUBSTR(c.producer_role, 1, 10) = 'companion:'
+   AND SUBSTR(c.validator_role, 1, 10) = 'companion:'`
+	selfCertifiedUnknownOriginSQL = `c.artifact_id IS NULL AND c.task_id IS NULL
+   AND ` + roleOfRecordFilter
+)
+
+// SurveySelfCertified implements MemoryVerificationRepository.
+func (r *SQLMemoryVerificationRepository) SurveySelfCertified(ctx context.Context, projectID string) (*SelfCertifiedSurvey, error) {
+	out := &SelfCertifiedSurvey{}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_memory_chunks
+		WHERE project_id = $1 AND validation_status = 'verified'`, projectID).Scan(&out.VerifiedChunks); err != nil {
+		return nil, fmt.Errorf("memory verification: survey denominator: %w", err)
+	}
+	for _, class := range []struct{ name, pred string }{
+		{SelfCertifiedCompanion, selfCertifiedCompanionSQL},
+		{SelfCertifiedUnknownOrigin, selfCertifiedUnknownOriginSQL},
+	} {
+		cnt := SelfCertifiedCount{Class: class.name}
+		if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_memory_chunks c
+			WHERE c.project_id = $1 AND `+class.pred, projectID).Scan(&cnt.Chunks); err != nil {
+			return nil, fmt.Errorf("memory verification: survey %s: %w", class.name, err)
+		}
+		rows, err := r.db.QueryContext(ctx, `SELECT c.id FROM project_memory_chunks c
+			WHERE c.project_id = $1 AND `+class.pred+` ORDER BY c.id LIMIT $2`, projectID, SelfCertifiedSampleSize)
+		if err != nil {
+			return nil, fmt.Errorf("memory verification: survey %s sample: %w", class.name, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			cnt.Sample = append(cnt.Sample, id)
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out.Classes = append(out.Classes, cnt)
+	}
+	return out, nil
+}
+
+// DemoteSelfCertified implements MemoryVerificationRepository.
+//
+// The backup is written first, set-based, with the new confidence computed
+// once there by a portable CASE (class A capped, class B kept), and the
+// chunk update then copies status, validator and confidence from exactly
+// the rows the backup holds for this event, as changeChunks does. The update
+// re-checks verified: on PostgreSQL READ COMMITTED a chunk superseded between
+// the two statements is left alone (review-20261115-8fb4 advisory 1).
+func (r *SQLMemoryVerificationRepository) DemoteSelfCertified(ctx context.Context, ev *MemoryVerificationEvent, expected int) (*MemoryVerificationEvent, error) {
+	if ev == nil || ev.ProjectID == "" || ev.Actor == "" || strings.TrimSpace(ev.Reason) == "" {
+		return nil, errors.New("memory verification: a demote needs a project, an actor and a reason")
+	}
+	ev.Kind = MemoryVerificationKindDemote
+	if ev.ID == "" {
+		ev.ID = GenerateID("mverify")
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = r.now()
+	}
+	ev.Verified, ev.Deverified, ev.Skipped = 0, 0, 0
+	tx, owned, err := BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return nil, fmt.Errorf("memory verification: begin: %w", err)
+	}
+	db := r.db
+	if owned {
+		db = tx
+		defer func() { _ = tx.Rollback() }()
+	}
+	if err := r.insertEvent(ctx, db, ev); err != nil {
+		return nil, fmt.Errorf("memory verification: record demote event: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO memory_verification_backup
+			(event_id, chunk_id, project_id, prior_status, prior_validator_role, new_status, new_validator_role,
+			 prior_confidence, new_confidence)
+		SELECT CAST($1 AS TEXT), c.id, c.project_id, c.validation_status, c.validator_role, 'unverified', NULL,
+		       c.confidence,
+		       CASE WHEN `+selfCertifiedCompanionSQL+` AND c.confidence > CAST($3 AS REAL)
+		            THEN CAST($3 AS REAL) ELSE c.confidence END
+		  FROM project_memory_chunks c
+		 WHERE c.project_id = $2
+		   AND (`+selfCertifiedCompanionSQL+` OR (`+selfCertifiedUnknownOriginSQL+`))`,
+		ev.ID, ev.ProjectID, SelfCertifiedConfidenceCap); err != nil {
+		return nil, fmt.Errorf("memory verification: back up demote: %w", err)
+	}
+	res, err := db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		   SET validation_status = 'unverified', validator_role = NULL,
+		       confidence = (SELECT b.new_confidence FROM memory_verification_backup b
+		                      WHERE b.event_id = $1 AND b.chunk_id = project_memory_chunks.id)
+		 WHERE project_id = $2 AND validation_status = 'verified'
+		   AND id IN (SELECT chunk_id FROM memory_verification_backup WHERE event_id = $1 AND project_id = $2)`,
+		ev.ID, ev.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("memory verification: demote chunks: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("memory verification: count demoted chunks: %w", err)
+	}
+	ev.Deverified = int(n)
+	if expected > ev.Deverified {
+		ev.Skipped = expected - ev.Deverified
+	}
+	if err := r.updateEventCounts(ctx, db, ev); err != nil {
+		return nil, fmt.Errorf("memory verification: record demote counts: %w", err)
+	}
+	if owned {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("memory verification: commit demote: %w", err)
 		}
 	}
 	return ev, nil

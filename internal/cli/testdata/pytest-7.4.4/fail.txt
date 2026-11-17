@@ -1,0 +1,14 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________________________ T.test_add __________________________________
+
+self = <zz_acceptance_m_test.T testMethod=test_add>
+
+    def test_add(self):
+>       self.assertEqual(add(2,3),5)
+E       AssertionError: -1 != 5
+
+zz_acceptance_m_test.py:5: AssertionError
+=========================== short test summary info ============================
+FAILED zz_acceptance_m_test.py::T::test_add - AssertionError: -1 != 5
+1 failed in 0.01s

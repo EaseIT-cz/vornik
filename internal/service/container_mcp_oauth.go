@@ -271,7 +271,7 @@ func (c *Container) mcpOAuthClients() (*http.Client, func(ref mcpconnect.ServerR
 		if managed && ref.FromDaemonConfig {
 			return dialguard.ImageServerClient(ref.URL, mcpOAuthHTTPTimeout)
 		}
-		if h := agentOAuthHTTP(ref.ProjectID, ref.URL); h != nil {
+		if h := c.agentOAuthHTTP(ref.ProjectID, ref.URL); h != nil {
 			return h
 		}
 		return dialguard.CustomerURLClient(ref.URL, allowed, mcpOAuthHTTPTimeout)

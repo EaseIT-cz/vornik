@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,6 +86,30 @@ func NewChatValidator() ChatValidator {
 		factory: func(endpoint, apiKey, model string) chatReachable {
 			return chat.NewClient(endpoint, apiKey, model,
 				chat.WithTimeout(setupProbeTimeout), chat.WithHTTPClient(setupProbeHTTPClient(setupProbeTimeout)))
+		},
+		timeout: 10 * time.Second,
+	}
+}
+
+// managedProbeGuard is the dial rule of the owner's model-provider probe on a
+// managed instance (GitHub #794; security design 18, amendment 2026-11-16,
+// P4/F1): managed mode's run-time rule for models. A public address passes, a
+// vouched model host may resolve to a private address, and loopback,
+// link-local and metadata addresses are refused. Unlike setupProbeHTTPClient
+// it never admits every private address.
+func managedProbeGuard(modelHosts []string) dialguard.DialGuard {
+	return dialguard.DialGuard{PrivateHosts: slices.Clone(modelHosts)}
+}
+
+// NewManagedChatValidator returns the validator the owner's model-provider
+// page uses: setup's checks, dialling through managedProbeGuard with no
+// redirect and no proxy. modelHosts is the running hosting.model_hosts.
+func NewManagedChatValidator(modelHosts []string) ChatValidator {
+	client := managedProbeGuard(modelHosts).NoRedirectHTTPClient(setupProbeTimeout)
+	return ChatValidator{
+		factory: func(endpoint, apiKey, model string) chatReachable {
+			return chat.NewClient(endpoint, apiKey, model,
+				chat.WithTimeout(setupProbeTimeout), chat.WithHTTPClient(client))
 		},
 		timeout: 10 * time.Second,
 	}

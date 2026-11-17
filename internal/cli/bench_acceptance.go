@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"vornik.io/vornik/internal/agentbench"
 	"vornik.io/vornik/internal/spawn"
@@ -35,6 +36,12 @@ const (
 	acceptanceTestTimeout  = "4m"            // go test's own bound: a hang is the code's
 	acceptanceOuterTimeout = 5 * time.Minute // podman's bound: past it, a harness fault
 	acceptanceOutputLimit  = 4096
+	// feedbackOutputLimit bounds what a bare baseline's second try is shown
+	// (GitHub #650); the journal keeps acceptanceOutputLimit.
+	feedbackOutputLimit = 64 << 10
+	// pytestTimeoutSeconds is the inner bound of a Python suite, enforced
+	// by coreutils timeout (exit 124): the image has no pytest-timeout.
+	pytestTimeoutSeconds = "240"
 )
 
 func execCombined(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -56,13 +63,28 @@ func (g podmanGrader) Grade(ctx context.Context, spec agentbench.TaskSpec) agent
 		return acceptanceHarnessError(err)
 	}
 	pkg := filepath.Join(tree, filepath.Clean(spec.Targets[0]))
+	suiteFiles, err := agentbench.SuiteFiles(suite)
+	if err != nil {
+		return acceptanceHarnessError(err)
+	}
+	lang, err := suiteLanguage(suiteFiles)
+	if err != nil {
+		return acceptanceHarnessError(fmt.Errorf("task %q: %w", spec.ID, err))
+	}
+	if lang == "python" {
+		return g.gradePython(ctx, spec, tree, pkg, suiteFiles)
+	}
 	if goFiles, _ := filepath.Glob(filepath.Join(pkg, "*.go")); len(goFiles) == 0 {
 		return agentbench.AcceptanceResult{Outcome: agentbench.AcceptanceDoesNotCompile,
 			Output: fmt.Sprintf("the package %s is missing at the workspace HEAD", spec.Targets[0])}
 	}
-	suiteFiles, _ := filepath.Glob(filepath.Join(suite, "*.go"))
 	if len(suiteFiles) == 0 {
 		return acceptanceHarnessError(fmt.Errorf("acceptance suite %s has no .go files", suite))
+	}
+	if spec.Seed != "" {
+		if err := removePipelineGoTests(pkg, suiteFiles); err != nil {
+			return acceptanceHarnessError(err)
+		}
 	}
 	for _, f := range suiteFiles {
 		data, err := os.ReadFile(f)
@@ -89,7 +111,27 @@ func (g podmanGrader) Grade(ctx context.Context, spec agentbench.TaskSpec) agent
 		// a failing one is not the independent grade.
 		"-run=^TestAcceptance_", "./...")
 	out, err := run(runCtx, "podman", argv...)
-	return classifyAcceptance(runCtx, string(out), err)
+	res := classifyAcceptance(runCtx, string(out), err)
+	res.FeedbackOutput = feedbackOutput(string(out), res.Outcome)
+	return res
+}
+
+// feedbackOutput is what a bare baseline's second try may be shown: the
+// untruncated output of a model failure, capped at feedbackOutputLimit.
+func feedbackOutput(out string, outcome agentbench.AcceptanceOutcome) string {
+	if outcome == agentbench.AcceptancePassed {
+		return ""
+	}
+	if len(out) <= feedbackOutputLimit {
+		return out
+	}
+	// Cut on a rune boundary, so the payload sent back stays valid UTF-8
+	// (review-20261116-8777 F7).
+	cut := feedbackOutputLimit
+	for cut > 0 && !utf8.RuneStart(out[cut]) {
+		cut--
+	}
+	return out[:cut] + "\n[truncated]"
 }
 
 // classifyAcceptance maps go test's result onto the §12.24 outcomes.

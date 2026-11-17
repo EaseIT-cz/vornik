@@ -43,6 +43,11 @@ type TaskRun struct {
 	// Terminal is the terminal the task's newest execution reached, read
 	// when the daemon reported the task COMPLETED (benchmark LLD §12.29).
 	Terminal string `json:"terminal,omitempty"`
+	// Calls and Tokens are what a bare-model baseline spent on the item
+	// (GitHub #650): model calls, and prompt plus completion tokens as the
+	// endpoint reported them. Zero for a swarm run, whose cost is in Records.
+	Calls  int `json:"calls,omitempty"`
+	Tokens int `json:"tokens,omitempty"`
 }
 
 // ValidateTaskTiers refuses a blended/implicit task set before it can be used

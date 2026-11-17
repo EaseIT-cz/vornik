@@ -17,7 +17,6 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/approverdevice"
-	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -242,11 +241,11 @@ func (s *agentAdminService) afterOAuthConnected(ctx context.Context, slot *agent
 // agentOAuthHTTP is the connector's client for an agent project's server:
 // discovery, registration, exchange and refresh go through the SSRF guard,
 // because the server's own metadata names the endpoints.
-func agentOAuthHTTP(projectID, serverURL string) *http.Client {
+func (c *Container) agentOAuthHTTP(projectID, serverURL string) *http.Client {
 	if _, agent := agentns.FromID(projectID); !agent {
 		return nil
 	}
-	return dialguard.CustomerURLClient(serverURL, nil, mcpOAuthHTTPTimeout) // live read (#560 M1c D0)
+	return c.agentServerClient(serverURL, mcpOAuthHTTPTimeout) // live read (#560 M1c D0); the server's own host only (#740)
 }
 
 // priorSignIn reports whether the server already holds a token row (so a

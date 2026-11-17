@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/repotest"
 )
 
 // #119 item 8: rotation between snapshot and terminal update must not
@@ -281,4 +282,11 @@ func TestAccountTransition_BeginConfigRejectsStaleSnapshot(t *testing.T) {
 			}
 		})
 	}
+}
+
+// GitHub #669 item 3 (design 22 §22.2.16b): the recovery CAS on Postgres.
+func TestAccountTransition_RecoveryContract_669(t *testing.T) {
+	repotest.RunAccountTransitionRecoverySuite(t, func(t *testing.T) repotest.AccountTransitionRecoveryRepo {
+		return NewAccountTransitionRepository(accountTransitionFixture(t).DB)
+	})
 }

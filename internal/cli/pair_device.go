@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os/user"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -34,6 +36,7 @@ import (
 var (
 	pairDeviceLabel string
 	devicesListJSON bool
+	devicesListAll  bool
 )
 
 var pairDeviceCmd = &cobra.Command{
@@ -62,12 +65,12 @@ device exists, a new one must also be approved on an existing device.`,
 
 var devicesCmd = &cobra.Command{
 	Use:   "devices",
-	Short: "List or revoke approver devices",
+	Short: "List, revoke or remove approver devices",
 }
 
 var devicesListCmd = &cobra.Command{
 	Use:          "list",
-	Short:        "List approver devices, revoked ones included",
+	Short:        "List approver devices (revoked ones with --all)",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -78,7 +81,25 @@ var devicesListCmd = &cobra.Command{
 			return err
 		}
 		defer closeFn()
-		return listDevices(ctx, svc, devicesListJSON, cmd.OutOrStdout())
+		return listDevices(ctx, svc, devicesListJSON, devicesListAll, cmd.OutOrStdout())
+	},
+}
+
+var devicesRemoveCmd = &cobra.Command{
+	Use:          "remove <device_id>",
+	Short:        "Delete a revoked approver device from the list; a live one is refused",
+	Long:         "Delete a revoked approver device. Its label stays in the admin audit (device.remove), because approval records name a device by id. A live device is refused: revoke it first.",
+	Args:         cobra.ExactArgs(1),
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		svc, _, closeFn, err := openApproverDevices(ctx)
+		if err != nil {
+			return err
+		}
+		defer closeFn()
+		return removeDevice(ctx, svc, args[0], cmd.OutOrStdout())
 	},
 }
 
@@ -101,8 +122,9 @@ var devicesRevokeCmd = &cobra.Command{
 
 func init() {
 	pairDeviceCmd.Flags().StringVar(&pairDeviceLabel, "label", "", "A name for the device (1 to 40 characters), shown in approvals and alerts (default: \"Phone paired <date time>\")")
-	devicesListCmd.Flags().BoolVar(&devicesListJSON, "json", false, "Print JSON")
-	devicesCmd.AddCommand(devicesListCmd, devicesRevokeCmd)
+	devicesListCmd.Flags().BoolVar(&devicesListJSON, "json", false, "Print JSON (every device, revoked ones included)")
+	devicesListCmd.Flags().BoolVar(&devicesListAll, "all", false, "Also list revoked devices")
+	devicesCmd.AddCommand(devicesListCmd, devicesRevokeCmd, devicesRemoveCmd)
 	rootCmd.AddCommand(pairDeviceCmd, devicesCmd)
 }
 
@@ -119,7 +141,11 @@ func openApproverDevices(ctx context.Context) (*approverdevice.Service, *config.
 		_ = backend.Close()
 		return nil, nil, nil, errors.New("this daemon's storage has no approver-device store")
 	}
-	return approverdevice.New(backend.Repos.ApproverDevices), cfg, func() { _ = backend.Close() }, nil
+	svc := approverdevice.New(backend.Repos.ApproverDevices)
+	if backend.Repos.AdminAudit != nil {
+		svc.SetAudit(backend.Repos.AdminAudit) // devices remove records itself (#489)
+	}
+	return svc, cfg, func() { _ = backend.Close() }, nil
 }
 
 // pushConfigured is the daemon's own predicate (§9.3), so the warning here
@@ -185,19 +211,39 @@ type deviceListRow struct {
 }
 
 // listDevices prints devices. It never prints a token or its hash.
-func listDevices(ctx context.Context, svc *approverdevice.Service, asJSON bool, out io.Writer) error {
+// listDevices prints the devices: live ones only unless all, with a count of
+// the revoked ones it left out (design part 09 §9.2e D1, #489). JSON is every
+// row, as the store holds them.
+func listDevices(ctx context.Context, svc *approverdevice.Service, asJSON, all bool, out io.Writer) error {
 	devs, err := svc.ListDevices(ctx)
 	if err != nil {
 		return err
 	}
 	rows := make([]deviceListRow, 0, len(devs))
+	hidden := 0
 	for _, d := range devs {
+		if d.RevokedAt != nil && !all && !asJSON {
+			hidden++
+			continue
+		}
 		rows = append(rows, deviceListRow{ID: d.ID, Label: d.Label, PairedAt: d.PairedAt, PairedBy: d.PairedBy, LastUsedAt: d.LastUsedAt, RevokedAt: d.RevokedAt})
 	}
+	defer func() {
+		switch {
+		case hidden == 1:
+			_, _ = fmt.Fprintln(out, "1 revoked device is hidden; --all shows it.")
+		case hidden > 1:
+			_, _ = fmt.Fprintf(out, "%d revoked devices are hidden; --all shows them.\n", hidden)
+		}
+	}()
 	if asJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
+	}
+	if len(rows) == 0 && hidden > 0 {
+		_, _ = fmt.Fprintln(out, "No live approver devices. Pair one with: vornikctl pair-device")
+		return nil
 	}
 	if len(rows) == 0 {
 		_, _ = fmt.Fprintln(out, "No approver devices. Pair one with: vornikctl pair-device")
@@ -231,6 +277,33 @@ func revokeDevice(ctx context.Context, svc *approverdevice.Service, id string, o
 		}
 	}
 	return fmt.Errorf("no approver device %q (see: vornikctl devices list)", id)
+}
+
+// removeDevice deletes a revoked device, recorded as the OS user running the
+// CLI (design part 09 §9.2e D2, #489).
+func removeDevice(ctx context.Context, svc *approverdevice.Service, id string, out io.Writer) error {
+	label := ""
+	if devs, err := svc.ListDevices(ctx); err == nil {
+		for _, d := range devs {
+			if d.ID == id {
+				label = d.Label
+			}
+		}
+	}
+	principal := "cli:unknown"
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		principal = "cli:" + u.Username
+	}
+	switch err := svc.Remove(ctx, id, principal, "vornikctl"); {
+	case errors.Is(err, persistence.ErrApproverDeviceLive):
+		return fmt.Errorf("%s is still an approver: revoke it first (vornikctl devices revoke %s)", id, id)
+	case errors.Is(err, persistence.ErrNotFound):
+		return fmt.Errorf("no approver device %q (see: vornikctl devices list --all)", id)
+	case err != nil:
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Removed %s (%s).\n", id, label)
+	return nil
 }
 
 // nowFunc is the clock for the default device label; tests replace it.

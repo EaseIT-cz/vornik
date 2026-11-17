@@ -23,6 +23,8 @@ You can read the whole system in one sentence:
 
 Everything below expands one word in that sentence.
 
+![Vornik at a glance. You reach Vornik through chat (Telegram, Slack, email, web chat), the console and approvals on a paired phone, AI assistants (Claude Code, Codex, Hermes), or automation (API, GitHub, webhooks, schedules). On your host, the daemon's dispatcher routes a chat ask to a project, which holds a swarm of roles, workflows, memory, and a budget and policies; guards check every step. Vornik runs agent containers, isolated with no network by default, and calls models and tools through the daemon, which holds the credentials.](../assets/vornik-at-a-glance.svg)
+
 ## Projects
 
 A **project** is the top-level unit and the boundary of isolation. Each
@@ -216,6 +218,8 @@ capabilities keep that observable without adding a separate control service:
   goes down or recovers.
 
 ## How it all runs together
+
+![The life of a task in six steps. Ask: from chat, the console, an assistant, a schedule, a webhook or a standing goal. Route: you or the chat dispatcher pick the project and workflow, and the task waits in a durable queue. Run: each step runs a role in its own container; models propose and the daemon checks. Approve, when needed: sensitive actions wait for you on your paired phone. Deliver: results are saved as artifacts and sent back where you asked. Remember: the audit trail, the cost and, if enabled, memory carry into the next task, which is yours or one a project starts itself. A restart loses no work: unfinished tasks are recovered.](../assets/vornik-task-cycle.svg)
 
 Putting the pieces in motion:
 

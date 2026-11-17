@@ -18,4 +18,5 @@
 {{with .Covered}}<details><summary class="mut">Writes it approved</summary><ul>{{range .}}<li>{{.ActionID}}: {{.Status}}, {{when .At}}</li>{{end}}</ul></details>{{end}}
 </div>
 {{else}}<div class="card"><p class="mut">No standing approvals.</p></div>{{end}}
+{{if .Hidden}}<p class="mut">{{.Hidden}} ended grants are hidden. <a class="act" href="/ui/approve/standing?status=all">Show them</a></p>{{end}}
 {{template "foot"}}{{end}}

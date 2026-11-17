@@ -6,7 +6,7 @@ where Vornik loses. Results: [Results by release](results.md).
 | Benchmark | Question it answers | Reproducible by you |
 |---|---|---|
 | **Memory retrieval** (LongMemEval) | Does memory find what matters? | Yes: public dataset, shipped harness |
-| **Agent quality** | Does the control logic carry tasks to a correct finish: what the lead granted, whether roles followed their schemas, whether agents called tools correctly? | No: the task set and answer key are not published |
+| **Agent quality** | Does the control logic carry tasks to a correct finish: what the lead granted, whether roles followed their schemas, whether agents called tools correctly? | Yes: task sets, answer keys and pre-registrations ship with the product; see [How the agent benchmark works](methodology.md) and [Run a model comparison](../guides/run-a-model-comparison.md) |
 
 Every number comes from `vornikctl bench memory` or `vornikctl bench agent`,
 which ship with the product; nothing is transcribed by hand. Every result

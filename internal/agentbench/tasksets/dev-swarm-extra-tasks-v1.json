@@ -1,0 +1,66 @@
+[
+  {
+    "id": "bl-01-bounded-queue",
+    "targets": ["scratch/queueutil"],
+    "name": "backlog-item: implement a bounded queue from a backlog line",
+    "tier": "exploratory",
+    "workflow": "backlog-item",
+    "prompt": "Backlog item: [ ] Add a bounded FIFO queue helper. In a NEW file scratch/queueutil/queueutil.go (package queueutil), write Queue with New(capacity int) (*Queue, error), Push(v int) error returning an error when full, Pop() (int, bool), and Len() int. New must reject a capacity below 1. Add scratch/queueutil/queueutil_test.go covering: push to capacity, push when full, pop order is FIFO, pop from empty, and the rejected capacity. Do not modify any existing file."
+  },
+  {
+    "id": "bl-02-refuse-underspecified",
+    "targets": ["scratch/notes/bl-02.md"],
+    "name": "backlog-item: refuse an item that cannot be implemented as written",
+    "tier": "exploratory",
+    "workflow": "backlog-item",
+    "prompt": "Backlog item: [ ] Make the exporter faster. There is no exporter in this workspace and no performance target is given. Do NOT invent one. Write scratch/notes/bl-02.md stating plainly that the item is not actionable as written, and list exactly what the item would need to specify before it could be implemented. Do not create an exporter."
+  },
+  {
+    "id": "if-01-offbyone-issue",
+    "targets": ["scratch/chunker"],
+    "name": "issue-fix: fix a described off-by-one",
+    "tier": "exploratory",
+    "workflow": "issue-fix",
+    "prompt": "Issue title: Chunker drops the final element. Issue body: A helper that splits a slice into fixed-size chunks loses the last partial chunk. In a NEW file scratch/chunker/chunker.go (package chunker), write Chunk(items []string, size int) ([][]string, error) that returns every element including a final partial chunk, and rejects size < 1. Add scratch/chunker/chunker_test.go covering: an exact multiple, a partial final chunk, an empty input, a size of one, and the rejected size. Do not modify any existing file."
+  },
+  {
+    "id": "if-02-issue-contradicts-itself",
+    "targets": ["scratch/notes/if-02.md"],
+    "name": "issue-fix: surface a contradictory spec instead of guessing",
+    "tier": "exploratory",
+    "workflow": "issue-fix",
+    "prompt": "Issue title: Normalise whitespace. Issue body: Trim() must remove ALL whitespace including inner spaces, and must also preserve inner spacing exactly. These two requirements contradict each other. Do NOT pick one silently. Write scratch/notes/if-02.md naming the contradiction in the issue and stating which single behaviour you would need confirmed before writing code. Do not create Trim()."
+  },
+  {
+    "id": "is-01-subtask-parser",
+    "targets": ["scratch/durparse"],
+    "name": "issue-subtask: implement one focused subtask",
+    "tier": "exploratory",
+    "workflow": "issue-subtask",
+    "prompt": "Subtask: implement duration parsing only. In a NEW file scratch/durparse/durparse.go (package durparse), write Parse(s string) (int, error) accepting forms like 30s, 5m, 2h and returning whole seconds, rejecting an empty string, a missing unit, a negative value and an unknown unit. Add scratch/durparse/durparse_test.go covering each accepted form and every rejection. Do not modify any existing file."
+  },
+  {
+    "id": "is-02-idempotent-setter",
+    "targets": ["scratch/labels"],
+    "name": "issue-subtask: idempotence under repeated application",
+    "tier": "exploratory",
+    "workflow": "issue-subtask",
+    "prompt": "Subtask: in a NEW file scratch/labels/labels.go (package labels), write Apply(existing map[string]string, add map[string]string) map[string]string that returns a NEW map and never mutates its inputs. Applying the same add twice must produce an identical result. Add scratch/labels/labels_test.go proving the inputs are unmutated, that the result is stable under a second application, and that a nil existing map is handled. Do not modify any existing file."
+  },
+  {
+    "id": "ad-01-adaptive-clamp",
+    "targets": ["scratch/clampu"],
+    "name": "adaptive: lead-only route on a small self-contained change",
+    "tier": "exploratory",
+    "workflow": "adaptive",
+    "prompt": "In a NEW file scratch/clampu/clampu.go (package clampu), write Clamp(v, lo, hi int) (int, error) returning an error when lo > hi, and ClampAll([]int, lo, hi) ([]int, error) applying it elementwise without mutating the input. Add scratch/clampu/clampu_test.go covering: below range, above range, inside range, lo equal to hi, the inverted-bounds error, and that ClampAll leaves its input untouched. Do not modify any existing file."
+  },
+  {
+    "id": "ad-02-adaptive-refusal",
+    "targets": ["scratch/notes/ad-02.md"],
+    "name": "adaptive: no clean answer exists",
+    "tier": "exploratory",
+    "workflow": "adaptive",
+    "prompt": "Determine the exact wall-clock time this workspace was first created, to the second, using only what is present in the workspace. If that cannot be established from the workspace alone, say so plainly in scratch/notes/ad-02.md and state what evidence would be required. Do not guess a timestamp and do not read anything outside the workspace."
+  }
+]

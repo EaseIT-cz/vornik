@@ -266,6 +266,8 @@ var cpFlashMessages = map[string]string{
 	// MCP-tab (hub §4) write outcomes.
 	"mcp-proposed":          "MCP change proposed — review the diff + apply on the Proposals tab.",
 	"mcp-bad-name":          "Invalid server name (use letters, digits, - or _).",
+	"mcp-use-proposed":      "Tool access proposed — review the diff of both files and apply on the Proposals tab.",
+	"mcp-use-refused":       "That change could not be proposed: a tool, role or project the page did not offer, or a file that would not load.",
 	"mcp-bad-transport":     "Transport must be sse or streamable-http. A stdio server is registered in the config files on the host.",
 	"mcp-bad-endpoint":      "sse/streamable-http need a valid http(s) URL.",
 	"mcp-stdio-refused":     "stdio MCP servers are registered by editing the config files on the host, not through the daemon: the daemon would run that program.",

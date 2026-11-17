@@ -500,6 +500,9 @@ CREATE TABLE IF NOT EXISTS task_llm_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_project_time ON task_llm_usage(project_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_task        ON task_llm_usage(task_id);
+-- Postgres migration 254: the instance-wide SumCost filters on recorded_at
+-- alone (ui-design-refresh-design.md §20).
+CREATE INDEX IF NOT EXISTS idx_task_llm_usage_recorded_at ON task_llm_usage(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_api_key     ON task_llm_usage(api_key_id) WHERE api_key_id IS NOT NULL;
 
 -- ============================================================
@@ -1225,6 +1228,10 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     producer_role                      TEXT,
     validator_role                     TEXT,
     task_id                            TEXT,
+    -- Postgres parity (migration 23; design 22, amendment 2026-11-15, GitHub
+    -- #550): the demote caps it and the restore puts it back. Same default
+    -- as Postgres. Also in sqliteAdditiveColumns.
+    confidence                         REAL NOT NULL DEFAULT 0.5,
     -- A recorded supersession epoch only makes sense on a superseded
     -- chunk (the restore pass keys on both). The reverse is NOT an
     -- invariant: a chunk superseded with no tracked epoch (empty epochID,
@@ -1254,20 +1261,7 @@ CREATE TABLE IF NOT EXISTS memory_chunk_provenance (
         reason = '' AND verified_at IS NOT NULL AND commit_sha <> ''
         AND content_blob_sha <> '' AND content_blob_sha = origin_blob_sha))
 );
-CREATE TABLE IF NOT EXISTS memory_verification_events (
-    id                TEXT PRIMARY KEY,
-    project_id        TEXT NOT NULL,
-    kind              TEXT NOT NULL CHECK (kind IN ('backfill','sweep','restore')),
-    actor             TEXT NOT NULL,
-    reason            TEXT NOT NULL DEFAULT '',
-    restores_event_id TEXT,
-    examined          INTEGER NOT NULL DEFAULT 0,
-    unchanged         INTEGER NOT NULL DEFAULT 0,
-    verified          INTEGER NOT NULL DEFAULT 0,
-    deverified        INTEGER NOT NULL DEFAULT 0,
-    skipped           INTEGER NOT NULL DEFAULT 0,
-    created_at        TEXT NOT NULL
-);
+` + memoryVerificationEventsTableSQL + `;
 CREATE INDEX IF NOT EXISTS idx_memory_verification_events_project
     ON memory_verification_events (project_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS memory_verification_backup (
@@ -1278,6 +1272,10 @@ CREATE TABLE IF NOT EXISTS memory_verification_backup (
     prior_validator_role TEXT,
     new_status           TEXT NOT NULL,
     new_validator_role   TEXT,
+    -- Migration 253 parity (GitHub #550): set by a demote; NULL means the
+    -- event recorded no confidence. Also in sqliteAdditiveColumns.
+    prior_confidence     REAL,
+    new_confidence       REAL,
     PRIMARY KEY (event_id, chunk_id)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_verification_backup_project
@@ -2690,4 +2688,22 @@ const agentIntegrationApprovalsTableSQL = `CREATE TABLE IF NOT EXISTS agent_inte
     -- migration 233 (design §6.5, amendment #481); also in sqliteAdditiveColumns.
     suspended_tools     TEXT NOT NULL DEFAULT '[]',
     suspended_at        TEXT
+)`
+
+// memoryVerificationEventsTableSQL is shared by schemaSQL and the
+// sqliteTableRebuilds entry for Postgres migration 253, which admits the
+// demote kind (GitHub #550).
+const memoryVerificationEventsTableSQL = `CREATE TABLE IF NOT EXISTS memory_verification_events (
+    id                TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL,
+    kind              TEXT NOT NULL CHECK (kind IN ('backfill','sweep','restore','demote')),
+    actor             TEXT NOT NULL,
+    reason            TEXT NOT NULL DEFAULT '',
+    restores_event_id TEXT,
+    examined          INTEGER NOT NULL DEFAULT 0,
+    unchanged         INTEGER NOT NULL DEFAULT 0,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    deverified        INTEGER NOT NULL DEFAULT 0,
+    skipped           INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL
 )`

@@ -10,6 +10,8 @@ workflows, tasks. This page steps back to the system shape: how those objects
 nest, where the **control plane** ends and the **data plane** begins, where the
 isolation boundary sits, and what "multiple swarms" actually means.
 
+![Vornik architecture. Who asks: chat (Telegram, Slack, email), the web console and CLI, a paired phone that approves sensitive actions, AI assistants (Claude Code, Codex, Hermes) and automation (API, webhooks, schedules). Your host holds the trusted, deterministic Vornik control plane: dispatch and queue, workflows, policy and budgets, approvals, memory, the secrets vault, the egress guard, and audit and cost. Below it, untrusted, non-deterministic agent containers, one per task step: no network unless the role opts in, a per-task key, capabilities dropped, and tools and models reached through the daemon over a unix socket. Beside them, the PostgreSQL database for state, memory and audit. Vornik calls models (local or cloud), tools and APIs, and GitHub; the daemon or the gateway adds the keys, and agents get only the secrets you grant. Runs on your hardware; models propose, code decides; secrets sealed and redacted; every step audited.](../assets/vornik-architecture.svg)
+
 ## The object model
 
 ```mermaid

@@ -1,0 +1,92 @@
+[
+  {
+    "id": "dh-01-lru-ttl",
+    "targets": ["scratch/lruttl"],
+    "name": "pipeline/harder: LRU eviction and per-entry TTL that interact",
+    "prompt": "In a NEW package scratch/lruttl (file scratch/lruttl/lruttl.go), write Cache with New(capacity int, now func() time.Time) *Cache, Put(key string, v any, ttl time.Duration), Get(key string) (any, bool) and Len() int. TWO behaviours must hold TOGETHER, and their interaction is the point: capacity eviction removes the LEAST RECENTLY USED live entry, and an entry past its TTL is never returned and never counts toward Len. An expired entry occupying the LRU head must not cause a fresh entry to be evicted when a Put overflows capacity — reclaim expired entries first. Get on a live entry refreshes recency; Get on an expired entry does not resurrect it. Add scratch/lruttl/lruttl_test.go driving the clock through the injected now func, with a case for each of: eviction order under pure capacity pressure, expiry without any Put, an overflowing Put that must reclaim an expired head instead of evicting a fresh entry, and Get refreshing recency. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-02-backoff-budget",
+    "targets": ["scratch/retry"],
+    "name": "pipeline/harder: retry backoff that must not overshoot its budget",
+    "prompt": "In a NEW package scratch/retry (file scratch/retry/retry.go), write Do(ctx context.Context, budget time.Duration, attempts int, jitter func(max time.Duration) time.Duration, op func(attempt int) error) error. It retries op with exponential backoff (base 50ms, doubling) plus the supplied jitter, and the TOTAL wall time it consumes must never exceed budget — including the final sleep. The common bug this exists to catch: computing the next sleep from the backoff schedule alone and overshooting the budget on the last wait. Clamp the final sleep to whatever budget remains, and if no time remains do not sleep at all. Return the last error when attempts are exhausted, ctx.Err() when the context is cancelled, and nil on first success. Add scratch/retry/retry_test.go with a deterministic jitter func and a fake clock or short real budgets, covering: success on the first attempt, success on a later attempt, exhaustion, a budget that expires mid-schedule so the final sleep is clamped, and context cancellation during a sleep. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-03-csv-quoted-newline",
+    "targets": ["scratch/csvlite"],
+    "name": "pipeline/harder: CSV fields containing newlines, quotes and a BOM",
+    "prompt": "In a NEW package scratch/csvlite (file scratch/csvlite/csvlite.go), write Parse(r io.Reader) ([][]string, error) for RFC-4180-style CSV. It must handle, and be tested on, all of: a quoted field containing a literal newline; a quoted field containing a doubled quote (\"\" meaning one quote); a UTF-8 BOM at the start of input, stripped from the first field rather than becoming part of it; CRLF and bare-LF line endings in the same file; and an empty final line, which is NOT a row. It must reject an unterminated quoted field with an error naming the line it started on. Add scratch/csvlite/csvlite_test.go with a case for each. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-04-topo-cycle-path",
+    "targets": ["scratch/topo"],
+    "name": "pipeline/harder: topological sort that reports the cycle it found",
+    "prompt": "In a NEW package scratch/topo (file scratch/topo/topo.go), write Sort(edges map[string][]string) ([]string, error). On success return a valid topological order. On a cycle return an error whose message lists the ACTUAL CYCLE as a path, e.g. \"cycle: a -> b -> c -> a\" — not merely that a cycle exists. Recovering the path is the difficulty: a visited set alone cannot produce it, so track the recursion stack. Ties must break deterministically by lexical order so the output is stable across runs. Add scratch/topo/topo_test.go covering: a linear chain, a diamond, a deterministic tie, a self-loop, a two-node cycle, and a cycle reachable only from one of several roots — asserting the reported path names exactly the nodes on the cycle. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-05-bucket-refund",
+    "targets": ["scratch/bucket"],
+    "name": "pipeline/harder: token bucket where a cancelled take is refunded",
+    "prompt": "In a NEW package scratch/bucket (file scratch/bucket/bucket.go), write Bucket with New(capacity int, refill time.Duration, now func() time.Time) *Bucket, Take() bool, Refund() and Available() int. Take removes one token if available. Refund returns one — but the bucket must NEVER exceed capacity, including when a refund lands after the timed refill has already topped it up. That over-capacity case is the specific bug this task exists to catch. Refill adds one token per refill interval of elapsed time, computed from the injected clock rather than a goroutine. A Refund with no preceding Take must not create a token from nothing. Add scratch/bucket/bucket_test.go driving the clock, covering: draining to empty, refill over time, refund below capacity, a refund that would exceed capacity after a refill, and an unmatched refund. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-06-config-unset",
+    "targets": ["scratch/layercfg"],
+    "name": "pipeline/harder: layered config where a later layer can UNSET a key",
+    "prompt": "In a NEW package scratch/layercfg (file scratch/layercfg/layercfg.go), write Merge(layers ...[]byte) (map[string]any, error) over JSON object layers. A later layer overrides an earlier one, EXCEPT that an explicit JSON null removes the key entirely rather than setting it to nil — and a key simply ABSENT from a later layer leaves the earlier value untouched. Distinguishing absent from explicit-null is the difficulty, and json.Unmarshal into map[string]any does not do it for you. Nested objects merge recursively with the same rule; arrays replace wholesale rather than merging. Return an error naming the layer index for malformed JSON or a non-object top level. Add scratch/layercfg/layercfg_test.go covering: plain override, absent key preserved, explicit null removing a key, null inside a nested object, an array replaced not merged, and a malformed layer. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-07-sandbox-symlink",
+    "targets": ["scratch/sandbox"],
+    "name": "pipeline/harder: resolve a path inside a sandbox, including symlinks",
+    "prompt": "In a NEW package scratch/sandbox (file scratch/sandbox/sandbox.go), write Resolve(root, rel string) (string, error) returning the absolute path rel names inside root, or an error if it escapes. Lexical cleaning is NOT sufficient and that is the point: filepath.Join cleans AFTER joining, so a rel of \"../../etc/passwd\" can resolve outside root, and a SYMLINK inside root pointing outside it must also be refused. Resolve symlinks before deciding. An absolute rel is refused. A rel naming a path that does not exist yet is allowed provided its parent chain stays inside root, because callers create files. Add scratch/sandbox/sandbox_test.go using t.TempDir and real symlinks, covering: an ordinary nested path, a traversing rel, an absolute rel, a symlink inside root pointing outside, a symlink inside root pointing inside, and a not-yet-existing leaf. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-08-tokenizer-then-parser",
+    "targets": ["scratch/expr"],
+    "name": "pipeline/harder: two subtasks — a tokenizer, then a parser over it",
+    "prompt": "This task has TWO SEPARABLE SUBTASKS and they must be delivered in order. SUBTASK ONE: in a NEW file scratch/expr/lex.go (package expr), write Lex(src string) ([]Token, error) for integer arithmetic with + - * / and parentheses. Each Token carries its Kind, its text, and its BYTE OFFSET in src. An unexpected character is an error naming that offset. SUBTASK TWO: in a NEW file scratch/expr/parse.go (same package), write Parse(tokens []Token) (int, error) evaluating the expression with correct precedence and left associativity, reporting a syntax error that names the OFFSET of the offending token — which is why subtask one must carry offsets correctly. Division by zero is an error, not a panic. Add scratch/expr/expr_test.go covering, for the lexer: every operator, a multi-digit number, whitespace, and a bad character at a known offset; and for the parser: precedence, associativity, nesting, a missing closing paren reported at the right offset, and division by zero. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-09-dedupe-clock-regress",
+    "targets": ["scratch/dedupe"],
+    "name": "pipeline/harder: sliding-window dedupe when the clock goes backwards",
+    "prompt": "In a NEW package scratch/dedupe (file scratch/dedupe/dedupe.go), write Window with New(size time.Duration, now func() time.Time) *Window and Seen(key string) bool, reporting whether key was already seen inside the trailing window and recording it either way. Entries older than the window are forgotten. The difficulty is that the injected clock CAN GO BACKWARDS — an NTP step or a test driving it so — and a naive implementation then either forgets everything or forgets nothing. A backwards step must not evict entries that are still inside the window measured from the latest observed time, and must not cause Seen to report a never-seen key as seen. Add scratch/dedupe/dedupe_test.go driving the clock, covering: a repeat inside the window, a repeat after the window, two distinct keys, a backwards clock step smaller than the window, and a backwards step larger than the window. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  },
+  {
+    "id": "dh-10-merge-stream-ordered",
+    "targets": ["scratch/intervals"],
+    "name": "pipeline/harder: merge intervals arriving out of order, bounded memory",
+    "prompt": "In a NEW package scratch/intervals (file scratch/intervals/intervals.go), write Merger with New() *Merger, Add(start, end int) error and Result() [][2]int. Intervals arrive in ANY order and must be kept merged as they arrive — you may not buffer everything and sort at the end, and Result must be O(number of merged intervals) to produce. Adding an interval that bridges two existing ones must merge all three into one. Touching intervals merge ([1,2] and [2,3] become [1,3]); an interval with end < start is an error. Add scratch/intervals/intervals_test.go covering: disjoint adds, an add that extends one side, an add fully contained in an existing interval, an add that bridges two existing intervals, touching boundaries, out-of-order arrival producing the same result as in-order, and the invalid interval. Do not modify any existing file.",
+    "scoring": {"kind": "pinned_case_validation", "producerStep": "analyze", "verifierStep": "test"},
+    "tier": "exploratory",
+    "workflow": "dev-pipeline"
+  }
+]

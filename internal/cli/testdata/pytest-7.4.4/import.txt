@@ -1,0 +1,15 @@
+
+==================================== ERRORS ====================================
+___________________ ERROR collecting zz_acceptance_m_test.py ___________________
+ImportError while importing test module '/work/zz_acceptance_m_test.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+zz_acceptance_m_test.py:2: in <module>
+    from m import add
+E   ModuleNotFoundError: No module named 'm'
+=========================== short test summary info ============================
+ERROR zz_acceptance_m_test.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.03s

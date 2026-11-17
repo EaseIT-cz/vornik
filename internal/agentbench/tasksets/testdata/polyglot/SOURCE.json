@@ -1,0 +1,22 @@
+{
+ "selection": {
+  "repository": "github.com/Aider-AI/polyglot-benchmark",
+  "commit": "7e0611e77b54e2dea774cdc0aa00cf9f7ed6144f"
+ },
+ "go": {
+  "repository": "github.com/exercism/go",
+  "commit": "d11f38cadd7c6a6eb74774901b4a93d626bc6e08"
+ },
+ "python": {
+  "repository": "github.com/exercism/python",
+  "commit": "479f11b44b02337b0413e805b948491c2179615a"
+ },
+ "go_directive": "1.26",
+ "excluded": {
+  "go/markdown": "a refactoring exercise: the stub already passes its suite, so the suite cannot tell a solution from the start",
+  "go/ledger": "a refactoring exercise: the stub already passes its suite, so the suite cannot tell a solution from the start",
+  "go/counter": "the solution is a test suite that must catch buggy implementations; the hidden-suite grader cannot judge it",
+  "go/robot-simulator": "its later steps are behind step2/step3 build tags the grader does not set, so most of the suite would never run"
+ },
+ "tasks": 69
+}

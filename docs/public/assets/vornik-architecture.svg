@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 610" width="1140" height="610" role="img"
+     aria-label="Vornik architecture at a glance. Who asks: chat (Telegram, Slack, email), the web console and CLI, a paired phone that approves sensitive actions, AI assistants (Claude Code, Codex, Hermes) and automation (API, webhooks, schedules); every caller authenticates. Your host holds the trusted, deterministic Vornik control plane: dispatch and queue, workflows, policy and budgets, approvals, memory, the secrets vault, the egress guard, and audit and cost. Below it, untrusted, non-deterministic agent containers: one per task step, each running a role. They have no network unless the role opts in, a per-task key and all capabilities dropped, and reach tools and models through the daemon over a unix socket. Beside them, the PostgreSQL database holds state, memory and audit. On the right, what Vornik calls: models (local or cloud), tools and APIs, and GitHub and other forges. The daemon or the gateway adds the keys; agents get only the secrets you grant. Along the bottom: runs on your hardware; models propose, code decides; secrets sealed and redacted; every step audited.">
+  <title>Vornik architecture at a glance</title>
+  <desc>Who asks, what runs on your host, and what Vornik calls. The control plane and database are trusted; agent containers are not.</desc>
+
+  <rect width="1140" height="610" rx="12" fill="#F6F4EF"/>
+
+  <g font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <text x="24" y="44" font-size="22" font-weight="700" fill="#101826">Vornik — a deterministic control plane for teams of AI agents, on your own host</text>
+
+    <!-- Column headers -->
+    <g font-size="12" font-weight="700" fill="#5E6672" letter-spacing="1">
+      <text x="24" y="90">WHO ASKS</text>
+      <text x="900" y="90">WHAT IT CALLS</text>
+    </g>
+
+    <!-- ===== Left: who asks ===== -->
+    <g font-size="13.5" fill="#101826">
+      <!-- Chat -->
+      <rect x="24" y="104" width="200" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="52" cy="136" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <path d="M42 128 h20 a3 3 0 0 1 3 3 v9 a3 3 0 0 1 -3 3 h-12 l-6 5 v-5 h-2 a3 3 0 0 1 -3 -3 v-9 a3 3 0 0 1 3 -3 z" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="80" y="132" font-weight="600">Chat</text>
+      <text x="80" y="151" font-size="11" fill="#5E6672">Telegram · Slack · email</text>
+
+      <!-- Console -->
+      <rect x="24" y="178" width="200" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="52" cy="210" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <rect x="40" y="200" width="24" height="16" rx="2" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <path d="M46 222 h12 M52 216 v6" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="80" y="206" font-weight="600">Console</text>
+      <text x="80" y="225" font-size="11" fill="#5E6672">web UI · CLI</text>
+
+      <!-- Phone -->
+      <rect x="24" y="252" width="200" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="52" cy="284" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <rect x="45" y="272" width="14" height="24" rx="3" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <path d="M48 285 l3 3 l5 -6" fill="none" stroke="#6EA83B" stroke-width="2"/>
+      <text x="80" y="280" font-weight="600">Paired phone</text>
+      <text x="80" y="299" font-size="11" fill="#5E6672">approves sensitive actions</text>
+
+      <!-- AI assistants -->
+      <rect x="24" y="326" width="200" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="52" cy="358" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <path d="M52 345 l3 10 l10 3 l-10 3 l-3 10 l-3 -10 l-10 -3 l10 -3 z" fill="#1C7ED6"/>
+      <text x="80" y="354" font-weight="600">AI assistants</text>
+      <text x="80" y="373" font-size="10.5" fill="#5E6672">Claude Code · Codex · Hermes</text>
+
+      <!-- Automation -->
+      <rect x="24" y="400" width="200" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="52" cy="432" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <circle cx="52" cy="432" r="10" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <path d="M52 426 v6 l4 3" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="80" y="428" font-weight="600">Automation</text>
+      <text x="80" y="447" font-size="11" fill="#5E6672">API · webhooks · schedules</text>
+    </g>
+
+    <!-- ===== Middle: your host (trust boundary) ===== -->
+    <rect x="248" y="74" width="624" height="420" rx="16" fill="none" stroke="#101826" stroke-width="2" stroke-dasharray="8 6"/>
+    <rect x="262" y="64" width="124" height="22" rx="4" fill="#F6F4EF"/>
+    <rect x="268" y="69" width="10" height="9" rx="1.5" fill="#101826"/>
+    <path d="M270 69 v-3 a3 3 0 0 1 6 0 v3" fill="none" stroke="#101826" stroke-width="1.6"/>
+    <text x="284" y="80" font-size="12" font-weight="700" fill="#101826" letter-spacing="1">YOUR HOST</text>
+
+    <!-- Control plane -->
+    <rect x="264" y="98" width="592" height="210" rx="12" fill="#101826"/>
+    <text x="282" y="126" font-size="15" font-weight="700" fill="#FFFFFF" letter-spacing="0.5">VORNIK CONTROL PLANE</text>
+    <text x="838" y="126" font-size="12" fill="#8FC1F0" text-anchor="end">trusted · deterministic: same input, same decision</text>
+
+    <g font-size="13" font-weight="600" fill="#FFFFFF">
+      <!-- row 1 -->
+      <rect x="273" y="142" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="287" y="170">Dispatch &amp; queue</text>
+      <text x="287" y="190" font-size="11" font-weight="400" fill="#A9B4C2">routes · schedules</text>
+      <rect x="419" y="142" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="433" y="170">Workflows</text>
+      <text x="433" y="190" font-size="11" font-weight="400" fill="#A9B4C2">steps · output schemas</text>
+      <rect x="565" y="142" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="579" y="170">Policy &amp; budgets</text>
+      <text x="579" y="190" font-size="11" font-weight="400" fill="#A9B4C2">tool grants · spend caps</text>
+      <rect x="711" y="142" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="725" y="170">Approvals</text>
+      <text x="725" y="190" font-size="11" font-weight="400" fill="#A9B4C2">on your paired phone</text>
+      <!-- row 2 -->
+      <rect x="273" y="222" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="287" y="250">Memory</text>
+      <text x="287" y="270" font-size="11" font-weight="400" fill="#A9B4C2">per project · RAG</text>
+      <rect x="419" y="222" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="433" y="250">Secrets vault</text>
+      <text x="433" y="270" font-size="11" font-weight="400" fill="#A9B4C2">sealed at rest</text>
+      <rect x="565" y="222" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="579" y="250">Egress guard</text>
+      <text x="579" y="270" font-size="11" font-weight="400" fill="#A9B4C2">SSRF · secret scan</text>
+      <rect x="711" y="222" width="136" height="70" rx="8" fill="#1F2B3E"/>
+      <text x="725" y="250">Audit &amp; cost</text>
+      <text x="725" y="270" font-size="11" font-weight="400" fill="#A9B4C2">every step recorded</text>
+    </g>
+
+    <!-- Sandboxes -->
+    <rect x="264" y="336" width="388" height="144" rx="12" fill="#1C7ED6" fill-opacity="0.08" stroke="#1C7ED6" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="280" y="358" font-size="13" font-weight="700" fill="#1C7ED6" letter-spacing="0.5">AGENT CONTAINERS</text>
+    <text x="636" y="358" font-size="11.5" fill="#1C7ED6" text-anchor="end">untrusted · non-deterministic</text>
+    <g font-size="12" fill="#101826" text-anchor="middle">
+      <!-- three containers, one per role -->
+      <g>
+        <rect x="282" y="372" width="108" height="62" rx="6" fill="#FFFFFF" stroke="#1C7ED6"/>
+        <path d="M282 386 h108" stroke="#1C7ED6" stroke-opacity="0.4"/>
+        <circle cx="292" cy="379" r="2.5" fill="#1C7ED6"/><circle cx="300" cy="379" r="2.5" fill="#1C7ED6" fill-opacity="0.5"/>
+        <text x="336" y="406" font-weight="600">role: plan</text>
+        <text x="336" y="424" font-size="10.5" fill="#5E6672">model + tools</text>
+      </g>
+      <g>
+        <rect x="404" y="372" width="108" height="62" rx="6" fill="#FFFFFF" stroke="#1C7ED6"/>
+        <path d="M404 386 h108" stroke="#1C7ED6" stroke-opacity="0.4"/>
+        <circle cx="414" cy="379" r="2.5" fill="#1C7ED6"/><circle cx="422" cy="379" r="2.5" fill="#1C7ED6" fill-opacity="0.5"/>
+        <text x="458" y="406" font-weight="600">role: build</text>
+        <text x="458" y="424" font-size="10.5" fill="#5E6672">model + tools</text>
+      </g>
+      <g>
+        <rect x="526" y="372" width="108" height="62" rx="6" fill="#FFFFFF" stroke="#1C7ED6"/>
+        <path d="M526 386 h108" stroke="#1C7ED6" stroke-opacity="0.4"/>
+        <circle cx="536" cy="379" r="2.5" fill="#1C7ED6"/><circle cx="544" cy="379" r="2.5" fill="#1C7ED6" fill-opacity="0.5"/>
+        <text x="580" y="406" font-weight="600">role: review</text>
+        <text x="580" y="424" font-size="10.5" fill="#5E6672">model + tools</text>
+      </g>
+    </g>
+    <text x="458" y="464" font-size="11" fill="#101826" text-anchor="middle">no network unless the role opts in · per-task key · capabilities dropped</text>
+
+    <!-- Sandbox <-> control plane: unix socket only -->
+    <g stroke="#1C7ED6" stroke-width="2" fill="none">
+      <path d="M458 312 L458 332"/>
+      <path d="M453 318 L458 310 L463 318"/>
+      <path d="M453 326 L458 334 L463 326"/>
+    </g>
+    <text x="468" y="326" font-size="11" fill="#1C7ED6">tools and models via unix socket</text>
+
+    <!-- Database -->
+    <g>
+      <ellipse cx="764" cy="356" rx="84" ry="14" fill="#FFFFFF" stroke="#101826" stroke-width="1.5"/>
+      <path d="M680 356 v100 a84 14 0 0 0 168 0 v-100" fill="#FFFFFF" stroke="#101826" stroke-width="1.5"/>
+      <path d="M680 356 a84 14 0 0 0 168 0" fill="none" stroke="#101826" stroke-width="1.5"/>
+      <text x="764" y="400" font-size="13" font-weight="600" fill="#101826" text-anchor="middle">State, memory</text>
+      <text x="764" y="418" font-size="13" font-weight="600" fill="#101826" text-anchor="middle">and audit</text>
+      <text x="764" y="440" font-size="11" fill="#5E6672" text-anchor="middle">PostgreSQL + pgvector</text>
+    </g>
+    <path d="M764 308 L764 342" stroke="#101826" stroke-width="2"/>
+
+    <!-- ===== Right: what it calls ===== -->
+    <g font-size="13.5" fill="#101826">
+      <rect x="900" y="104" width="216" height="76" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="928" cy="142" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <circle cx="928" cy="142" r="8" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <path d="M928 130 v4 M928 150 v4 M916 142 h4 M936 142 h4" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="956" y="138" font-weight="600">Models</text>
+      <text x="956" y="157" font-size="11" fill="#5E6672">local (open-weight) or cloud</text>
+
+      <rect x="900" y="196" width="216" height="76" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="928" cy="234" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <path d="M920 228 h8 v-6 M936 240 h-8 v6 M922 240 l12 -12" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="956" y="230" font-weight="600">Tools &amp; APIs</text>
+      <text x="956" y="249" font-size="11" fill="#5E6672">MCP servers · your services</text>
+
+      <rect x="900" y="288" width="216" height="76" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="928" cy="326" r="18" fill="#1C7ED6" fill-opacity="0.12"/>
+      <circle cx="922" cy="318" r="3" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <circle cx="922" cy="334" r="3" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <circle cx="935" cy="322" r="3" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <path d="M922 321 v10 M935 325 q0 6 -10 7" fill="none" stroke="#1C7ED6" stroke-width="2"/>
+      <text x="956" y="322" font-weight="600">GitHub &amp; forges</text>
+      <text x="956" y="341" font-size="11" fill="#5E6672">issues · pull requests</text>
+    </g>
+
+    <!-- Arrows: who asks -> control plane -> outside -->
+    <g stroke="#101826" stroke-width="2" fill="none">
+      <path d="M224 136 H236 M224 210 H236 M224 284 H236 M224 358 H236 M224 432 H236 M236 136 V432"/>
+      <path d="M236 192 L258 192"/><path d="M250 186 L260 192 L250 198"/>
+      <path d="M260 228 L236 228"/><path d="M244 222 L236 228 L244 234"/>
+    </g>
+    <g stroke="#101826" stroke-width="2" fill="none">
+      <path d="M860 142 L894 142"/><path d="M886 136 L896 142 L886 148"/>
+      <path d="M860 234 L894 234"/><path d="M886 228 L896 234 L886 240"/>
+      <path d="M860 326 L880 326 M872 308 L872 326 L894 326"/><path d="M886 320 L896 326 L886 332"/>
+    </g>
+    <rect x="884" y="384" width="232" height="56" rx="8" fill="#FFFFFF" stroke="#6EA83B"/>
+    <circle cx="902" cy="412" r="6" fill="#6EA83B"/>
+    <text x="916" y="407" font-size="12" font-weight="600" fill="#101826">Daemon or gateway adds the keys.</text>
+    <text x="916" y="425" font-size="11" fill="#5E6672">Agents get only secrets you grant.</text>
+
+    <!-- ===== Bottom: the four properties ===== -->
+    <g font-size="13.5" font-weight="600" fill="#101826">
+      <rect x="24" y="522" width="264" height="60" rx="30" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="56" cy="552" r="16" fill="#101826"/>
+      <rect x="49" y="545" width="14" height="10" rx="1.5" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+      <path d="M52 559 h8" stroke="#FFFFFF" stroke-width="1.6"/>
+      <text x="82" y="557">Runs on your hardware</text>
+
+      <rect x="304" y="522" width="264" height="60" rx="30" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="336" cy="552" r="16" fill="#101826"/>
+      <path d="M329 552 l5 5 l9 -10" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+      <text x="362" y="557">Models propose, code decides</text>
+
+      <rect x="584" y="522" width="264" height="60" rx="30" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="616" cy="552" r="16" fill="#101826"/>
+      <circle cx="612" cy="552" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+      <path d="M616 552 h9 M622 552 v4" stroke="#FFFFFF" stroke-width="1.8"/>
+      <text x="642" y="557">Secrets sealed and redacted</text>
+
+      <rect x="864" y="522" width="252" height="60" rx="30" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="896" cy="552" r="16" fill="#101826"/>
+      <path d="M889 545 h14 M889 551 h14 M889 557 h9" stroke="#FFFFFF" stroke-width="1.8"/>
+      <text x="922" y="557">Every step audited</text>
+    </g>
+  </g>
+</svg>

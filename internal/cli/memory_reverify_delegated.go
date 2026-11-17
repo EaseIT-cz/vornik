@@ -379,6 +379,11 @@ func reverifyActorName() string {
 	if reverifyActor != "" {
 		return reverifyActor
 	}
+	return osActorName()
+}
+
+// osActorName is the default actor of an operator verb: the OS user.
+func osActorName() string {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return "operator:" + u.Username
 	}

@@ -43,6 +43,11 @@
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 7v-3.586a1 1 0 00-.293-.707l-7-7a1 1 0 00-1.414 0L8 6.586V10a3 3 0 003 3h7zm-7 6l3-3m0 0l3 3m-3-3v8"/></svg>
                         Keys
                     </a>
+                    {{/* Grant MCP tools to this project's roles (#780): an admin and the managed instance's owner. */}}
+                    <a href="/ui/projects/{{.Project.ID}}/mcp-tools" data-admin-link data-owner-href="/ui/projects/{{.Project.ID}}/mcp-tools" class="{{if not (hasAdminFlag $)}}hidden {{end}}flex items-center gap-1 text-brand-400 hover:text-brand-300 text-sm transition-colors">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>
+                        MCP tools
+                    </a>
                     <a href="/ui/projects/{{.Project.ID}}/artifacts" class="flex items-center gap-1 text-brand-400 hover:text-brand-300 text-sm transition-colors">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                         Artifacts

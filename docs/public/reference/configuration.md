@@ -281,6 +281,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `chat.router.claude_cli.effort_level` | string | CLI reasoning effort: low\|medium\|high\|xhigh\|max (default low); honored by claude-cli, ignored by codex-cli. | — |
 | `chat.router.claude_subscription.thinking_budget` | int | Anthropic extended-thinking budget_tokens; 0 disables (router subprovider). | — |
 | `chat.router.codex_cli.effort_level` | string | CLI reasoning effort: low\|medium\|high\|xhigh\|max (default low); honored by claude-cli, ignored by codex-cli. | — |
+| `chat.router.codex_subscription.auth_path` | string | The daemon's own copy of the Codex login; empty = ~/.codex/auth.json. With a separate copy, codex login does not reach the daemon: after logging in, copy ~/.codex/auth.json to this path (mode 0600); the daemon picks it up within a minute. | — |
 | `chat.router.codex_subscription.effort_level` | string | Codex reasoning effort: low\|medium\|high (empty = omit). | — |
 | `chat.router.http.enabled` | bool | Enable the OpenAI-compatible sub-provider. | — |
 | `chat.router.http.endpoint` | string | Endpoint URL for the HTTP sub-provider. | — |
@@ -601,7 +602,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `agent_admin.default_project_budget_usd` | float | Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device. | — |
 | `agent_admin.namespace_budget_usd` | float | Ceiling on the sum of an agent's project budgets until a device approves more (default 10). | — |
 | `agent_admin.agent_image` | string | Runtime image of the roles an agent defines (default the standard agent image). | — |
-| `agent_admin.private_api_hosts` | list | Host names an agent project's approved API may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the API's base URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API still needs its approval on an approver device. Empty (the default): agent APIs reach public addresses only. Refused under hosting.mode managed. | — |
+| `agent_admin.private_api_hosts` | list | Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed. | — |
 | `agent_admin.models` | list | Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue). | — |
 
 ## gateway

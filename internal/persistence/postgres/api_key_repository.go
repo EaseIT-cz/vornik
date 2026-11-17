@@ -317,6 +317,29 @@ func (r *APIKeyRepository) Revoke(ctx context.Context, keyID string) error {
 	return mapDBError(err)
 }
 
+// DeleteRetired implements persistence.APIKeyRepository (GitHub #489).
+func (r *APIKeyRepository) DeleteRetired(ctx context.Context, projectID, keyID string, now time.Time) error {
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM api_keys WHERE id = $1 AND project_id = $2
+		  AND (revoked_at IS NOT NULL OR (expires_at IS NOT NULL AND expires_at <= $3))`,
+		keyID, projectID, now.UTC())
+	if err != nil {
+		return mapDBError(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 1 {
+		return mapDBError(err)
+	}
+	var one int
+	err = r.db.QueryRowContext(ctx, `SELECT 1 FROM api_keys WHERE id = $1 AND project_id = $2`, keyID, projectID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return persistence.ErrAPIKeyNotFound
+	}
+	if err != nil {
+		return mapDBError(err)
+	}
+	return persistence.ErrAPIKeyLive
+}
+
 // RevokeByName sets revoked_at = NOW() for the key row whose name
 // matches. Idempotent — zero rows affected is not an error. Used by
 // the executor's per-task key lifecycle where the name

@@ -340,3 +340,40 @@ func TestCompanionRecall_DesignRecord_NoneNoteNoLongerOverclaims(t *testing.T) {
 	assert.Contains(t, dr["note"], "no design for this question was found in this repository's memory")
 	assert.Contains(t, dr["note"], "offer to write an as-built record")
 }
+
+// GitHub #550 D2 (design 22, amendment 2026-11-15). Found at: production
+// observation, 2026-10-25: 2,343 reviewer chunks (class decision) carry no
+// artifact and no task id, and countDesigns, which reads class, scope and
+// task id, counted them as this repository's design record. A hit whose
+// source name has the shape the companion workflows give their outputs is
+// workflow output whatever its task id; a design's source name is its
+// repository path. Regression test at: the MCP tools/call handler, the level
+// a client observes.
+func TestCompanionRecall_DesignRecord_WorkflowNamedOutputIsNotADesign_550(t *testing.T) {
+	hits := []MemorySearchResult{
+		hit("review-20260628-d52b.md", "decision", infraScope),
+		hit("critique-20261001-0a9f.md", "spec", infraScope),
+		hit("https://docs.vornik.io", "spec", infraScope),
+		hit("review-notes.md", "decision", infraScope), // not the workflow shape
+	}
+	dr, ok := recallDesignRecord(t, hits, map[string]any{"query": "q", "repo_scope": infraScope})
+	require.True(t, ok)
+	assert.EqualValues(t, 2, dr["design_hits"])
+	assert.EqualValues(t, 2, dr["workflow_output"])
+}
+
+func TestIsWorkflowOutputName_550(t *testing.T) {
+	for name, want := range map[string]bool{
+		"review-20260628-d52b.md":      true,
+		"readability-20261115-9143.md": true,
+		"findings-20261115-ABCD.md":    false, // the workflows write lower-case hex
+		"brief-20261115-9143.txt":      false,
+		"review-2026062-d52b.md":       false,
+		"docs/review-20260628-d52b.md": false, // a repository path
+		"notes-20260628-d52b.md":       false, // not a workflow kind
+		"https://docs.vornik.io":       false,
+		"":                             false,
+	} {
+		assert.Equal(t, want, isWorkflowOutputName(name), name)
+	}
+}

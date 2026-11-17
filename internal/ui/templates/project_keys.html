@@ -128,6 +128,8 @@
                                 <td class="px-4 py-2 whitespace-nowrap">
                                     {{if eq .Status "revoked"}}
                                         <span class="text-red-700/80 dark:text-red-300/80">revoked</span>
+                                    {{else if eq .Status "expired"}}
+                                        <span class="text-amber-800 dark:text-amber-400">expired</span>
                                     {{else}}
                                         <span class="text-emerald-700 dark:text-emerald-300">active</span>
                                     {{end}}
@@ -171,6 +173,17 @@
                                                 class="v-btn v-btn--danger"
                                                 data-confirm="Revoke {{.Name}}? Cannot be undone.">
                                             revoke
+                                        </button>
+                                    </form>
+                                    {{else}}
+                                    <form method="POST" action="/ui/projects/{{$.ProjectID}}/keys" class="inline">
+                                        <input type="hidden" name="action" value="remove"/>
+                                        <input type="hidden" name="key_id" value="{{.ID}}"/>
+                                        <button type="submit"
+                                                class="v-btn v-btn--quiet"
+                                                title="Delete this retired key from the list now; retention would delete it 7 days after it retired"
+                                                data-confirm="Remove {{.Name}} from the list? It authenticates nothing; an audit record keeps its name.">
+                                            remove
                                         </button>
                                     </form>
                                     {{end}}

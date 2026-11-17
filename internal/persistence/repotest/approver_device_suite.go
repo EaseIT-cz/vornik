@@ -36,6 +36,7 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("Resume_only_an_expired_value_with_a_code", func(t *testing.T) { approverResume(t, newApproverHarness(t, fresh)) })
 	t.Run("Decide_is_hash_bound_and_once", func(t *testing.T) { approverDecide(t, newApproverHarness(t, fresh)) })
 	t.Run("Applied_and_expiry", func(t *testing.T) { approverAppliedAndExpiry(t, newApproverHarness(t, fresh)) })
+	t.Run("ListApplyFailedSince_window_and_limit", func(t *testing.T) { approverApplyFailedList(t, newApproverHarness(t, fresh)) })
 	t.Run("ClaimApply_is_one_holder_at_a_time", func(t *testing.T) { approverClaimApply(t, newApproverHarness(t, fresh)) })
 	t.Run("Broker_action_requests_store", func(t *testing.T) { approverBrokerActionKind(t, newApproverHarness(t, fresh)) })
 	// Hermes approval transport design §4.1, §4.2, §4.4.
@@ -49,6 +50,34 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("WithdrawRequest_refuses_bad_input", func(t *testing.T) { approverWithdrawRefusesBadInput(t, newApproverHarness(t, fresh)) })
 	// Config-apply journal design §13.3, GitHub #302 (migration 227).
 	t.Run("Every_declared_kind_stores_and_decides_with_a_choice", func(t *testing.T) { approverEveryKindStores(t, newApproverHarness(t, fresh)) })
+	// Design part 09 §9.2e, GitHub #489.
+	t.Run("DeleteRevokedDevice_removes_only_a_revoked_device", func(t *testing.T) { approverDeleteRevoked(t, newApproverHarness(t, fresh)) })
+}
+
+// approverDeleteRevoked: DeleteRevokedDevice removes a revoked device, and
+// refuses a live device (ErrApproverDeviceLive) and an unknown one
+// (ErrNotFound), deleting nothing (§9.2e D2, #489).
+func approverDeleteRevoked(t *testing.T, h *approverHarness) {
+	h.pairing(t, "a")
+	h.redeem(t, "a")
+	if err := h.repo.DeleteRevokedDevice(h.ctx, "dev_a"); !errors.Is(err, persistence.ErrApproverDeviceLive) {
+		t.Fatalf("DeleteRevokedDevice on a live device: %v, want ErrApproverDeviceLive", err)
+	}
+	if devs, _ := h.repo.ListDevices(h.ctx); len(devs) != 1 {
+		t.Fatalf("a refused delete removed the live device: %+v", devs)
+	}
+	if err := h.repo.RevokeDevice(h.ctx, "dev_a", h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.DeleteRevokedDevice(h.ctx, "dev_a"); err != nil {
+		t.Fatalf("DeleteRevokedDevice on a revoked device: %v", err)
+	}
+	if devs, _ := h.repo.ListDevices(h.ctx); len(devs) != 0 {
+		t.Fatalf("the revoked device is still listed: %+v", devs)
+	}
+	if err := h.repo.DeleteRevokedDevice(h.ctx, "dev_a"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("DeleteRevokedDevice on a removed device: %v, want ErrNotFound", err)
+	}
 }
 
 // approverEveryKindStores files one request of every kind in
@@ -439,6 +468,65 @@ func approverDecide(t *testing.T, h *approverHarness) {
 	}
 	if p, _ := h.repo.ListPending(h.ctx, h.now); len(p) != 1 || p[0].ID != "apr_3" {
 		t.Fatalf("pending after decisions = %v", ids(p))
+	}
+}
+
+// approverApplyFailedList: GitHub #669 item 5 (design 22, §22.2.16b). The
+// list of approved requests recorded as failed, by the failure time
+// (applied_at), newest first, at most limit; pending, applied and older
+// failures are not in it. Before #669 a failed request appeared nowhere.
+func approverApplyFailedList(t *testing.T, h *approverHarness) {
+	day := 24 * time.Hour
+	// id, created, failed (zero: not failed), applied ok, left pending
+	type row struct {
+		id              string
+		created, failed time.Duration // before h.now
+		appliedOK       bool
+		pending         bool
+	}
+	rows := []row{
+		{id: "apr_f6", created: 6*day + time.Hour, failed: 6 * day},
+		{id: "apr_f1", created: day + time.Hour, failed: day},
+		{id: "apr_f8", created: 8*day + time.Hour, failed: 8 * day},
+		{id: "apr_ok", created: 2*day + time.Hour, failed: 2 * day, appliedOK: true},
+		{id: "apr_pend", created: time.Hour, pending: true},
+	}
+	for _, x := range rows {
+		r := h.request(x.id)
+		r.CreatedAt = h.now.Add(-x.created)
+		r.ExpiresAt = r.CreatedAt.Add(7 * day)
+		if err := h.repo.CreateRequest(h.ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		if x.pending {
+			continue
+		}
+		at := h.now.Add(-x.failed)
+		if err := h.repo.Decide(h.ctx, x.id, "sha-"+x.id, "dev_a", true, r.CreatedAt.Add(time.Minute)); err != nil {
+			t.Fatalf("decide %s: %v", x.id, err)
+		}
+		if x.appliedOK {
+			if err := h.repo.MarkApplied(h.ctx, x.id, at); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := h.repo.MarkApplyFailed(h.ctx, x.id, "gave up after 60 attempts: busy", at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := ids(got); len(g) != 2 || g[0] != "apr_f1" || g[1] != "apr_f6" {
+		t.Fatalf("failed in the last 7 days = %v, want [apr_f1 apr_f6] (newest failure first)", g)
+	}
+	if got[0].ApplyError == "" || got[0].AppliedAt == nil {
+		t.Errorf("a listed row lacks its failure: %+v", got[0])
+	}
+	if one, _ := h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 1); len(one) != 1 || one[0].ID != "apr_f1" {
+		t.Errorf("limit 1 = %v, want [apr_f1]", ids(one))
 	}
 }
 

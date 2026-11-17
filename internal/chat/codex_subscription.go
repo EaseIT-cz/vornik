@@ -63,6 +63,14 @@ type CodexSubscriptionClient struct {
 	// OpenAI naming convention). nil → ListModels returns an empty
 	// list (the ChatGPT backend has no public /v1/models endpoint).
 	modelCatalog []ModelInfo
+
+	// responsesURL is the Codex Responses endpoint (codexResponsesURL;
+	// tests point it at a stub).
+	responsesURL string
+
+	// modelsCachePath is the Codex CLI's model list, read only to
+	// explain a model refusal (#772). Empty = ~/.codex/models_cache.json.
+	modelsCachePath string
 }
 
 // CodexSubscriptionOption configures a CodexSubscriptionClient.
@@ -98,20 +106,23 @@ func WithCodexSubscriptionModelCatalog(models []ModelInfo) CodexSubscriptionOpti
 	return func(c *CodexSubscriptionClient) { c.modelCatalog = models }
 }
 
-// NewCodexSubscriptionClient builds a provider. `model` defaults to
-// gpt-5.4-mini when empty. auth.json is read lazily on the first
-// Complete call, so misconfiguration surfaces with a clear error
+// NewCodexSubscriptionClient builds a provider. An empty model defaults
+// to gpt-6-luna, the Codex CLI's default on 2026-11-14 (#772); the
+// subscription refuses gpt-5.4 and gpt-5.4-mini since 2026-11.
+// auth.json is read lazily on the first Complete call, so
+// misconfiguration surfaces with a clear error
 // rather than failing at construction.
 func NewCodexSubscriptionClient(model string, opts ...CodexSubscriptionOption) *CodexSubscriptionClient {
 	if model == "" {
-		model = "gpt-5.4-mini"
+		model = "gpt-6-luna"
 	}
 	c := &CodexSubscriptionClient{
-		auth:    newCodexAuthManager(""),
-		http:    newChatHTTPClient(0), // we enforce timeout via ctx below
-		model:   model,
-		logger:  zerolog.Nop(),
-		timeout: DefaultTimeout,
+		auth:         newCodexAuthManager(""),
+		http:         newChatHTTPClient(0), // we enforce timeout via ctx below
+		model:        model,
+		logger:       zerolog.Nop(),
+		timeout:      DefaultTimeout,
+		responsesURL: codexResponsesURL,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -132,16 +143,40 @@ func (c *CodexSubscriptionClient) SetMetrics(m *Metrics) {
 }
 
 // ListModels implements ModelLister. The chatgpt.com backend has no
-// public list endpoint reachable via the plan-billed OAuth bearer,
-// so the caller wires a catalog at construction time via
-// WithCodexSubscriptionModelCatalog (typically derived from
-// pricing.yaml). Returns nil when no catalog is configured.
+// public list endpoint reachable via the plan-billed OAuth bearer, so
+// the caller wires a catalog at construction time via
+// WithCodexSubscriptionModelCatalog (pricing.yaml's OpenAI rows). When
+// the Codex CLI's model cache lists visible models, the list follows it
+// (#773, subscription-auth.md Amendment 2026-11-14 (c)): the catalog
+// rows it lists, then each listed model with no row, Source "codex-cli".
+// With no usable cache the catalog comes back as wired.
 func (c *CodexSubscriptionClient) ListModels(_ context.Context) ([]ModelInfo, error) {
-	if len(c.modelCatalog) == 0 {
-		return nil, nil
+	visible := codexCachedVisibleModels(c.modelsCachePath)
+	if len(visible) == 0 {
+		if len(c.modelCatalog) == 0 {
+			return nil, nil
+		}
+		out := make([]ModelInfo, len(c.modelCatalog))
+		copy(out, c.modelCatalog)
+		return out, nil
 	}
-	out := make([]ModelInfo, len(c.modelCatalog))
-	copy(out, c.modelCatalog)
+	listed := make(map[string]bool, len(visible))
+	for _, id := range visible {
+		listed[id] = true
+	}
+	out := make([]ModelInfo, 0, len(visible))
+	priced := map[string]bool{}
+	for _, m := range c.modelCatalog {
+		if listed[m.ID] {
+			out = append(out, m)
+			priced[m.ID] = true
+		}
+	}
+	for _, id := range visible {
+		if !priced[id] {
+			out = append(out, ModelInfo{ID: id, Source: "codex-cli", OwnedBy: "openai"})
+		}
+	}
 	return out, nil
 }
 
@@ -155,13 +190,16 @@ func (c *CodexSubscriptionClient) WithModel(model string) Provider {
 		return c
 	}
 	clone := &CodexSubscriptionClient{
-		auth:        c.auth,
-		http:        c.http,
-		model:       model,
-		logger:      c.logger,
-		metrics:     c.metrics,
-		timeout:     c.timeout,
-		effortLevel: c.effortLevel,
+		auth:            c.auth,
+		http:            c.http,
+		model:           model,
+		logger:          c.logger,
+		metrics:         c.metrics,
+		timeout:         c.timeout,
+		effortLevel:     c.effortLevel,
+		modelCatalog:    c.modelCatalog,
+		responsesURL:    c.responsesURL,
+		modelsCachePath: c.modelsCachePath,
 	}
 	return clone
 }
@@ -239,7 +277,7 @@ func (c *CodexSubscriptionClient) call(ctx context.Context, messages []Message, 
 		Msg("codex-subscription: invoking")
 
 	buildReq := func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, codexResponsesURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.responsesURL, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -265,8 +303,8 @@ func (c *CodexSubscriptionClient) call(ctx context.Context, messages []Message, 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := readAllCapped(resp.Body, 4096)
-		return nil, fmt.Errorf("codex subscription: HTTP %d: %s",
-			resp.StatusCode, string(errBody))
+		return nil, fmt.Errorf("codex subscription: HTTP %d: %s%s",
+			resp.StatusCode, string(errBody), codexModelRefusalHint(errBody, c.modelsCachePath))
 	}
 
 	out, err := parseCodexResponsesSSE(resp.Body, onText)

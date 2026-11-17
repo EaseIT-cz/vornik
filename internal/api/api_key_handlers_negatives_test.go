@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/persistence"
 )
@@ -368,4 +369,8 @@ func (*failingAPIKeyRepo) UpdateCapabilities(context.Context, string, persistenc
 // answer rather than a silent partial one.
 func (*failingAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
+}
+
+func (*failingAPIKeyRepo) DeleteRetired(context.Context, string, string, time.Time) error {
+	return nil
 }

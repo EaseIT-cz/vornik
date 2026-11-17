@@ -1,4 +1,11 @@
+---
+hide:
+  - navigation
+  - toc
+---
 # Vornik
+
+[![Vornik architecture. Who asks: chat (Telegram, Slack, email), the web console and CLI, a paired phone that approves sensitive actions, AI assistants (Claude Code, Codex, Hermes) and automation (API, webhooks, schedules). Your host holds the trusted, deterministic Vornik control plane: dispatch and queue, workflows, policy and budgets, approvals, memory, the secrets vault, the egress guard, and audit and cost. Below it, untrusted, non-deterministic agent containers, one per task step: no network unless the role opts in, a per-task key, capabilities dropped, and tools and models reached through the daemon over a unix socket. Beside them, the PostgreSQL database for state, memory and audit. Vornik calls models (local or cloud), tools and APIs, and GitHub; the daemon or the gateway adds the keys, and agents get only the secrets you grant. Runs on your hardware; models propose, code decides; secrets sealed and redacted; every step audited.](assets/vornik-architecture.svg)](assets/vornik-architecture.svg)
 
 Vornik is an asynchronous, **local-first** orchestration daemon for teams of AI
 agents. You define projects, each backed by a swarm of agents and one or more
@@ -12,6 +19,14 @@ egress** by default — the daemon makes the outbound calls — so Vornik suits
 data-sensitive and air-gapped environments, including with self-hosted,
 open-weight models.
 
+![Models propose, the daemon decides. The models, in a non-deterministic layer, plan, write and choose among their allowed tools. The deterministic layer around them decides tool grants, budgets, output schemas, approvals, network, credentials, redaction and audit.](assets/vornik-control-plane.svg)
+
+A model's output is a proposal. The daemon is ordinary deterministic code,
+and it decides whether the proposal takes effect. May the role call that
+tool? May the task spend more? Does the output match its schema? Must a
+person approve it first? How each check works:
+[Security model](security-model.md).
+
 ## Start here
 
 - **[Getting Started](getting-started/index.md)** — install the daemon, create
@@ -21,6 +36,8 @@ open-weight models.
   behind them.
 
 ## What it does
+
+![The life of a task in six steps. Ask: from chat, the console, an assistant, a schedule, a webhook or a standing goal. Route: you or the chat dispatcher pick the project and workflow, and the task waits in a durable queue. Run: each step runs a role in its own container; models propose and the daemon checks. Approve, when needed: sensitive actions wait for you on your paired phone. Deliver: results are saved as artifacts and sent back where you asked. Remember: the audit trail, the cost and, if enabled, memory carry into the next task, which is yours or one a project starts itself. A restart loses no work: unfinished tasks are recovered.](assets/vornik-task-cycle.svg)
 
 - **Runs agent teams asynchronously** — durable queues, isolated per-agent
   containers, and structured [recovery](guides/recovery.md) when a step fails.

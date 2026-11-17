@@ -49,3 +49,18 @@ against 2026-08-21 to tell the two regimes apart until that is fixed.
 
 The `2026.8.3-13-g13476b8f` baseline row predates this directory; its run artifacts
 were not retained, which is the omission this directory exists to stop repeating.
+
+## Agent-quality rollups
+
+One `agent-*.rollup.json` per arm behind an agent-quality row, the output of
+`vornikctl bench agent rollup --json` over that arm's journals, unmodified
+except for indentation (#609):
+
+- `agent-20261031-off.rollup.json` and `agent-20261031-on.rollup.json`: the
+  2026-10-31 row (`gemma-4-26b-a4b`, `2026.10.7-94-g3246baad0`), without and
+  with container hardening; 90 journals each.
+
+A rollup carries the arm's name, attempts, cost, failures by class, and the
+efficiency and accuracy figures the row quotes. It carries no host detail:
+each was scanned for addresses, paths and names before it was committed. The
+2026.9.0 row has no rollup here; its journals are not on hand.

@@ -86,6 +86,13 @@ type APIKeyRepository interface {
 	// Idempotent — revoking an already-revoked key is a no-op.
 	Revoke(ctx context.Context, keyID string) error
 
+	// DeleteRetired hard-deletes one key of projectID that authenticates
+	// nothing: revoked, or expired at now (GitHub #489). A live key returns
+	// ErrAPIKeyLive and a key that is absent, or another project's, returns
+	// ErrAPIKeyNotFound; neither deletes anything. The retention sweep
+	// deletes the same rows 7 days after they retire.
+	DeleteRetired(ctx context.Context, projectID, keyID string, now time.Time) error
+
 	// UpdateAllowedWorkflows replaces the key's allowed_workflows
 	// list wholesale. The slice is the new set; pass an empty slice
 	// to mean "every workflow the project permits" (matches the
@@ -130,6 +137,26 @@ type APIKeyCapabilities struct {
 // ErrAPIKeyNotFound is returned by LookupActiveByHash when no
 // active row matches. AuthMiddleware maps this to UNAUTHORIZED.
 var ErrAPIKeyNotFound = errors.New("apikey: not found")
+
+// RemovalAuditDetail is what a key.remove audit row keeps of a deleted key
+// (GitHub #489, 18-security-and-tenancy.md amendment 2026-11-15 R2): never
+// its secret, hash or prefix. The keys page and the REST route both use it,
+// so the two removal paths record the same fields.
+func (k *APIKey) RemovalAuditDetail() map[string]any {
+	d := map[string]any{"project": k.ProjectID, "name": k.Name, "created_at": k.CreatedAt.UTC().Format(time.RFC3339),
+		"allowed_workflows": k.AllowedWorkflows, "allow_push": k.AllowPush}
+	if k.RevokedAt != nil {
+		d["revoked_at"] = k.RevokedAt.UTC().Format(time.RFC3339)
+	}
+	if k.ExpiresAt != nil {
+		d["expires_at"] = k.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return d
+}
+
+// ErrAPIKeyLive is returned by DeleteRetired for a key that is neither
+// revoked nor expired: revoke it first.
+var ErrAPIKeyLive = errors.New("apikey: still live")
 
 // IntentVerdictRepository persists the two-tier intent judge's
 // decisions for calibration analyses and operator visibility.

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: ae898fc4687df4094009fb3ad2be1a799eccd59bc97026f2d9491ca61f7b8951
+      sha256: d915f90ba61c20cd1cfaad44244edcaf7251b62b2f01777869fd21c19e669cb6
 ---
 # Release Notes
 
@@ -14,6 +14,67 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.11.6
+
+!!! warning "Upgrade requirements"
+    - **Codex subscription users: add the new price rows by hand.** This
+      release adds prices for `gpt-6-luna`, `gpt-5.6-terra` and
+      `gpt-5.6-luna` to the shipped `configs/pricing.yaml`. An upgrade does
+      not yet add new shipped rows to your own `pricing.yaml`, so until you
+      copy them in, those models are charged at the `default` rate. Copy the
+      three rows into `~/.config/vornik/configs/pricing.yaml`, then run
+      `vornikctl config reload`; `vornikctl models list --provider
+      codex-subscription` then shows them priced.
+
+### What's new
+
+- **Bring your own model on a managed instance.** An owner who signs up
+  without a provided model connects their own OpenAI-compatible provider on
+  a new Model provider page. Vornik checks the provider before saving,
+  stores the key encrypted and never shows it again, and records each change.
+  A fresh managed instance now opens on this page instead of a setup page
+  the owner could not use.
+- **More of the console for a managed instance's owner.** The owner can grant
+  an MCP server's tools to their assistants, and read the operator console's
+  observation pages (never change anything there), with those pages in their
+  menu.
+- **The agent benchmark is open.** Its task sets, answer keys,
+  pre-registrations and reproduce script now ship in the Community edition,
+  so anyone can re-run a published result. New: 69 Aider Polyglot exercises
+  (Go and Python) and `vornikctl bench agent bare`, which measures the same
+  model working alone, so the gain from Vornik's pipeline can be measured.
+- **Docs at a glance.** The docs open with an architecture picture of what
+  Vornik is and does, plus new figures for the life of a task, where each
+  credential lives, trust boundaries and access control.
+
+### Security
+
+- **An approved agent MCP server may reach an intranet host**, only one the
+  operator lists in `agent_admin.private_api_hosts`, only over https, and
+  never loopback, link-local or metadata addresses; each server is still
+  approved on your phone. Managed instances refuse the setting.
+- **Sign-in works with strict OpenID providers** that accept the client id
+  only in the request form.
+- **Revoked keys and unpaired devices leave the lists**, and can be removed.
+
+### Fixes
+
+- A provisioned managed instance's agents now reach the daemon, and a fresh
+  instance's doctor reports no false errors.
+- A managed upgrade checks the new package's dependencies before it stops
+  anything.
+- Home opens as fast as the other pages; every menu item has its own icon.
+- Web chat: a task the chat started reports its result back into the chat,
+  replies sit in bubbles, and the chat fits a phone without zooming.
+- A request card in Needs you leads with what was asked.
+- A chat settings change now says it needs a restart, instead of claiming it
+  applied live.
+- `/var/lib/vornik` belongs to the service user, including after a restore.
+- The Codex subscription's default model, prices and model list follow the
+  current Codex models.
 
 ---
 

@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"vornik.io/vornik/internal/admin"
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/auth"
+	"vornik.io/vornik/internal/config"
 )
 
 // GitHub #625 item 1 (18-security-and-tenancy.md, "Amendment 2026-11-12 (#625
@@ -25,6 +28,12 @@ var ownerEntries = map[string]string{
 	// admin-only, so the old Admin area's owner rail target is gone.
 	"my-account": "/ui/account",
 	"admin-keys": "/ui/credentials",
+	// GitHub #789: the console pages the owner reads since #787.
+	"operator":            "/ui/admin/",
+	"admin":               "/ui/admin/",
+	"admin-control-plane": "/ui/admin/control-plane",
+	"admin-skills":        "/ui/admin/skills",
+	"admin-agents":        "/ui/admin/agents",
 }
 
 func TestNavOwner625_OwnerHrefExactlyOnTheDesignedEntries(t *testing.T) {
@@ -55,10 +64,23 @@ func TestNavOwner625_OwnerHrefExactlyOnTheDesignedEntries(t *testing.T) {
 func TestNavOwner625_NavAgreesWithTheGates(t *testing.T) {
 	srv, _, _, _ := hubRig623(t, nil) // a server with the credentials page wired
 	WithSessionUserResolver(func(*http.Request) string { return "user_owner" })(srv)
-	h := srv.Handler()
+	// The production admin gate in front (wrapUIAdminGate's owner-read hook,
+	// GitHub #787), so a console entry is judged by the real decision (#789).
+	gate := func(next http.Handler) http.Handler {
+		return admin.Middleware(config.AdminConfig{Enabled: true, AllowedKeys: []string{"admin-key"}}, nil,
+			func(*http.Request) bool { return true }, func(*http.Request) bool { return false }, "/admin",
+			admin.WithOwnerRead(func(r *http.Request) bool { return api.OwnerConsoleRead(r, api.AdminRouterPath(r.URL.Path)) }),
+		)(next)
+	}
+	h := gate(srv.Handler())
+	console := gate(NewServer().Handler()) // the console pages, with no stub stores behind them
 	for key, href := range ownerEntries {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, setupAuthRequest(http.MethodGet, strings.TrimPrefix(href, "/ui"), auth.RoleTenantAdmin))
+		target := h
+		if strings.HasPrefix(href, "/ui/admin/") {
+			target = console
+		}
+		target.ServeHTTP(rec, setupAuthRequest(http.MethodGet, strings.TrimPrefix(href, "/ui"), auth.RoleTenantAdmin))
 		if rec.Code != http.StatusOK {
 			t.Errorf("owner entry %s -> %s answered %d to tenant_admin, want 200", key, href, rec.Code)
 		}
@@ -93,11 +115,14 @@ func TestNavOwner625_RenderedMarkup(t *testing.T) {
 	if n := strings.Count(body, `data-owner-href="/ui/account"`); n != 2 {
 		t.Errorf(`data-owner-href="/ui/account" = %d, want 2 (panel, drawer)`, n)
 	}
-	// Admin console and Control plane, the operator console's non-admin-only
-	// entries: panel + drawer. Integrations, Skills and Coding agents are
-	// AdminOnly in Manage since #755, hidden from the owner by that flag.
-	if n := strings.Count(body, "data-owner-hide "); n != 4 {
-		t.Errorf("data-owner-hide = %d, want 4 (2 entries x panel and drawer)", n)
+	// Since #789 the operator console's non-admin-only entries (Admin
+	// console, Control plane) point the owner at the readable pages, so no
+	// entry is hidden from the owner by data-owner-hide any more.
+	if n := strings.Count(body, "data-owner-hide "); n != 0 {
+		t.Errorf("data-owner-hide = %d, want 0", n)
+	}
+	if n := strings.Count(body, `data-owner-href="/ui/admin/control-plane"`); n != 2 {
+		t.Errorf(`data-owner-href="/ui/admin/control-plane" = %d, want 2 (panel, drawer)`, n)
 	}
 	if !strings.Contains(body, "vornik_session_ui=(1|admin|owner)") {
 		t.Error("the marker script does not accept the owner marker")

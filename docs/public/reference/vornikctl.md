@@ -156,6 +156,45 @@ Three probes, reported as vectors and never blended into one score:
 schema-following and tool-use need no gold set — their ground truth is
 configuration, not a recording — so they can gate before any gold pass.
 
+## vornikctl bench agent bare
+
+Run the bare-model baseline on a task set's seeded items
+
+Runs the arm's model alone on every task that has a seed (a borrowed
+exercise's stubs) and grades each reply with the task's hidden acceptance
+suite, inside the agent image without network, exactly as a swarm arm is
+graded.
+
+  --mode bare-pass1    one call, no test feedback (the comparison with the
+                       swarm, which never sees the tests either)
+  --mode bare-pass2    a second call shown the grader's output after a model
+                       failure (Aider's protocol)
+  --mode bare-matched  independent calls until --matched-tokens (the swarm
+                       arm's median tokens per item) is spent; solved if any
+                       passes
+
+The journal records scaffold=<mode>, so bench agent compare refuses to set it
+against a swarm journal. The endpoint and model default to
+VORNIK_BENCH_MODEL_ENDPOINT and VORNIK_BENCH_MODEL; the key is read from
+VORNIK_BENCH_MODEL_API_KEY.
+
+```
+vornikctl bench agent bare [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--acceptance-image` |  | agent image the hidden suites run in |
+| `--arm` |  | arm name (required) |
+| `--endpoint` |  | OpenAI-compatible endpoint (…/v1) |
+| `--journal` | `bare-journal.json` | where to write the journal |
+| `--matched-tokens` | `0` | bare-matched: the swarm arm's median tokens per item |
+| `--mode` | `bare-pass1` | bare-pass1, bare-pass2 or bare-matched |
+| `--model` |  | model ID to send |
+| `--repeats` | `3` | runs per task |
+| `--run-id` |  | identifier for this run |
+| `--tasks` |  | task set (only tasks with a seed and a suite run) |
+
 ## vornikctl bench agent calibrate
 
 Build a task calibration artifact from a repeated journal
@@ -959,11 +998,11 @@ vornikctl credential set NAME
 
 ## vornikctl devices
 
-List or revoke approver devices
+List, revoke or remove approver devices
 
 ## vornikctl devices list
 
-List approver devices, revoked ones included
+List approver devices (revoked ones with --all)
 
 ```
 vornikctl devices list [flags]
@@ -971,7 +1010,18 @@ vornikctl devices list [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--json` | `false` | Print JSON |
+| `--all` | `false` | Also list revoked devices |
+| `--json` | `false` | Print JSON (every device, revoked ones included) |
+
+## vornikctl devices remove
+
+Delete a revoked approver device from the list; a live one is refused
+
+Delete a revoked approver device. Its label stays in the admin audit (device.remove), because approval records name a device by id. A live device is refused: revoke it first.
+
+```
+vornikctl devices remove <device_id>
+```
 
 ## vornikctl devices revoke
 
@@ -1504,7 +1554,24 @@ vornikctl key list [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--json` | `false` | Emit JSON instead of a table |
+| `--all` | `false` | Also list retired (revoked or expired) keys |
+| `--json` | `false` | Emit JSON instead of a table (every row the API returns) |
+| `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl key remove
+
+Delete a retired (revoked or expired) key now; a live key is refused
+
+Delete a revoked or expired key from the project's list at once. The
+retention sweep would delete it 7 days after it retired. A live key is
+refused: revoke it first. The removal is audited (key.remove).
+
+```
+vornikctl key remove <keyID> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
 | `-p`, `--project` |  | Project ID (required) |
 
 ## vornikctl key revoke
@@ -1889,6 +1956,42 @@ vornikctl memory cache-stats [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--json` | `false` | JSON output instead of the short-form table |
+
+## vornikctl memory demote-self-certified
+
+Demote chunks verified on their own producer's stamp (dry run by default)
+
+Two classes of chunk are served verified on a stamp their own producer
+wrote, which no rule now grants:
+
+  companion       a companion deposit (producer companion:) its companion
+                  stamped verified; demoted with confidence capped at 0.3
+  unknown_origin  a role-of-record stamp (validator = producer, an agent
+                  role) on a chunk with no artifact and no task, so its
+                  origin cannot be read; demoted with confidence unchanged
+
+A dry run by default: it prints the denominator (verified chunks in the
+project), each class's count with up to five chunk ids, and what it does not
+read (superseded and refuted chunks).
+
+--apply (with --reason) demotes both classes as ONE audited event; the prior
+status, validator and confidence of every changed chunk are kept, and
+--restore <event-id> puts them back where nothing has changed them since.
+
+Always runs against the configured database. Run the dry run first.
+
+```
+vornikctl memory demote-self-certified [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--actor` |  | Who runs it (default: the OS user) |
+| `--allow-self-certified` | `false` | With --restore: reinstate the self-certified stamps the event removed |
+| `--apply` | `false` | Write the demotion (or the restore); without it this is a dry run |
+| `--reason` |  | Why (required with --apply); recorded on the event |
+| `--restore` |  | Restore the prior state an earlier --apply event changed |
+| `-p`, `--project` |  | Project ID (required) |
 
 ## vornikctl memory dlq
 

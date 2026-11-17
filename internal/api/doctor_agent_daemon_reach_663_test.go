@@ -27,7 +27,7 @@ func TestAgentDaemonReach663(t *testing.T) {
 		{"loopback, no roles yet", "127.0.0.1:8080", "", nil, "OK", "no swarm role"},
 	}
 	for _, c := range cases {
-		got := agentDaemonReach(c.listen, c.defaultNet, c.roles)
+		got := agentDaemonReach(c.listen, "/run/vornik/vornik.sock", c.defaultNet, c.roles)
 		if got.Name != "agent_daemon_reach" || got.Status != c.status || !strings.Contains(got.Message, c.want) {
 			t.Errorf("%s: got %s %q, want %s containing %q", c.name, got.Status, got.Message, c.status, c.want)
 		}

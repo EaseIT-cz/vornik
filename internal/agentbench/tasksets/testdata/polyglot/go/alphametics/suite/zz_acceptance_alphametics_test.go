@@ -1,0 +1,32 @@
+package alphametics
+
+import (
+	"maps"
+	"testing"
+)
+
+func TestAcceptance_Solve(t *testing.T) {
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			s, err := Solve(tc.input)
+			switch {
+			case tc.errorExpected:
+				if err == nil {
+					t.Fatalf("Solve(%q) expected error, got: %#v", tc.input, s)
+				}
+			case err != nil:
+				t.Fatalf("Solve(%q)\nwant: %#v\ngot error: %q", tc.input, tc.expected, err)
+			case !maps.Equal(s, tc.expected):
+				t.Fatalf("Solve(%q)\ngot: %#v\nwant: %#v", tc.input, s, tc.expected)
+			}
+		})
+	}
+}
+
+func BenchmarkSolve(b *testing.B) {
+	for b.Loop() {
+		for _, tc := range testCases {
+			Solve(tc.input)
+		}
+	}
+}

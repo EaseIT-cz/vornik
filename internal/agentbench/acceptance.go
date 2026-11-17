@@ -36,6 +36,10 @@ const (
 type AcceptanceResult struct {
 	Outcome AcceptanceOutcome `json:"outcome"`
 	Output  string            `json:"output,omitempty"`
+	// FeedbackOutput is the grader's output before the 4 KB journal bound,
+	// capped at 64 KB, for the bare baseline's second try only (GitHub #650:
+	// Aider's protocol shows the model the test output). Never journaled.
+	FeedbackOutput string `json:"-"`
 }
 
 // acceptanceOutputLimit is the 4 KB bound on an outcome's output (§12.24).
@@ -58,15 +62,93 @@ type AcceptanceGrader interface {
 
 // AcceptanceDir resolves the task's suite directory against the task-set
 // directory. "" when the task has no suite. A path that escapes is refused.
-func (t TaskSpec) AcceptanceDir() (string, error) {
-	if t.Acceptance == "" {
+func (t TaskSpec) AcceptanceDir() (string, error) { return t.taskSetDir("acceptance", t.Acceptance) }
+
+// SeedDir resolves the task's seed directory the same way (GitHub #650). ""
+// when the task has no seed.
+func (t TaskSpec) SeedDir() (string, error) { return t.taskSetDir("seed", t.Seed) }
+
+// taskSetDir resolves a directory a task names relative to its task-set
+// file, refusing one that escapes it.
+func (t TaskSpec) taskSetDir(field, rel string) (string, error) {
+	if rel == "" {
 		return "", nil
 	}
-	clean := filepath.Clean(t.Acceptance)
+	clean := filepath.Clean(rel)
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("task %q acceptance %q must stay inside the task-set directory", t.ID, t.Acceptance)
+		return "", fmt.Errorf("task %q %s %q must stay inside the task-set directory", t.ID, field, rel)
 	}
 	return filepath.Join(t.attachmentBase, clean), nil
+}
+
+// SuiteFiles are a suite directory's test files in the languages the grader
+// runs, sorted: Go and, since GitHub #650, Python. Only these are hashed, so a
+// Go-only suite keeps the digest it had before Python was graded.
+func SuiteFiles(dir string) ([]string, error) {
+	var files []string
+	for _, pattern := range []string{"*.go", "*.py"} {
+		m, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, m...)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// TaskBody is what the task-set digest hashes for one task: its workflow and
+// prompt, as before, and the contents of its seed files when it has a seed,
+// so a changed stub refuses comparison as a changed prompt does (GitHub #650).
+// A task without a seed keeps its body, and so its set keeps its digest.
+func TaskBody(t TaskSpec) (string, error) {
+	body := t.Workflow + "\x00" + t.Prompt
+	dir, err := t.SeedDir()
+	if err != nil || dir == "" {
+		return body, err
+	}
+	files, err := SeedFiles(dir)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(body + "\x00seed:")
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			return "", fmt.Errorf("read seed of %q: %w", t.ID, err)
+		}
+		fmt.Fprintf(&b, "%d:%s%d:%s", len(rel), rel, len(data), data)
+	}
+	return b.String(), nil
+}
+
+// SeedFiles lists a seed directory's regular files as slash-separated paths
+// relative to it, sorted.
+func SeedFiles(dir string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("seed %s holds a symlink (%s); a seed is plain files", dir, p)
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // AcceptanceSetDigest hashes every suite in the set together with which tasks
@@ -84,11 +166,10 @@ func AcceptanceSetDigest(tasks []TaskSpec) (string, error) {
 			entries = append(entries, entry{t.ID, "-"})
 			continue
 		}
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		files, err := SuiteFiles(dir)
 		if err != nil {
 			return "", err
 		}
-		sort.Strings(files)
 		var b strings.Builder
 		for _, f := range files {
 			data, err := os.ReadFile(f)

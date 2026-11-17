@@ -20,6 +20,7 @@ import (
 func keyCov_reset() {
 	keyProject, keyName, keyExpires = "", "", ""
 	keyJSONFlag = false
+	keyListAll = false
 	keyUpdateAddWorkflows, keyUpdateRemoveWorkflows, keyUpdateSetWorkflows = nil, nil, nil
 	keyUpdateAllowPush, keyUpdateDisallowPush = false, false
 	// Clear the shared cobra command's per-flag Changed state. keyUpdateCmd
@@ -130,6 +131,7 @@ func TestRunKeyList_TableAndStatuses(t *testing.T) {
 	t.Setenv("VORNIK_API_URL", srv.URL)
 	keyCov_reset()
 	keyProject = "proj-a"
+	keyListAll = true // #489: without --all the revoked row is hidden
 	out, err := captureStdoutFunc(t, func() error { return runKeyList(keyListCmd, nil) })
 	if err != nil {
 		t.Fatalf("runKeyList: %v", err)

@@ -1,0 +1,16 @@
+{
+  "arms": [
+    "2026.9.0-rc",
+    "2026.9.0-baseline-successor"
+  ],
+  "metric": "pinned_case_validation_score",
+  "targetDelta": 0.05,
+  "sigmaD": 0.0604,
+  "sigmaN": 10,
+  "computedPairs": 12,
+  "independentAxes": [
+    "binary_sha256",
+    "agent_images"
+  ],
+  "rationale": "Full 30-task scored arm on 2026.8.9-61-g704c1b10, the 2026.9.0 release candidate, to produce performance data for the release. LIMITS, registered BEFORE the run rather than explained after. FIRST AND LARGEST: this pass yields ABSOLUTE figures and no delta, because NO SCORED ARM JOURNAL HAS EVER EXISTED on this host — every prior artifact under agentbench-runs/ is a gold pass — and the 2026-08-21 store-clear amendment (release-gate design, Amendment 2026-08-21) voided every pre-clear baseline that might otherwise have been reused. The second arm named here is the successor this becomes the baseline FOR; it is named because that is the comparison these figures are being collected for, and deciding afterwards what to compare against is the line between a benchmark and a press release. Nothing from this pass may be reported as a comparison, a regression, or a release verdict. SECOND: sigmaD 0.0604 is INHERITED, not measured on this task set. It comes from the 2026-08-14 n=10 noise floor over a 3-task subset of simple-workflow + dev-swarm; this set is 30 tasks. It is carried so computedPairs derives from a real measurement rather than a guess, but it DESCRIBES A DIFFERENT SET and must not be quoted as this set's noise floor. The honest sigma for these 30 tasks still does not exist: no calibration.json or noise-floor.json has been built on this host, which is also why `bench agent gate` will correctly REFUSE any release verdict from this pass. THIRD: one repeat per task. Repeats shrink a task's contribution to sigma_d but add no pairs, and a single repeat cannot separate a flaky task from a failing one — so a task failing here is a candidate for investigation, not a measured pass rate. Calibration (3 runs) and a noise floor (2 runs x 10 repeats) are separate, far longer jobs and are NOT what this is. FOURTH: the gold set is dev-swarm-gold-v1.json as restored 2026-08-24 from the first post-clear full pass, which has NOT yet had the operator review it requires before it gates anything; probes reading it here are informational. FIFTH: the daemon and the agent image were both rebuilt at 704c1b10 for this pass and move together, so no delta could attribute either alone; both are declared independent for that reason. Note the agent image's CONTENT is unchanged since c380e996 (images/vornik-agent, cmd/mcp-bridge, cmd/agent-helper, internal/chat and internal/mcp are all untouched across that range), so the image axis is a label change rather than a behavioural one on this occasion. EXPECTED DIRECTION: no expectation is registered, because there is nothing to compare against. What this pass is commissioned to produce is the first defensible absolute figure for the 30-task set and the baseline journal the release gate has been missing since 2026-08-17."
+}

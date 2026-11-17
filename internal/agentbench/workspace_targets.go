@@ -3,6 +3,7 @@ package agentbench
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 )
@@ -65,6 +66,20 @@ func ValidateTaskTargets(tasks []TaskSpec, requireKey bool) error {
 		if task.Acceptance != "" && len(task.Targets) != 1 {
 			return fmt.Errorf("task %q has an acceptance suite, so it must declare exactly one target (it declares %d)",
 				task.ID, len(task.Targets))
+		}
+		// A seed is copied into one target, the same rule (GitHub #650).
+		if task.Seed != "" && len(task.Targets) != 1 {
+			return fmt.Errorf("task %q has a seed, so it must declare exactly one target (it declares %d)",
+				task.ID, len(task.Targets))
+		}
+		if task.Seed != "" && task.attachmentBase != "" {
+			dir, err := task.SeedDir()
+			if err != nil {
+				return err
+			}
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				return fmt.Errorf("task %q: its seed %q is not a directory beside the task set", task.ID, task.Seed)
+			}
 		}
 		for _, tg := range task.Targets {
 			clean := path.Clean(tg)

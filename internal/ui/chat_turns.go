@@ -70,6 +70,9 @@ type chatTurn struct {
 	stopAsked  bool
 	finishedAt time.Time
 	done       chan struct{}
+	// notices are completion notices that arrived while the turn ran; finish
+	// stores them after the turn's own history write (§5 N4, #771).
+	notices []chatNotice
 
 	// The streamed partial reply (§3.2): the head, then a rolling tail once
 	// the head is full; partialLen counts every byte received. The rendered
@@ -97,6 +100,10 @@ type chatTurnRegistry struct {
 	byID    map[string]*chatTurn
 	running map[string]*chatTurn // history key → its running turn
 	now     func() time.Time
+	// storeNotice stores one completion notice (§5 N4); finish calls it under
+	// the lock for each notice a turn queued. Lock order: registry, then
+	// store; no store path calls back into the registry.
+	storeNotice func(historyKey string, n chatNotice)
 }
 
 var (
@@ -323,7 +330,21 @@ func (g *chatTurnRegistry) finish(t *chatTurn, state chatTurnState, fill func(*c
 	if g.running[t.historyKey] == t {
 		delete(g.running, t.historyKey)
 	}
+	if g.storeNotice != nil {
+		for _, n := range t.notices {
+			g.storeNotice(t.historyKey, n)
+		}
+	}
+	t.notices = nil
 	close(t.done)
+}
+
+// WithWebChatLaterDelivery tells the web chat that a task it starts reports
+// back into it (web-chat-design.md §5 N8): the container passes true when
+// the completion notifier delivers to web chat, so the dispatcher's
+// "cannot report back" block (§4) no longer applies.
+func WithWebChatLaterDelivery(on bool) ServerOption {
+	return func(s *Server) { s.webChatLaterDelivery = on }
 }
 
 // WithLongWorkTracker wires the API server's in-flight counter for work that
@@ -334,7 +355,10 @@ func WithLongWorkTracker(f func() (done func(), ok bool)) ServerOption {
 }
 
 func (s *Server) chatTurnRegistry() *chatTurnRegistry {
-	s.chatTurnsOnce.Do(func() { s.chatTurns = newChatTurnRegistry() })
+	s.chatTurnsOnce.Do(func() {
+		s.chatTurns = newChatTurnRegistry()
+		s.chatTurns.storeNotice = s.storeQueuedNotice
+	})
 	return s.chatTurns
 }
 
@@ -453,7 +477,10 @@ func (s *Server) runChatTurn(ctx context.Context, cancel func(), release func(),
 
 	store := s.chatStoreFor(in.projectID)
 	speaker := conversation.Speaker{ID: "web-chat:" + in.sessionID, DisplayName: "Web operator"}
-	channel := webchat.New(in.projectID, speaker)
+	// Tasks this chat starts report back into it when the completion
+	// notifier's web chat branch is wired (web-chat-design.md §5 N8).
+	later := webchat.WithLaterDelivery(s.webChatLaterDelivery)
+	channel := webchat.New(in.projectID, speaker, later)
 	var conv conversation.Channel = channel
 	if in.stream {
 		// The script's turn streams its reply into the registry, which the
@@ -462,7 +489,7 @@ func (s *Server) runChatTurn(ctx context.Context, cancel func(), release func(),
 			if !reg.appendPartial(t, delta) {
 				s.logger.Debug().Str("project", in.projectID).Msg("web chat: a streamed delta arrived after its turn ended; dropped")
 			}
-		})
+		}, later)
 		channel, conv = sc.Channel, sc
 	}
 	receiver := s.chatReceiver(conv, store, in)

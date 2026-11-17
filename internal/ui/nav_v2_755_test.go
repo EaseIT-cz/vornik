@@ -40,15 +40,15 @@ var todayDests = map[string]todayDest{
 	"adoption":            {href: "/ui/insights/adoption"},
 	"trading":             {href: "/ui/trading", cap: "trading"},
 	"audit":               {href: "/ui/audit", adminOnly: true},
-	"admin":               {href: "/ui/admin/", adminArea: true},
+	"admin":               {href: "/ui/admin/", ownerHref: "/ui/admin/", adminArea: true}, // #789
 	"my-account":          {href: "/ui/account", ownerHref: "/ui/account", adminArea: true},
 	"operator":            {href: "/ui/operator/accounts", adminOnly: true, adminArea: true},
 	"regulatory":          {href: "/ui/operator/regulatory", adminOnly: true, adminArea: true},
-	"admin-skills":        {href: "/ui/admin/skills", adminArea: true},
-	"admin-control-plane": {href: "/ui/admin/control-plane", adminArea: true},
+	"admin-skills":        {href: "/ui/admin/skills", ownerHref: "/ui/admin/skills", adminArea: true},
+	"admin-control-plane": {href: "/ui/admin/control-plane", ownerHref: "/ui/admin/control-plane", adminArea: true},
 	"integrations":        {href: "/ui/integrations", adminArea: true},
 	"admin-keys":          {href: "/ui/admin/keys", ownerHref: "/ui/credentials", adminArea: true},
-	"admin-agents":        {href: "/ui/admin/agents", adminArea: true},
+	"admin-agents":        {href: "/ui/admin/agents", ownerHref: "/ui/admin/agents", adminArea: true},
 	// Added by #756 (design §14.2): the Diagnostics overview.
 	"diagnostics-overview": {href: "/ui/diagnostics"},
 	// Added by #757 (design §15.2): the Results page.
@@ -170,7 +170,8 @@ func TestNavV2_EveryAudienceKeepsItsNav_755(t *testing.T) {
 	// My account is the one deliberate gain: open to project users, as
 	// my_account_test requires; the old admin-only area hid it.
 	projectUser := []string{"adoption", "diagnostics-overview", "executions", "insights", "live", "manage-overview", "memory", "my-account", "projects", "quality", "reminders", "results", "spend", "tasks", "trading", "trends"}
-	owner := append(append([]string{}, projectUser...), "admin-keys")
+	// #789: the console pages the owner reads since #787.
+	owner := append(append([]string{}, projectUser...), "admin-keys", "admin", "admin-control-plane", "admin-skills", "admin-agents")
 	var admin []string
 	for k := range todayDests {
 		if k != "inbox" {

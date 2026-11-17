@@ -1,9 +1,9 @@
 ---
 sources:
     - path: README.md
-      sha256: 2542e28b47ff7cfe2277a3cc1e0a4ea514653bbf14719225b88aaf47f144caf2
+      sha256: 30755e42670f7ac0539bdac3399d93fdcaccad658a9cfd0b1b22be82b4fcbcaa
     - path: deployments/macos/install.sh
-      sha256: 42f4aada7d69b56cdec082602f248ef86a1644f65314e8705eb81f87d4048d33
+      sha256: ae75dbfca5e1fb5228be39e2fdea84b6633523d5128f6b75ad8f647c4fe4928f
 ---
 # Getting Started
 

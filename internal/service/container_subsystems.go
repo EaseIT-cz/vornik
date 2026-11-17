@@ -288,7 +288,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			}
 			// An agent project's server is dialled through the SSRF guard
 			// at every call, not only when its tools were listed (P4.3).
-			guardAgentServer(&cfg, p.ID)
+			c.guardAgentServer(&cfg, p.ID)
 			servers = append(servers, cfg)
 		}
 		desired[p.ID] = servers

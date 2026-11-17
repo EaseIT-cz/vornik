@@ -163,6 +163,10 @@ type ChatPageData struct {
 	// (web-chat-design.md §2.1).
 	Exchanges []chatExchange
 
+	// NoticeCount is how many task completion notices History holds; the
+	// page's notices poll asks for those after it (web-chat-design.md §5 N6).
+	NoticeCount int
+
 	// Pending is the running turn of this browser and view, when there is
 	// one: the page shows its message and polls it.
 	Pending *chatPending
@@ -289,6 +293,7 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 // running turn's pending message, when there is one.
 func (s *Server) renderChat(w http.ResponseWriter, data ChatPageData) {
 	data.Exchanges = buildChatExchanges(data.History, data.Marks)
+	data.NoticeCount = len(chatNotices(data.History))
 	s.render(w, "chat.html", data)
 }
 
@@ -347,7 +352,7 @@ func mergeDisclosureIntoHistory(history []chat.Message, ch *webchat.Channel, svc
 func (s *Server) chatPageData(r *http.Request, projectID string) ChatPageData {
 	data := ChatPageData{
 		Title:       "Chat: " + projectID,
-		CurrentPage: "projects",
+		CurrentPage: "chat", // marks the Ask door, not Manage → Assistants (#777)
 		ProjectID:   projectID,
 		Prefill:     truncateRunes(r.URL.Query().Get("q"), askQuestionMaxRunes),
 	}

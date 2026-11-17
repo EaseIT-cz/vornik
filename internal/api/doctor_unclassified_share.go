@@ -82,12 +82,14 @@ func (h *DoctorHandlers) checkUnclassifiedShare(ctx context.Context) DoctorCheck
 	// spelled in lower case. On SQLite it reported `near "'30 days'": syntax
 	// error` as an ERROR verdict on every run. The window is computed in Go
 	// and bound; FILTER becomes SUM(CASE …), which is exact for integer counts.
+	// COALESCE: an empty window sums to NULL, which an int cannot scan; every
+	// fresh instance reported ERROR instead of SKIPPED (GitHub #786).
 	thresholds := h.doctorThresholds()
 	windowDays := thresholds.UnclassifiedShareWindowDays
 
 	var unclassified, failures int
 	err := h.db.QueryRowContext(ctx, `
-		SELECT SUM(CASE WHEN error_class = 'unclassified' THEN 1 ELSE 0 END),
+		SELECT COALESCE(SUM(CASE WHEN error_class = 'unclassified' THEN 1 ELSE 0 END), 0),
 		       COUNT(*)
 		  FROM execution_step_outcomes
 		 WHERE error_class IS NOT NULL AND error_class <> ''

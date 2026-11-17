@@ -1,0 +1,114 @@
+{{define "admin_control_plane_mcp_use.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+    {{/* Use an MCP server's tools in a project. The hub page (control-plane
+         hub design, amendment 2026-11-15, #627) files a proposal for review;
+         the project page (amendment #780, ProjectMode) files it, approves it
+         and applies it in one step. */}}
+    <main id="main" tabindex="-1" class="flex-1 max-w-5xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5">
+            <div class="flex items-center gap-3">
+                {{if .ProjectMode}}
+                <h1 class="text-xl font-semibold text-gray-100">MCP tools for {{.Project}}</h1>
+                <a href="/ui/projects/{{.Project}}" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Project</a>
+                {{else}}
+                <h1 class="text-xl font-semibold text-gray-100">Use {{.Server}} in a project</h1>
+                <a href="/ui/admin/control-plane?section=mcp" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← MCP servers</a>
+                {{end}}
+            </div>
+            {{with .Flash}}<div class="rounded-md bg-dark-800 border border-dark-700 px-3 py-2 text-xs text-brand-300" data-mcp-flash>{{.}}</div>{{end}}
+            {{if .Error}}<div class="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-xs text-red-700 dark:text-red-300">{{.Error}}</div>{{end}}
+
+            {{if .ProjectMode}}
+            <form method="GET" action="/ui/projects/{{.Project}}/mcp-tools" class="flex flex-wrap items-end gap-2">
+                <label class="text-sm text-gray-300">MCP server
+                    <select name="server" class="block mt-1 rounded-md border border-control bg-dark-800 px-2 py-1 text-sm">
+                        <option value="">Choose a server</option>
+                        {{range .Servers}}<option value="{{.}}"{{if eq . $.Server}} selected{{end}}>{{.}}</option>{{end}}
+                    </select>
+                </label>
+                <button type="submit" class="v-btn v-btn--secondary">Show its tools</button>
+            </form>
+            {{with .Pending}}
+            <section class="space-y-2">
+                <h2 class="text-sm font-semibold text-gray-200">Approved, waiting to apply</h2>
+                {{range .}}
+                <form method="POST" action="/ui/projects/{{$.Project}}/mcp-tools" class="flex flex-wrap items-center gap-2 text-sm">
+                    <input type="hidden" name="id" value="{{.ID}}">
+                    <span>{{.Title}}</span>
+                    <button type="submit" name="action" value="apply" class="v-btn v-btn--secondary">Apply now</button>
+                    <button type="submit" name="action" value="withdraw" class="v-btn v-btn--quiet" data-confirm="Withdraw this change? It will not be applied.">Withdraw</button>
+                </form>
+                {{end}}
+            </section>
+            {{end}}
+            {{end}}
+
+            {{if and .Server (not .Error)}}
+            <section class="space-y-2">
+                <h2 class="text-sm font-semibold text-gray-200">Tools</h2>
+                {{if .Unlisted}}
+                <p class="text-sm text-gray-400">The registry has not listed its tools, so there is nothing to grant. Test the server on the MCP tab, then come back.</p>
+                {{else}}
+                <ul class="text-sm space-y-1">{{range .Tools}}<li><code>{{.Name}}</code>{{with .Description}} <span class="text-gray-400">{{.}}</span>{{end}}</li>{{end}}</ul>
+                {{end}}
+            </section>
+
+            <section class="space-y-2">
+                <h2 class="text-sm font-semibold text-gray-200">Who can call them now</h2>
+                {{if .Grants}}
+                <table class="text-sm w-full"><thead><tr class="text-left text-gray-400"><th scope="col" class="py-1 pr-3">Project</th><th scope="col" class="py-1 pr-3">Role</th><th scope="col" class="py-1">Tools</th></tr></thead>
+                <tbody>{{range .Grants}}<tr class="border-t border-dark-700/50"><td class="py-1 pr-3">{{.Project}}</td><td class="py-1 pr-3">{{.Role}}</td><td class="py-1">{{.Access}}</td></tr>{{end}}</tbody></table>
+                {{else}}<p class="text-sm text-gray-400">{{if .ProjectMode}}This project does not subscribe to {{.Server}} yet.{{else}}No project subscribes to {{.Server}} yet.{{end}}</p>{{end}}
+            </section>
+
+            {{if not .ProjectMode}}
+            <form method="GET" action="/ui/admin/control-plane/mcp/use" class="flex flex-wrap items-end gap-2">
+                <input type="hidden" name="server" value="{{.Server}}">
+                <label class="text-sm text-gray-300">Project
+                    <select name="project" class="block mt-1 rounded-md border border-control bg-dark-800 px-2 py-1 text-sm">
+                        <option value="">Choose a project</option>
+                        {{range .Projects}}<option value="{{.}}"{{if eq . $.Project}} selected{{end}}>{{.}}</option>{{end}}
+                    </select>
+                </label>
+                <button type="submit" class="v-btn v-btn--secondary">Show its roles</button>
+            </form>
+            {{end}}
+
+            {{if and .Project .Roles (not .Unlisted)}}
+            <form method="POST" action="{{if .ProjectMode}}/ui/projects/{{.Project}}/mcp-tools{{else}}/ui/admin/control-plane/mcp/use{{end}}" class="space-y-3">
+                <input type="hidden" name="server" value="{{.Server}}">
+                <input type="hidden" name="project" value="{{.Project}}">
+                {{with .SharedWith}}<p class="rounded-md border border-amber-700/50 bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">This swarm also serves {{range $i, $p := .}}{{if $i}}, {{end}}{{$p}}{{end}}: a role grant applies to them too where they subscribe {{$.Server}}.</p>
+                {{if $.ProjectMode}}<label class="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" name="ackShared" value="on"> I understand this also changes {{range $i, $p := .}}{{if $i}}, {{end}}{{$p}}{{end}}</label>{{end}}{{end}}
+                <table class="text-sm w-full">
+                    <thead><tr class="text-left text-gray-400"><th scope="col" class="py-1 pr-3">Role</th>{{range $.Tools}}<th scope="col" class="py-1 pr-3"><code>{{.Name}}</code></th>{{end}}</tr></thead>
+                    <tbody>
+                    {{range $role := .Roles}}
+                    <tr class="border-t border-dark-700/50">
+                        <th scope="row" class="py-1 pr-3 text-left font-medium">{{$role.Name}}</th>
+                        {{if eq $role.Mode "free"}}<td colspan="{{len $.Tools}}" class="py-1 text-gray-400">every tool of the subscribed servers (this role declares no allowlist)</td>
+                        {{else if eq $role.Mode "pattern"}}<td colspan="{{len $.Tools}}" class="py-1 text-gray-400">every tool, by pattern</td>
+                        {{else}}{{range $.Tools}}<td class="py-1 pr-3"><input type="checkbox" name="grant" value="{{$role.Name}}|{{.Name}}"{{if $role.Has .Name}} checked{{end}} aria-label="{{$role.Name}} may call {{.Name}}"></td>{{end}}{{end}}
+                    </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                {{if .ProjectMode}}
+                <p class="text-xs text-gray-400">Applies at once: the project subscribes {{.Server}} where it does not yet, and each role's tool list holds exactly the ticked tools of {{.Server}}. The change is recorded, and the operator can roll it back.</p>
+                <button type="submit" class="v-btn v-btn--primary">Apply the change</button>
+                {{else}}
+                <p class="text-xs text-gray-400">Files one proposal: the project subscribes {{.Server}} where it does not yet, and each role's allowlist holds exactly the ticked tools of {{.Server}}. Nothing changes until it is approved and applied.</p>
+                <button type="submit" class="v-btn v-btn--primary">Propose the change</button>
+                {{end}}
+            </form>
+            {{end}}
+            {{end}}
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

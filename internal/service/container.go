@@ -1014,28 +1014,6 @@ func (c *Container) SetBuildDate(d string) { c.buildDate = d }
 // BuildDate returns the build timestamp set by SetBuildDate.
 func (c *Container) BuildDate() string { return c.buildDate }
 
-func agentCallbackURL(address string) string {
-	if address == "" {
-		return "http://127.0.0.1:8080"
-	}
-	if strings.Contains(address, "://") {
-		return address
-	}
-	// An unspecified host ("", 0.0.0.0, ::) means the daemon listens on every
-	// interface; a container reaches it as host.containers.internal. Any
-	// other host is kept, loopback included: a loopback-bound daemon cannot be
-	// reached over TCP from a container, and rewriting the host would hide
-	// that (doctor agent_daemon_reach names it). The example config's ":8080"
-	// used to become "http://:8080" (onboarding design D6, GitHub #663).
-	if host, port, err := net.SplitHostPort(address); err == nil {
-		if host == "" || host == "0.0.0.0" || host == "::" {
-			return "http://" + net.JoinHostPort("host.containers.internal", port)
-		}
-		return "http://" + net.JoinHostPort(host, port)
-	}
-	return "http://" + address
-}
-
 // NewContainer creates and initializes all services in the correct order.
 //
 // Initialization order (see package docs for details):
@@ -2123,7 +2101,7 @@ func (c *Container) wireComponentMetrics() {
 // by the TCP listener) so Run's select catches it. Setup errors (MkdirAll,
 // Listen, Chmod) are returned directly so Run can fail fast.
 func (c *Container) serveAgentUnixSocket(errCh chan error) error {
-	sock := c.Config.Server.UnixSocket
+	sock := c.Config.DaemonSocketPath() // the managed default too (#786)
 	if sock == "" {
 		return nil
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -61,6 +62,7 @@ func Routes() []Route {
 		{http.MethodPost, "/ui/approve/apr_example", true},
 		{http.MethodGet, "/ui/approve/devices", true},
 		{http.MethodPost, "/ui/approve/devices/dev_example/revoke", true},
+		{http.MethodPost, "/ui/approve/devices/dev_example/remove", true}, // #489
 		// Web Push (GitHub #163, design part 09 §9.3a B.6).
 		{http.MethodGet, "/ui/approve/push", true},
 		{http.MethodPost, "/ui/approve/push", true},
@@ -339,6 +341,8 @@ func (s *Service) approveRouter(w http.ResponseWriter, r *http.Request) {
 		s.standingPage(w, r, strings.TrimPrefix(strings.TrimPrefix(rest, "standing"), "/"))
 	case strings.HasPrefix(rest, "devices/") && strings.HasSuffix(rest, "/revoke"):
 		s.revoke(w, r, strings.TrimSuffix(strings.TrimPrefix(rest, "devices/"), "/revoke"))
+	case strings.HasPrefix(rest, "devices/") && strings.HasSuffix(rest, "/remove"):
+		s.remove(w, r, strings.TrimSuffix(strings.TrimPrefix(rest, "devices/"), "/remove"))
 	case strings.HasSuffix(rest, "/connect") && !strings.Contains(strings.TrimSuffix(rest, "/connect"), "/"):
 		s.connect(w, r, strings.TrimSuffix(rest, "/connect"))
 	case strings.HasPrefix(rest, "group/") && !strings.Contains(strings.TrimPrefix(rest, "group/"), "/"):
@@ -362,6 +366,52 @@ type listData struct {
 	// Withheld are the daemon's lines for suspended agent read tools
 	// (design §6.5 item 6).
 	Withheld []string
+	// Failed are approved requests that could not be applied, recorded in
+	// the last 7 days; FailedMore says more exist than are shown (#669).
+	Failed     []ApplyFailedRow
+	FailedMore bool
+}
+
+// ApplyFailedRow is one approved request that could not be applied (GitHub
+// #669 item 5, design 22 §22.2.16b): read-only, its reason masked and cut.
+// The phone and the console inbox both show these rows.
+type ApplyFailedRow struct {
+	Sentence   string
+	ApprovedAt time.Time
+	Reason     string
+}
+
+const (
+	applyFailedWindow    = 7 * 24 * time.Hour
+	applyFailedShown     = 20
+	applyFailedReasonCut = 200
+)
+
+// ListApplyFailed reads the failed list: one row more than is shown, so a
+// cap is never silent (more is true when rows were left out).
+func (s *Service) ListApplyFailed(ctx context.Context) (rows []ApplyFailedRow, more bool, err error) {
+	got, err := s.repo.ListApplyFailedSince(ctx, s.now().Add(-applyFailedWindow), applyFailedShown+1)
+	if err != nil {
+		return nil, false, err
+	}
+	failed, more := s.applyFailedRows(got)
+	return failed, more, nil
+}
+
+func (s *Service) applyFailedRows(rows []persistence.AgentApprovalRequestRow) ([]ApplyFailedRow, bool) {
+	more := len(rows) > applyFailedShown
+	if more {
+		rows = rows[:applyFailedShown]
+	}
+	out := make([]ApplyFailedRow, 0, len(rows))
+	for _, r := range rows {
+		row := ApplyFailedRow{Sentence: r.Sentence, Reason: cutRunes(s.mask(r.ApplyError), applyFailedReasonCut)} // masked, then cut
+		if r.DecidedAt != nil {
+			row.ApprovedAt = *r.DecidedAt
+		}
+		out = append(out, row)
+	}
+	return out, more
 }
 
 // SetWithheldTools installs the source of the Approvals page's withheld
@@ -404,8 +454,15 @@ func (s *Service) listPage(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("refused"); v != "" {
 		refused = strings.Split(v, ",")
 	}
+	// A read error hides this section; the pending list above it still
+	// loads and stays the page's main job.
+	failed, more, ferr := s.ListApplyFailed(r.Context())
+	if ferr != nil {
+		log.Printf("approverdevice: approvals page: the failed-apply list could not be read; section hidden: %v", ferr)
+	}
 	s.render(w, http.StatusOK, "list.html", listData{Device: d, Pending: singles, Groups: groups,
-		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Push: s.pushListLine(r.Context(), d.ID), Withheld: s.withheldLines(r.Context())})
+		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Push: s.pushListLine(r.Context(), d.ID), Withheld: s.withheldLines(r.Context()),
+		Failed: failed, FailedMore: more})
 }
 
 // groupPending splits pending requests into groups of two or more (by their
@@ -841,6 +898,8 @@ func (s *Service) decideGrant(w http.ResponseWriter, r *http.Request, req *persi
 type devicesData struct {
 	Current *Device
 	Devices []persistence.ApproverDeviceRow
+	// Hidden counts the revoked devices left out unless ?status=all (#489).
+	Hidden int
 }
 
 func (s *Service) devicesPage(w http.ResponseWriter, r *http.Request) {
@@ -854,7 +913,43 @@ func (s *Service) devicesPage(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}
-	s.render(w, http.StatusOK, "devices.html", devicesData{Current: d, Devices: devs})
+	data := devicesData{Current: d, Devices: devs}
+	if r.URL.Query().Get("status") != "all" {
+		data.Devices = nil
+		for _, dv := range devs {
+			if dv.RevokedAt == nil {
+				data.Devices = append(data.Devices, dv)
+			} else {
+				data.Hidden++
+			}
+		}
+	}
+	s.render(w, http.StatusOK, "devices.html", data)
+}
+
+// remove deletes a revoked device (design part 09 §9.2e D2, #489). Like
+// revoke it is not a decision and is not rotated; the middleware has already
+// required a device session and the same origin.
+func (s *Service) remove(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	d, _ := FromRequest(r)
+	principal := "approver_device:"
+	if d != nil {
+		principal += d.ID
+	}
+	switch err := s.Remove(r.Context(), id, principal, "approver_device"); {
+	case err == nil:
+		http.Redirect(w, r, "/ui/approve/devices?status=all", http.StatusSeeOther)
+	case errors.Is(err, persistence.ErrApproverDeviceLive):
+		s.renderStatus(w, http.StatusConflict, "Still an approver", "Revoke this device first, then remove it.")
+	case errors.Is(err, persistence.ErrNotFound):
+		s.renderStatus(w, http.StatusNotFound, "Not found", "There is no such device.")
+	default:
+		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
+	}
 }
 
 // revoke is not a decision and is not rotated (plan amendment 9).

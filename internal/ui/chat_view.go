@@ -5,6 +5,7 @@ import (
 
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/dispatcher"
+	"vornik.io/vornik/internal/webchat"
 )
 
 // chatExchange is one question and its answer as the web chat shows it
@@ -18,6 +19,9 @@ type chatExchange struct {
 	Interim []chatInterim
 	Reply   string
 	Mark    string // the reply's Art 50(2) mark, when it was marked this turn
+	// Notice marks a task completion notice (web-chat-design.md §5 N5):
+	// shown as an entry of its own, never as an exchange's reply.
+	Notice bool
 }
 
 // chatInterim is a sentence the assistant wrote between its tool calls, with
@@ -50,6 +54,12 @@ func buildChatExchanges(history []chat.Message, marks map[int]string) []chatExch
 			out = append(out, chatExchange{User: messageText(m)})
 			cur = len(out) - 1
 		case "assistant":
+			if m.Name == webchat.NoticeName {
+				flush()
+				out = append(out, chatExchange{Notice: true, Reply: m.Content, Mark: marks[i]})
+				cur = -1
+				continue
+			}
 			if cur < 0 {
 				out = append(out, chatExchange{})
 				cur = len(out) - 1

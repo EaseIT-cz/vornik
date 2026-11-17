@@ -218,6 +218,38 @@ func (s *SessionStore) historyWithReadThrough(ctx context.Context, sessionID str
 	return history
 }
 
+// Has reports whether the in-memory cache holds sessionID (no read-through).
+func (s *SessionStore) Has(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.history[sessionID]
+	return ok
+}
+
+// ErrUnknownSession is AppendNotice's answer for a session with no history.
+var ErrUnknownSession = errors.New("webchat: no history for this session")
+
+// AppendNotice adds a completion notice to sessionID's history and saves it
+// (web-chat-design.md §5 N3, GitHub #771): read through the persister, with
+// the erasure fence, as History does; append one assistant message named
+// NoticeName; cap; write through. A history that already holds this notice
+// text is unchanged: the notifier's dedup is in memory, so a restart can
+// deliver one notice twice. A session with no history is
+// ErrUnknownSession: there is no conversation to report into.
+func (s *SessionStore) AppendNotice(ctx context.Context, sessionID, text string) error {
+	history := s.historyWithReadThrough(ctx, sessionID)
+	if len(history) == 0 {
+		return ErrUnknownSession
+	}
+	for _, m := range history {
+		if m.Name == NoticeName && m.Content == text {
+			return nil
+		}
+	}
+	history = append(history, chat.Message{Role: "assistant", Name: NoticeName, Content: text})
+	return s.Append(ctx, conversation.ChannelMessage{SessionID: sessionID}, dispatcher.Result{Messages: history})
+}
+
 // dropSession forgets a session whose stored row moved (art17 redact design
 // §15.18), so the next read starts from the row.
 func (s *SessionStore) dropSession(sessionID string) {

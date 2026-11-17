@@ -10,6 +10,9 @@
 # The CI RPM job runs this; so can anyone with podman (GitHub Actions was
 # unavailable when #726/#728 shipped, so it ran locally first). Found-at level
 # for both issues: e2e-lane (vornik-cloud's image boot test, Fedora 44).
+# GitHub #706 (amendment 2026-11-14): /var/lib/vornik is the service
+# user's after an install, a boot's tmpfiles and an upgrade, and nothing
+# under it is re-owned; found at e2e-lane, tested here in both containers.
 #
 # Env: FEDORA_IMAGE (default fedora:41, the CI job's).
 set -euo pipefail
@@ -59,6 +62,11 @@ check "example config" "test -f /etc/vornik/vornik.yaml.example"
 check "EULA" "test -f /usr/share/doc/vornik-enterprise/EULA.txt"
 /usr/bin/vornik-enterprise migrate-ce 2>&1 | sed -n 1p || true
 
+echo "== #706: the state directory is the service user'"'"'s"
+check "/var/lib/vornik is 0755 vornik:vornik" "[ \"\$(stat -c \"%a %U %G\" /var/lib/vornik)\" = \"755 vornik vornik\" ]"
+check "a boot (the package'"'"'s tmpfiles) gives the directory to vornik and re-owns nothing under it" "command -v systemd-tmpfiles >/dev/null && mkdir -p /var/lib/vornik/probe-706 && chown 4242:4242 /var/lib/vornik/probe-706 && chown root:root /var/lib/vornik && { systemd-tmpfiles --create /usr/lib/tmpfiles.d/vornik-enterprise.conf >/dev/null 2>&1 || true; } && [ \"\$(stat -c %U /var/lib/vornik)\" = vornik ] && [ \"\$(stat -c %u /var/lib/vornik/probe-706)\" = 4242 ]"
+check "an upgrade (reinstall: the preinstall runs) keeps it the service user'"'"'s" "{ dnf reinstall -y /dist/'"$BASE"' >/tmp/dnf706.log 2>&1 || { tail -20 /tmp/dnf706.log; false; }; } && [ \"\$(stat -c \"%U %G\" /var/lib/vornik)\" = \"vornik vornik\" ] && [ \"\$(stat -c %u /var/lib/vornik/probe-706)\" = 4242 ]"
+
 echo "== #726: the registry and the sign-up templates"
 C=/etc/vornik/configs
 check "registry layout (projects, swarms, workflows)" "test -d $C/projects && test -d $C/swarms && test -d $C/workflows"
@@ -97,6 +105,11 @@ dnf install -y "/dist/'"$BASE"'" >/tmp/dnf.log 2>&1 || { echo DNF_FAILED; tail -
 echo "== #732: git is a declared dependency"
 check "the package requires git" "rpm -q --requires vornik-enterprise | grep -qx git"
 check "git is installed (the base image had it: $had_git)" "command -v git >/dev/null"
+
+echo "== #706: the state directory is the service user'"'"'s"
+check "/var/lib/vornik is 0755 vornik:vornik" "[ \"\$(stat -c \"%a %U %G\" /var/lib/vornik)\" = \"755 vornik vornik\" ]"
+check "a boot (the package'"'"'s tmpfiles) gives the directory to vornik and re-owns nothing under it" "command -v systemd-tmpfiles >/dev/null && mkdir -p /var/lib/vornik/probe-706 && chown 4242:4242 /var/lib/vornik/probe-706 && chown root:root /var/lib/vornik && { systemd-tmpfiles --create /usr/lib/tmpfiles.d/vornik-enterprise.conf >/dev/null 2>&1 || true; } && [ \"\$(stat -c %U /var/lib/vornik)\" = vornik ] && [ \"\$(stat -c %u /var/lib/vornik/probe-706)\" = 4242 ]"
+check "an upgrade (reinstall: the preinstall runs) keeps it the service user'"'"'s" "{ dnf reinstall -y /dist/'"$BASE"' >/tmp/dnf706.log 2>&1 || { tail -20 /tmp/dnf706.log; false; }; } && [ \"\$(stat -c \"%U %G\" /var/lib/vornik)\" = \"vornik vornik\" ] && [ \"\$(stat -c %u /var/lib/vornik/probe-706)\" = 4242 ]"
 
 echo "== #731: the daemon owns its config"
 check "config generated" "test -s /etc/vornik/vornik.yaml"

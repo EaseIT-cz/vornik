@@ -856,7 +856,11 @@ func buildArmOver(tasks, axisTasks []agentbench.TaskSpec, gold *agentbench.GoldM
 	bodies := make(map[string]string, len(axis))
 	for _, t := range axis {
 		ids = append(ids, t.ID)
-		bodies[t.ID] = t.Workflow + "\x00" + t.Prompt
+		body, err := agentbench.TaskBody(t)
+		if err != nil {
+			return agentbench.ArmFields{}, err
+		}
+		bodies[t.ID] = body
 	}
 
 	arm := agentbench.ArmFields{
@@ -1369,8 +1373,13 @@ func runBenchAgentTaskSetHash(cmd *cobra.Command, args []string) error {
 		}
 		ids = append(ids, t.ID)
 		// The prompt AND the workflow are the task: the same prompt on a
-		// different workflow is a different experiment.
-		bodies[t.ID] = t.Workflow + "\x00" + t.Prompt
+		// different workflow is a different experiment. A seed's files are
+		// part of it too (GitHub #650): agentbench.TaskBody.
+		body, err := agentbench.TaskBody(t)
+		if err != nil {
+			return err
+		}
+		bodies[t.ID] = body
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %d task(s)\n",
 		agentbench.TaskSetDigest(ids, bodies), len(tasks))

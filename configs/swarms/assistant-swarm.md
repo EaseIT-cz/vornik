@@ -41,7 +41,7 @@ roles:
       #     but geo-blocked.
       #   2026-05-18: gpt-oss-120b — too light; family "config
       #     missing" fabrication on glm-4.7-flash same day.
-      # gpt-5.4 (codex connector, plan-billed) remains the escape
+      # gpt-6-luna (codex connector, plan-billed) remains the escape
       # hatch if both glm-5 and kimi-k2.5 misbehave.
       # 2026-06-02: flipped to codex-subscription primary to cut Bedrock
       # spend (codex is plan-billed/prepaid). Current primary glm-5 is now

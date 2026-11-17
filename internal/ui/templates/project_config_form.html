@@ -542,6 +542,8 @@
                                            class="rounded border-control bg-dark-800 text-brand-500 focus:ring-brand-500">
                                     <span class="truncate text-sm font-semibold text-gray-200">{{$row.Server.Name}}</span>
                                 </label>
+                                {{/* Which roles may call its tools (#627): an admin page that files a proposal. */}}
+                                <a href="/ui/projects/{{$.ProjectID}}/mcp-tools?server={{$row.Server.Name}}" data-admin-link data-owner-href="/ui/projects/{{$.ProjectID}}/mcp-tools?server={{$row.Server.Name}}" class="{{if not (hasAdminFlag $)}}hidden {{end}}text-xs text-brand-400 hover:text-brand-300">Roles that can use it</a>
                                 <span class="flex shrink-0 items-center gap-2 text-xs text-gray-400">
                                     {{if $row.Server.Reachable}}
                                     <span class="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span><span class="sr-only">reachable</span>

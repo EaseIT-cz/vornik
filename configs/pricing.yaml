@@ -291,7 +291,18 @@ models:
   # gpt-5.4-mini, gpt-5.3-codex, and gpt-5.2.
   gpt-5.5:         { input: 5.00,  output: 30.00 }
 
-  # Flagship (gpt-5.4 family) — standard tier:
+  # Current Codex subscription models (#772, 2026-11-14): the Codex CLI
+  # 0.162.0 lists gpt-6-luna (its default), gpt-5.6-terra and
+  # gpt-5.6-luna. gpt-6-luna from OpenAI's GPT-6 Luna model page; the
+  # gpt-5.6 rates are those after OpenAI's 2026-07-30 price cut.
+  gpt-6-luna:      { input: 0.10,  output: 0.50 }
+  gpt-5.6-terra:   { input: 2.00,  output: 12.00 }
+  gpt-5.6-luna:    { input: 0.20,  output: 1.20 }
+
+  # Flagship (gpt-5.4 family) — standard tier. The Codex subscription
+  # refuses gpt-5.4 and gpt-5.4-mini for ChatGPT accounts since 2026-11
+  # (HTTP 400 model_not_found); the rows stay for other providers and
+  # for spend already priced by them.
   gpt-5.4:         { input: 2.50,  output: 15.00 }
   gpt-5.4-mini:    { input: 0.75,  output: 4.50 }
   gpt-5.4-nano:    { input: 0.20,  output: 1.25 }

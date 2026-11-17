@@ -30,9 +30,15 @@ func (s *Server) loadHome(ctx context.Context, r *http.Request, data *DashboardD
 	data.Greeting = greetingFor(now)
 	defer func() { data.StatusLine = homeStatusLine(data.NeedsYouCount, data.DoneToday, data.DoneTodayShown) }()
 	allAccess := requestHasAllProjectAccess(r)
-	data.Spend = s.loadSpendWindows(ctx, r)
-	if allAccess {
-		s.loadActiveTasks(ctx, data)
+	// data.Spend is read by Dashboard with the spend spike (loadHomeSpend).
+	if allAccess && s.taskRepo != nil {
+		// One exact count (§20.2): the Diagnostics loader's task lists fed
+		// TaskCounts, which Home never filled, so this read 0.
+		if n, err := s.taskRepo.Count(ctx, persistence.TaskFilter{Statuses: []persistence.TaskStatus{
+			persistence.TaskStatusRunning, persistence.TaskStatusLeased, persistence.TaskStatusQueued,
+		}}); err == nil {
+			data.ActiveTaskCount = int(n)
+		}
 	}
 	for _, eta := range s.loadAutonomyETAs(ctx) {
 		if api.RequestAllowsProject(r, eta.ProjectID) {

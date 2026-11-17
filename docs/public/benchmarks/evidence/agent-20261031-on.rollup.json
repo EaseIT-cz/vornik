@@ -1,0 +1,49 @@
+{
+  "arm": "2026.10.7-94-gemma4-26b-a4b-llamacpp-full-ro-pids",
+  "attempted": 100,
+  "totalCostUsd": 19.753571389999994,
+  "costPerAttemptUsd": 0.19753571389999994,
+  "costPerSuccessUsd": 0.2036450658762886,
+  "costPerSuccessDefined": true,
+  "failures": {
+    "attempted": 100,
+    "succeeded": 97,
+    "byClass": {
+      "none": 97,
+      "task": 3
+    }
+  },
+  "efficiency": {
+    "tokensPerTask": 325975.03,
+    "toolCallsPerTask": 45.31,
+    "wallClockMsPerTask": 333073.08,
+    "wallClockDefined": true,
+    "grantPrecision": 0,
+    "grantPrecisionDefined": false,
+    "escalations": 0,
+    "schemaRetries": 90
+  },
+  "accuracy": {
+    "schemaConformance": 0.9732360097323601,
+    "schemaConformanceDefined": true,
+    "schemaJudged": 411,
+    "schemaNoOutput": 15,
+    "schemaNoOutputByOutcome": {
+      "degenerate_loop": 3,
+      "failed": 3,
+      "iteration_exhausted": 2,
+      "timeout": 7
+    },
+    "toolCallValidity": 1,
+    "toolCallValidityDefined": true,
+    "unknownToolCalls": 0,
+    "argumentErrors": 0,
+    "pathCoverage": 0,
+    "pathCoverageDefined": false,
+    "pathCoverageN": 0,
+    "coreMisses": 0,
+    "coreShellCovered": 0,
+    "coreSubstituted": 0
+  },
+  "requestPrecisionDiagnosticOnly": false
+}

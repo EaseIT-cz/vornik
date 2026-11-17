@@ -9882,5 +9882,58 @@ UPDATE trading_funnel_candidates
        mae_1 = NULL, mae_3 = NULL, mae_5 = NULL;
 `,
 		Down: `SELECT 1;`,
+	}, {
+		Version: 253,
+		Name:    "memory_verification_demote",
+		// GitHub #550 D2/D5 (design 22, "Amendment 2026-11-15 (#550 D1, D2,
+		// D5)"): vornikctl memory demote-self-certified writes an audited
+		// event of kind demote, and the backup keeps the confidence it
+		// changed so the restore puts it back. NULL in the new columns means
+		// the event recorded no confidence (every event before this one).
+		// SQLite: the sqliteTableRebuilds entry and sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE memory_verification_events
+    DROP CONSTRAINT IF EXISTS memory_verification_events_kind_check;
+ALTER TABLE memory_verification_events
+    ADD CONSTRAINT memory_verification_events_kind_check
+    CHECK (kind IN ('backfill','sweep','restore','demote'));
+ALTER TABLE memory_verification_backup
+    ADD COLUMN IF NOT EXISTS prior_confidence REAL,
+    ADD COLUMN IF NOT EXISTS new_confidence   REAL;
+`,
+		// Down refuses while a demote event exists (code review
+		// review-20261115-723f B1): the backup references events ON DELETE
+		// CASCADE, so deleting them to re-add the old CHECK would destroy the
+		// only record of a demotion and its way back. Restore or archive
+		// those events first.
+		Down: `
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM memory_verification_events WHERE kind = 'demote') THEN
+        RAISE EXCEPTION 'migration 253 down: demote events exist; restore or archive them first (their backups would be lost)';
+    END IF;
+END $$;
+ALTER TABLE memory_verification_backup
+    DROP COLUMN IF EXISTS prior_confidence,
+    DROP COLUMN IF EXISTS new_confidence;
+ALTER TABLE memory_verification_events
+    DROP CONSTRAINT IF EXISTS memory_verification_events_kind_check;
+ALTER TABLE memory_verification_events
+    ADD CONSTRAINT memory_verification_events_kind_check
+    CHECK (kind IN ('backfill','sweep','restore'));
+`,
+	}, {
+		Version: 254,
+		Name:    "task_llm_usage_recorded_at_index",
+		// The instance-wide SumCost (Home, Spend, Diagnostics, Trends)
+		// filters on recorded_at alone, and no index led on it, so PostgreSQL
+		// 16 read the whole table for every window: 35 ms (24 h) and 54 ms
+		// (7 d) at one million rows, 1.0 ms and 6.2 ms with this index
+		// (ui-design-refresh-design.md §20, measured 2026-11-16). SQLite: the
+		// same index in schema.go.
+		Up: `
+CREATE INDEX IF NOT EXISTS idx_task_llm_usage_recorded_at
+    ON task_llm_usage (recorded_at);
+`,
+		Down: `DROP INDEX IF EXISTS idx_task_llm_usage_recorded_at;`,
 	},
 }

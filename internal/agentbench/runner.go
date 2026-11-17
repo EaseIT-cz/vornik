@@ -47,6 +47,13 @@ type TaskSpec struct {
 	// Acceptance is the task's hidden acceptance suite, a directory relative
 	// to the task-set file (benchmark LLD §12.24). Empty: not graded.
 	Acceptance string `json:"acceptance,omitempty"`
+	// Seed is a directory relative to the task-set file whose files are put
+	// into the task's single target before each repeat, after the target is
+	// cleared, so the agents start from them: a borrowed exercise's stubs
+	// (benchmark LLD, Amendment 2026-11-16, GitHub #650). Empty: none. It
+	// resolves against attachmentBase, which loadTaskSet sets; a TaskSpec
+	// built without it skips the load-time seed check (review-20261116-8777 F5).
+	Seed string `json:"seed,omitempty"`
 	// attachmentBase is the directory Attachments resolve against — the task
 	// set's own directory. Unexported so a task-set file cannot set it and
 	// reach outside where it lives.

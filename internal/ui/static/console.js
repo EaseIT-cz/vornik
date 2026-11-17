@@ -297,3 +297,18 @@
     }
     window.addEventListener('hashchange', openHash);
 })();
+
+// No pinch zoom of the page (web-chat-design.md §7, operator 2026-11-15): iOS
+// Safari ignores the viewport's user-scalable=no for pinch, so cancel Safari's
+// gesture events and any touch move with two or more fingers. One finger
+// still scrolls. passive:false so preventDefault takes.
+(function () {
+    if (window.__vornikNoPinch) { return; }
+    window.__vornikNoPinch = true;
+    var stop = function (e) { e.preventDefault(); };
+    document.addEventListener('gesturestart', stop, { passive: false });
+    document.addEventListener('gesturechange', stop, { passive: false });
+    document.addEventListener('touchmove', function (e) {
+        if (e.touches && e.touches.length > 1) { e.preventDefault(); }
+    }, { passive: false });
+})();

@@ -30,14 +30,34 @@ func (h *DoctorHandlers) checkAgentDaemonReach() DoctorCheck {
 			}
 		}
 	}
-	return agentDaemonReach(h.serverAddress, h.defaultNetwork, roleNetworks)
+	return agentDaemonReach(h.serverAddress, h.unixSocketPath, h.defaultNetwork, roleNetworks)
 }
 
-// agentDaemonReach decides the check from the listen address, the default
-// network and each role's own network field ("" = the default), resolved as
-// runtime.Manager resolves them.
-func agentDaemonReach(listen, defaultNetwork string, roleNetworks []string) DoctorCheck {
+// agentDaemonReach decides the check from the listen address, the daemon's
+// socket, the default network and each role's own network field ("" = the
+// default), resolved as runtime.Manager resolves them.
+func agentDaemonReach(listen, socket, defaultNetwork string, roleNetworks []string) DoctorCheck {
 	const name = "agent_daemon_reach"
+	// A daemon-only role reaches the daemon only through the socket; with
+	// none, the runtime omits the mount and the agent has no daemon at all,
+	// whatever the listen address (GitHub #786: a provisioned managed
+	// instance was exactly this, and this check said OK).
+	if socket == "" {
+		daemonOnly := 0
+		for _, n := range roleNetworks {
+			if n == "" {
+				n = defaultNetwork
+			}
+			if n == "daemon-only" {
+				daemonOnly++
+			}
+		}
+		if daemonOnly > 0 {
+			return DoctorCheck{Name: name, Status: "ERROR", Message: fmt.Sprintf(
+				"%d role(s) run daemon-only, which reaches the daemon only through server.unix_socket, and it is empty: those agents have no daemon access; "+
+					"set server.unix_socket, or give those roles another network", daemonOnly)}
+		}
+	}
 	if !listensOnlyOnLoopback(listen) {
 		return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("server.address %q is not loopback, so agent containers reach the daemon over TCP", listen)}
 	}

@@ -142,6 +142,9 @@ type Service struct {
 	// guarded transition, in Decide and Withdraw (withdraw.go seam). Nil in
 	// production.
 	beforeTransition func(op, id string)
+	// audit records a device removal (design part 09 §9.2e, #489); nil
+	// refuses removal, so none goes unrecorded.
+	audit persistence.AdminAuditRepository
 	// pushState is Web Push to the devices (webpush.go, GitHub #163).
 	pushState
 }
@@ -645,6 +648,55 @@ func (s *Service) remint(ctx context.Context, claimToken string) (string, ClaimS
 // Revoke revokes a device; revoking an unknown or revoked device is a no-op.
 func (s *Service) Revoke(ctx context.Context, id string) error {
 	return s.repo.RevokeDevice(ctx, id, s.now())
+}
+
+// ErrNoAudit refuses a device removal while no audit writer is set.
+var ErrNoAudit = errors.New("approver device: removal needs an audit writer")
+
+// SetAudit installs the admin-audit writer a device removal records into
+// (design part 09 §9.2e, GitHub #489).
+func (s *Service) SetAudit(a persistence.AdminAuditRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audit = a
+}
+
+// Remove deletes a revoked device and records it: one device.remove
+// admin_audit row whose detail keeps the label, because approval records
+// store only the device id (§9.2e D2). principal and source name the
+// remover. A live device is persistence.ErrApproverDeviceLive and an unknown
+// one persistence.ErrNotFound. Without an audit writer it refuses
+// (ErrNoAudit) and deletes nothing.
+func (s *Service) Remove(ctx context.Context, id, principal, source string) error {
+	s.mu.RLock()
+	audit := s.audit
+	s.mu.RUnlock()
+	if audit == nil {
+		return ErrNoAudit
+	}
+	var gone *persistence.ApproverDeviceRow
+	devs, err := s.repo.ListDevices(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range devs {
+		if devs[i].ID == id {
+			gone = &devs[i]
+		}
+	}
+	if gone == nil {
+		return persistence.ErrNotFound
+	}
+	if err := s.repo.DeleteRevokedDevice(ctx, id); err != nil {
+		return err
+	}
+	detail := map[string]any{"label": gone.Label, "paired_at": gone.PairedAt.UTC().Format(time.RFC3339), "paired_by": gone.PairedBy}
+	if gone.RevokedAt != nil {
+		detail["revoked_at"] = gone.RevokedAt.UTC().Format(time.RFC3339)
+	}
+	after, _ := json.Marshal(detail)
+	return audit.Insert(ctx, &persistence.AdminAuditEntry{ID: persistence.GenerateID("admaud"), Timestamp: s.now(),
+		Principal: principal, Source: source, Action: "device.remove", Target: id, After: string(after)})
 }
 
 // ListDevices lists every device, revoked ones included.

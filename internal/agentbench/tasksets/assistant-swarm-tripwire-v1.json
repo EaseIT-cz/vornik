@@ -1,0 +1,26 @@
+[
+  {
+    "id": "tw-asst-01-subtask",
+    "targets": [],
+    "name": "tripwire: research-subtask writes findings.md on a self-contained topic",
+    "tier": "tripwire",
+    "workflow": "research-subtask",
+    "prompt": "Topic: the difference between HTTP status codes 401 and 403. Write at most 150 words to artifacts/out/findings.md from general knowledge. Do not browse and do not read repository files."
+  },
+  {
+    "id": "tw-asst-02-research",
+    "targets": [],
+    "name": "tripwire: research completes its lead-researcher-writer cycle",
+    "tier": "tripwire",
+    "workflow": "research",
+    "prompt": "Topic: what a UTC offset is and why it is not the same as a time zone. Keep the whole answer under 200 words, from general knowledge. Do not browse and do not read repository files."
+  },
+  {
+    "id": "tw-asst-03-plan",
+    "targets": [],
+    "name": "tripwire: plan-and-write completes its plan cycle",
+    "tier": "tripwire",
+    "workflow": "plan-and-write",
+    "prompt": "Write a three-step plan for making a cup of tea. One sentence per step, from general knowledge. Do not browse and do not read repository files."
+  }
+]

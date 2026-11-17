@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 470" width="860" height="470" role="img"
+     aria-label="Vornik at a glance. Left: how you reach Vornik — chat (Telegram, Slack, email, web chat), the console and approvals on a paired phone, AI assistants (Claude Code, Codex, Hermes), and automation (API, GitHub, webhooks, schedules). Middle: the Vornik daemon on your host, where a dispatcher routes a chat ask to a project; a project holds a swarm of roles, its workflows, its memory, and its budget and policies, and guards check every step. Right: what Vornik runs and calls — agent containers, isolated with no network by default; models, local or remote; and tools and services such as MCP servers and APIs. Every task, result, cost and decision is recorded.">
+  <title>Vornik at a glance</title>
+  <desc>Who reaches Vornik, what the daemon holds, and what it runs and calls.</desc>
+
+  <!-- Card background: an explicit light ground, as the other figures use. -->
+  <rect width="860" height="470" rx="10" fill="#F6F4EF"/>
+
+  <g font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <text x="32" y="40" font-size="20" font-weight="600" fill="#101826">Vornik at a glance</text>
+    <text x="32" y="62" font-size="13" fill="#5E6672">You ask from where you already work. Vornik runs the work on your host and brings the result back.</text>
+
+    <!-- Column headers -->
+    <g font-size="12" font-weight="600" fill="#5E6672" letter-spacing="0.5">
+      <text x="32" y="98">HOW YOU REACH IT</text>
+      <text x="300" y="98">ON YOUR HOST</text>
+      <text x="598" y="98">WHAT IT RUNS AND CALLS</text>
+    </g>
+
+    <!-- Left: entry points -->
+    <g font-size="13" fill="#101826">
+      <rect x="32" y="112" width="230" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="48" y="138" font-weight="600">Chat</text>
+      <text x="48" y="158" font-size="11.5" fill="#5E6672">Telegram, Slack, email, web chat</text>
+
+      <rect x="32" y="186" width="230" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="48" y="212" font-weight="600">Console and phone</text>
+      <text x="48" y="232" font-size="11.5" fill="#5E6672">the console; approvals on a phone</text>
+
+      <rect x="32" y="260" width="230" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="48" y="286" font-weight="600">AI assistants</text>
+      <text x="48" y="306" font-size="11.5" fill="#5E6672">Claude Code, Codex, Hermes</text>
+
+      <rect x="32" y="334" width="230" height="64" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="48" y="360" font-weight="600">Automation</text>
+      <text x="48" y="380" font-size="11.5" fill="#5E6672">API, GitHub, webhooks, schedules</text>
+    </g>
+
+    <!-- Middle: the daemon -->
+    <rect x="300" y="112" width="260" height="286" rx="14" fill="#FFFFFF" stroke="#101826" stroke-width="2"/>
+    <text x="316" y="134" font-size="14" font-weight="600" fill="#101826">Vornik daemon</text>
+
+    <rect x="316" y="146" width="228" height="42" rx="8" fill="#1C7ED6" fill-opacity="0.10" stroke="#1C7ED6"/>
+    <text x="330" y="164" font-size="13" font-weight="600" fill="#101826">Dispatcher</text>
+    <text x="330" y="180" font-size="11.5" fill="#5E6672">routes a chat ask to a project</text>
+
+    <rect x="316" y="200" width="228" height="156" rx="8" fill="#FFFFFF" stroke="#1C7ED6" stroke-width="1.5"/>
+    <text x="330" y="220" font-size="13" font-weight="600" fill="#101826">Project</text>
+    <text x="388" y="220" font-size="11.5" fill="#5E6672">one per domain, isolated</text>
+    <g font-size="12" fill="#101826">
+      <circle cx="334" cy="244" r="3.5" fill="#1C7ED6"/><text x="344" y="248"><tspan font-weight="600">Swarm</tspan>: a team of roles</text>
+      <circle cx="334" cy="270" r="3.5" fill="#1C7ED6"/><text x="344" y="274"><tspan font-weight="600">Workflows</tspan>: the steps to follow</text>
+      <circle cx="334" cy="296" r="3.5" fill="#1C7ED6"/><text x="344" y="300"><tspan font-weight="600">Memory</tspan>: what it has learned</text>
+      <circle cx="334" cy="322" r="3.5" fill="#1C7ED6"/><text x="344" y="326"><tspan font-weight="600">Budget</tspan> and policies</text>
+    </g>
+    <text x="430" y="382" font-size="12" fill="#101826" text-anchor="middle">Guards check every step</text>
+
+    <!-- Right: what it runs and calls -->
+    <g font-size="13" fill="#101826">
+      <rect x="598" y="112" width="230" height="84" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="614" y="142" font-weight="600">Agent containers</text>
+      <text x="614" y="162" font-size="11.5" fill="#5E6672">one per step, isolated,</text>
+      <text x="614" y="178" font-size="11.5" fill="#5E6672">no network by default</text>
+
+      <rect x="598" y="213" width="230" height="84" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="614" y="243" font-weight="600">Models</text>
+      <text x="614" y="263" font-size="11.5" fill="#5E6672">local or remote, your choice;</text>
+      <text x="614" y="279" font-size="11.5" fill="#5E6672">called through the daemon</text>
+
+      <rect x="598" y="314" width="230" height="84" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <text x="614" y="344" font-weight="600">Tools and services</text>
+      <text x="614" y="364" font-size="11.5" fill="#5E6672">MCP servers and APIs; the</text>
+      <text x="614" y="380" font-size="11.5" fill="#5E6672">daemon holds the credentials</text>
+    </g>
+
+    <!-- Flows: ask in, result back; run and call out -->
+    <g stroke="#101826" stroke-width="1.5" fill="none">
+      <path d="M266 240 L294 240"/><path d="M288 235 L296 240 L288 245"/>
+      <path d="M296 268 L268 268"/><path d="M274 263 L266 268 L274 273"/>
+      <path d="M564 240 L592 240"/><path d="M586 235 L594 240 L586 245"/>
+      <path d="M594 268 L566 268"/><path d="M572 263 L564 268 L572 273"/>
+    </g>
+    <g font-size="10.5" fill="#5E6672" text-anchor="middle">
+      <text x="281" y="232">ask</text>
+      <text x="281" y="284">result</text>
+      <text x="579" y="232">run</text>
+      <text x="579" y="284">output</text>
+    </g>
+
+    <!-- Footer -->
+    <circle cx="44" cy="432" r="4" fill="#6EA83B"/>
+    <text x="54" y="436" font-size="12" fill="#101826">Every task, result, cost and decision is recorded, so you can see what ran, why, and what it cost.</text>
+  </g>
+</svg>

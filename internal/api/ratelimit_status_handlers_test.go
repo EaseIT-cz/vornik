@@ -311,3 +311,7 @@ func (*stubRateLimitAPIKeyRepo) UpdateCapabilities(context.Context, string, pers
 func (*stubRateLimitAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (*stubRateLimitAPIKeyRepo) DeleteRetired(context.Context, string, string, time.Time) error {
+	return nil
+}

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vornik.io/vornik/internal/aimark"
@@ -689,10 +690,13 @@ type Server struct {
 	// chatTurns holds the web chat's background turns (chat_turns.go,
 	// web-chat-design.md §2.3); chatTurnTimeout overrides the 5-minute cap
 	// (tests); longWork counts a running turn for the deploy idle gate.
-	chatTurnsOnce   sync.Once
-	chatTurns       *chatTurnRegistry
-	chatTurnTimeout time.Duration
-	longWork        func() (done func(), ok bool)
+	// webChatLaterDelivery: tasks a web chat starts report back into it
+	// (web-chat-design.md §5 N8, WithWebChatLaterDelivery).
+	webChatLaterDelivery bool
+	chatTurnsOnce        sync.Once
+	chatTurns            *chatTurnRegistry
+	chatTurnTimeout      time.Duration
+	longWork             func() (done func(), ok bool)
 
 	// chatSessionPersister (optional) DB-backs every webchat
 	// SessionStore the lazy chatStoreFor constructs. Set via
@@ -840,6 +844,13 @@ type Server struct {
 	// managedHosting hides the API-key login off the operations listener
 	// (GitHub #560, M1c D3).
 	managedHosting bool
+	// ownerModelProbe checks the owner's model provider before it is saved
+	// (/ui/model-provider, GitHub #794); lookupEnv reads the daemon's
+	// environment (nil: os.LookupEnv); modelProviderSince is when the owner's
+	// save first marked a restart (0: not marked), cleared only by a restart.
+	ownerModelProbe    OwnerModelProbe
+	lookupEnv          func(string) (string, bool)
+	modelProviderSince atomic.Int64
 	// logoutHandler serves POST /ui/logout — revokes the session and
 	// clears the cookie. Nil → the nav renders no logout button and
 	// the route 404s. Wired by WithLogoutHandler to the loginflow
@@ -891,6 +902,9 @@ type Server struct {
 	// agentApprovals lists the requests waiting on the approver device
 	// (inbox_agent_approvals.go). nil hides the section.
 	agentApprovals func(context.Context) ([]persistence.AgentApprovalRequestRow, error)
+	// agentApplyFailed lists approved requests that could not be applied
+	// (inbox_apply_failed.go, #669). nil hides the section.
+	agentApplyFailed func(context.Context) ([]ApplyFailedCard, bool, error)
 	// agents backs /ui/admin/agents (agent-administered Vornik plan P6.5).
 	agents           AgentsSource
 	brokerActionKick func(actionID string)
@@ -2458,6 +2472,9 @@ func (s *Server) Handler() http.Handler {
 	// (admin-class only), and gates itself on SurfaceOperatorCredentials so a
 	// managed instance's owner reaches it (GitHub #623).
 	mux.HandleFunc("/credentials", s.AdminCredentials)
+	// The owner's model-provider page (GitHub #794): managed instances only,
+	// gated on SurfaceModelProvider, outside adminRouter like /credentials.
+	mux.HandleFunc("/model-provider", s.ModelProvider)
 
 	// Guided Integrations Hub (design doc: integrations-hub-design.md,
 	// task 5.3) — catalog + guided per-kind connect flow. Scope-filtered
@@ -2845,6 +2862,12 @@ func (s *Server) projectRouter(w http.ResponseWriter, r *http.Request) {
 		s.ChatTurnStart(w, r, strings.TrimSuffix(path, "/chat/turns"))
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/chat/reset"):
 		s.ChatReset(w, r, strings.TrimSuffix(path, "/chat/reset"))
+	case strings.HasSuffix(path, "/mcp-tools"):
+		// Grant an MCP server's tools to the project's roles (#780).
+		s.ProjectMCPTools(w, r, strings.TrimSuffix(path, "/mcp-tools"))
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/chat/notices"):
+		// Task completion notices for an open page (web-chat-design.md §5 N6).
+		s.ChatNotices(w, r, strings.TrimSuffix(path, "/chat/notices"))
 	case strings.Contains(path, "/chat/turns/"):
 		projectID, rest, _ := strings.Cut(path, "/chat/turns/")
 		turnID, action, _ := strings.Cut(rest, "/")

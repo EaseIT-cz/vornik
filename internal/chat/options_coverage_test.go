@@ -107,6 +107,7 @@ func TestCodexCLIClient_Options(t *testing.T) {
 // TestCodexSubscriptionClient_Options walks the option wrappers + the
 // Model/SetMetrics/ListModels/WithModel surface.
 func TestCodexSubscriptionClient_Options(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no Codex CLI cache: the list is the wired catalog (#773)
 	logger := zerolog.New(nil)
 	c := NewCodexSubscriptionClient("gpt-5.4-mini",
 		WithCodexSubscriptionAuthPath(""),
@@ -140,10 +141,10 @@ func TestCodexSubscriptionClient_Options(t *testing.T) {
 		t.Error("WithModel must not mutate the source client")
 	}
 
-	// Empty model defaults to gpt-5.4-mini.
+	// Empty model defaults to gpt-6-luna (#772).
 	def := NewCodexSubscriptionClient("")
-	if def.Model() != "gpt-5.4-mini" {
-		t.Errorf("default model = %q, want gpt-5.4-mini", def.Model())
+	if def.Model() != "gpt-6-luna" {
+		t.Errorf("default model = %q, want gpt-6-luna", def.Model())
 	}
 
 	// Empty catalog → ListModels returns nil.

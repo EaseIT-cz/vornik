@@ -1,0 +1,56 @@
+[
+  {
+    "id": "lh-01-storage-backends",
+    "targets": ["scratch/lhstore"],
+    "name": "long/deep: one interface, two backends, shared conformance suite",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build a small storage package under scratch/lhstore (package lhstore), in NEW files only; do not modify any existing file.\n\n1. store.go: a Store interface with Put(key string, val []byte) error, Get(key string) ([]byte, bool), Delete(key string) error, Keys() []string, and Len() int. Define typed errors ErrEmptyKey and ErrValueTooLarge, and document the size limit as a package constant MaxValueBytes = 4096.\n2. memory.go: an in-memory Store, safe for concurrent use.\n3. journal.go: a second Store that wraps ANY Store and appends every mutation to an in-memory journal, exposing Journal() []string with entries like \"put:<key>\" and \"delete:<key>\". Reads must not journal.\n4. conformance_test.go: ONE table-driven test suite that runs against BOTH implementations through the interface — empty key rejected, oversized value rejected, round-trip, delete-then-get, Keys after mixed operations, Len consistency.\n5. journal_test.go: journal ordering, that reads do not appear, and that wrapping the memory store leaves its behaviour unchanged.\n6. A concurrency test proving the memory store survives parallel writers with -race semantics.\n\nEvery test must pass. The conformance suite must exercise both backends without duplicating its case table."
+  },
+  {
+    "id": "lh-02-worker-lifecycle",
+    "targets": ["scratch/lhworker"],
+    "name": "long/deep: worker with backoff, leader gate and drain",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build scratch/lhworker (package lhworker) in NEW files only; do not modify any existing file.\n\n1. worker.go: a Worker running a caller-supplied Tick func(ctx) (processed int, err error) on an interval, with Start(ctx) and a Stop() that DRAINS — Stop must not return until an in-flight tick finishes.\n2. backoff.go: failure backoff that doubles the interval on consecutive errors up to a cap and resets on the first success. Pure and separately testable.\n3. gate.go: a LeaderGate interface with IsLeader() bool; a non-leader worker ticks not at all but still stops cleanly.\n4. worker_test.go: covering start/stop, drain-on-stop, tick error handling, and that Stop is idempotent.\n5. backoff_test.go: growth, cap, reset-on-success, and that a zero base interval cannot produce a zero delay.\n6. gate_test.go: leader and non-leader paths, plus a gate that flips mid-run.\n\nUse a fake clock or injected interval so tests are fast and deterministic — no real sleeps beyond a few milliseconds. Every test must pass."
+  },
+  {
+    "id": "lh-03-parser-taxonomy",
+    "targets": ["scratch/lhcfg"],
+    "name": "long/deep: parser with a real error taxonomy and recovery",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build scratch/lhcfg (package lhcfg) in NEW files only; do not modify any existing file.\n\nParse a small line-oriented config format: KEY=VALUE, # comments, [section] headers, blank lines, and line continuations ending in a backslash.\n\n1. parse.go: Parse(io.Reader) (*Config, []ParseError) — it must NOT stop at the first bad line. It collects every error and returns as much valid config as it could read.\n2. errors.go: ParseError carrying Line int, Kind (a typed enum: unknown-key-shape, unterminated-continuation, bad-section-header, duplicate-key), and a message. Kinds must be distinguishable programmatically, not by string matching.\n3. config.go: Config with Get(section, key string) (string, bool), Sections() []string, and a String() that round-trips to a parseable form.\n4. parse_test.go: a table of at least twelve inputs covering every error kind, multiple errors in one document, continuations, duplicate keys within and across sections, and a document that is entirely comments.\n5. roundtrip_test.go: parse -> String -> parse yields an equal Config, including for documents that had errors (the recovered subset must round-trip).\n\nEvery test must pass, and no test may assert on an error's message text."
+  },
+  {
+    "id": "lh-04-cache-eviction",
+    "targets": ["scratch/lhcache"],
+    "name": "long/deep: bounded cache, eviction policy and instrumentation",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build scratch/lhcache (package lhcache) in NEW files only; do not modify any existing file.\n\n1. cache.go: a bounded cache with Get/Put/Delete, a max entry count, and LRU eviction. Safe for concurrent use.\n2. policy.go: the eviction decision behind an interface so a second policy can be added without touching cache.go. Provide LRU and a simple FIFO.\n3. stats.go: Stats() returning hits, misses, evictions, and current size — counters must be accurate under concurrent access.\n4. cache_test.go: eviction order for LRU, that a Get refreshes recency, capacity of one, capacity of zero (must not panic), and delete-of-absent.\n5. policy_test.go: LRU and FIFO exercised through the SAME table, showing where their orders diverge.\n6. stats_test.go: counters after a known sequence, and a concurrent test that total hits+misses equals the number of Gets issued.\n\nEvery test must pass. cache.go must not reference either concrete policy by name."
+  },
+  {
+    "id": "lh-05-state-machine",
+    "targets": ["scratch/lhfsm"],
+    "name": "long/deep: transition table, guards and an audit trail",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build scratch/lhfsm (package lhfsm) in NEW files only; do not modify any existing file.\n\nModel a task lifecycle: queued -> running -> (completed | failed | cancelled), with running -> paused -> running, and terminal states that accept no transitions.\n\n1. fsm.go: a Machine with Transition(to State) error, Current() State, and a declarative transition table — legality must be data, not a switch statement.\n2. guards.go: optional per-transition guard funcs that can veto a legal transition with a reason.\n3. audit.go: every attempted transition recorded with from, to, allowed bool, and reason — including REFUSED ones, because a refused transition is the interesting one.\n4. fsm_test.go: every legal path, several illegal ones, terminal-state immutability, and self-transition handling.\n5. guards_test.go: a guard vetoing, a guard permitting, and that a vetoed transition leaves Current() unchanged.\n6. audit_test.go: that refusals appear in the trail, in order, with reasons.\n\nEvery test must pass. Adding a new state must require editing only the table."
+  },
+  {
+    "id": "lh-06-pipeline-stages",
+    "targets": ["scratch/lhpipe"],
+    "name": "long/deep: staged pipeline with partial failure and rollback",
+    "tier": "exploratory",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "Build scratch/lhpipe (package lhpipe) in NEW files only; do not modify any existing file.\n\n1. pipeline.go: a Pipeline of named Stages run in order, each Stage having Do(ctx, state) error and Undo(ctx, state) error. On a stage failure the pipeline must Undo the stages that already succeeded, in REVERSE order, then return an error naming the failed stage.\n2. state.go: a State carrying typed values between stages with Set/Get and a Snapshot() for assertions.\n3. errors.go: a StageError wrapping the stage name, the underlying error, and whether rollback itself failed — a failed rollback must not hide the original error.\n4. pipeline_test.go: all-succeed, mid-failure rollback order, first-stage failure (nothing to undo), last-stage failure, and context cancellation mid-run.\n5. rollback_test.go: a rollback that itself fails — the returned error must surface BOTH the original failure and the rollback failure.\n6. state_test.go: type safety, absent keys, and that Snapshot is a copy rather than a live view.\n\nEvery test must pass, and no stage may need to know the pipeline's length or its own index."
+  }
+]

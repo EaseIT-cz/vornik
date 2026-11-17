@@ -1,6 +1,6 @@
 # Compliance status
 
-**Last updated:** 12 November 2026
+**Last updated:** 16 November 2026
 
 Where Vornik stands on the EU AI Act and GDPR, including what is not done.
 
@@ -66,11 +66,12 @@ AI Act treats you as the **provider** of that high-risk system (Article
 **2 December 2027**. Using it yourself also makes you its deployer, with the
 Article 26 duties. We then owe you cooperation (Article 25(2)): technical
 documentation, the known limitations and failure modes, and access for
-testing. The first part is published:
-[Building a high-risk system on Vornik](high-risk-systems.md) gives you, point
-by point, what Article 13(3) asks your instructions for use to contain. Still
-to come: human-oversight documentation (Article 14), data governance and an
-Annex IV documentation skeleton. Tell us if you plan such a deployment.
+testing. [Building a high-risk system on Vornik](high-risk-systems.md)
+gives you, point by point, what Article 13(3) asks your instructions for use
+to contain, including human oversight (Article 14) and logs (Article 12); a
+technical documentation skeleton (Annex IV); how to report a serious incident
+(Article 73); and where data governance (Article 10) sits. Tell us if you plan
+such a deployment.
 
 ## GDPR
 
@@ -124,4 +125,4 @@ was sent.
 Security issues: [security](security.md). Compliance and data protection:
 **enterprise@vornik.io**.
 
-<!-- summary-reviewed-through: 2026.11.5 -->
+<!-- summary-reviewed-through: 2026.11.6 -->

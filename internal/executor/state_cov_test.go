@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,7 +75,15 @@ func TestStateCov_ResumeGetByTaskIDError(t *testing.T) {
 // before flipping to Running. Drives the approval branch (the most
 // specific of the resume-state arms).
 func TestStateCov_ResumeApprovalPendingBranch(t *testing.T) {
-	e, _, er, _, tr := setup()
+	// The assertion reads the snapshot Resume persisted, recorded at the
+	// write. Reading the execution row back raced the runExecution goroutine
+	// Resume starts, which may consume the granted step first: the CE export
+	// lane failed it once under load (2026-11-16, gate on a53bb40ef), with
+	// ApprovalGrantedStep already "" (0 failures in 1,100 runs unloaded).
+	rt := NewMockRuntime()
+	er := &firstSnapshotRepo{MockExecRepo: NewMockExecRepo()}
+	tr := NewMockTaskRepo()
+	e := NewWithOptions(rt, er, NewMockArtifactRepo(), tr, nil)
 	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", Status: persistence.TaskStatusPending, CreatedAt: time.Now()})
 	_ = er.Create(context.Background(), &persistence.Execution{
 		ID:            "e1",
@@ -93,10 +102,7 @@ func TestStateCov_ResumeApprovalPendingBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, status)
 
-	// Read back through the repo's locked accessor (returns a copy) so
-	// the assertion doesn't race the spawned runExecution goroutine.
-	got, _ := er.Get(context.Background(), "e1")
-	st := loadExecutionState(got)
+	st := loadExecutionState(&persistence.Execution{StateSnapshot: er.first("e1")})
 	assert.Equal(t, "deploy", st.ApprovalGrantedStep, "pending approval must be promoted to granted")
 	assert.Empty(t, st.ApprovalPendingStep, "pending approval step must be cleared")
 	assert.Empty(t, st.PausedReason, "pause reason must be cleared on approval resume")
@@ -249,4 +255,31 @@ func TestStateCov_CascadeOrphanExecutionsSweepError(t *testing.T) {
 	e, _, _, _, _ := setup()
 	e.execRepo = &stateCov_supersedeErrRepo{MockExecRepo: NewMockExecRepo()}
 	e.cascadeOrphanExecutions(context.Background(), "t1") // must not panic
+}
+
+// firstSnapshotRepo records the first state snapshot saved for each
+// execution, so a test can assert what one write persisted while a goroutine
+// the code under test started keeps writing.
+type firstSnapshotRepo struct {
+	*MockExecRepo
+	mu    sync.Mutex
+	saved map[string][]byte
+}
+
+func (r *firstSnapshotRepo) SaveStateSnapshot(ctx context.Context, id string, snapshot []byte, currentStepID string, completedSteps []string) error {
+	r.mu.Lock()
+	if r.saved == nil {
+		r.saved = map[string][]byte{}
+	}
+	if _, ok := r.saved[id]; !ok {
+		r.saved[id] = append([]byte(nil), snapshot...)
+	}
+	r.mu.Unlock()
+	return r.MockExecRepo.SaveStateSnapshot(ctx, id, snapshot, currentStepID, completedSteps)
+}
+
+func (r *firstSnapshotRepo) first(id string) []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.saved[id]
 }

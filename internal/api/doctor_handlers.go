@@ -517,10 +517,10 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.snapshotDBCredentials(cfg)
 	h.artifactsRoot = cfg.Storage.ArtifactsPath
 	h.workspacesRoot = cfg.Runtime.ProjectWorkspacePath
-	h.webWritesMode, _ = cfg.Web.WritesMode() // invalid values fail Validate() at startup
-	h.agentLLMEndpoint = cfg.Runtime.AgentLLM.Endpoint
+	h.webWritesMode, _ = cfg.Web.WritesMode()            // invalid values fail Validate() at startup
+	h.agentLLMEndpoint = cfg.AgentContainerLLMEndpoint() // what the executor injects (#786)
 	h.defaultNetwork = cfg.Runtime.DefaultNetwork
-	h.unixSocketPath = cfg.Server.UnixSocket
+	h.unixSocketPath = cfg.DaemonSocketPath()
 	h.chatEndpoint = cfg.Chat.Endpoint
 	h.chatAPIKey = cfg.Chat.APIKey
 	h.chatProvider = cfg.Chat.Provider

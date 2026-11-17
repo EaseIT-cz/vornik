@@ -34,7 +34,7 @@ func Link(channelName, url, label string) string {
 		// would truncate the link silently, so they are stripped rather than
 		// escaped (there is no escape for them in mrkdwn).
 		return "<" + url + "|" + strings.NewReplacer("<", "", ">", "", "|", "/").Replace(label) + ">"
-	case "telegram", "email":
+	case "telegram", "email", "web-chat":
 		return "[" + label + "](" + url + ")"
 	default:
 		return label + " (" + url + ")"

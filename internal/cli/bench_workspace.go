@@ -110,7 +110,13 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 	if err != nil {
 		return "", err
 	}
-	if len(present) == 0 && single {
+	seed, err := spec.SeedDir()
+	if err != nil {
+		return "", err
+	}
+	// A seeded task always resets, so each repeat starts from a root commit
+	// holding exactly its seed (GitHub #650).
+	if len(present) == 0 && single && seed == "" {
 		return "", nil
 	}
 	if len(present) > 0 {
@@ -118,16 +124,55 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 			return "", err
 		}
 	}
-	root, err := w.replaceHistory(ctx, gitDir, spec, repeat, leftovers)
-	if err != nil {
-		return "", err
-	}
+	// The removed paths are checked BEFORE the seed goes back in, so a seeded
+	// file is never mistaken for a leftover (round 4, review-20261116-0c7d H2).
 	for _, tg := range present {
 		if _, err := os.Stat(filepath.Join(w.dir, tg)); !os.IsNotExist(err) {
 			return "", fmt.Errorf("%s still present after the reset", tg)
 		}
 	}
-	return root, nil
+	if seed != "" {
+		if err := w.applySeed(ctx, spec, seed); err != nil {
+			return "", err
+		}
+	}
+	return w.replaceHistory(ctx, gitDir, spec, repeat, leftovers)
+}
+
+// applySeed copies the seed's files into the task's single target and stages
+// exactly those files, so the root commit replaceHistory writes holds them
+// (benchmark design, Amendment 2026-11-16, GitHub #650).
+func (w gitWorkspace) applySeed(ctx context.Context, spec agentbench.TaskSpec, seed string) error {
+	if len(spec.Targets) != 1 {
+		return fmt.Errorf("task %q has a seed, so it must declare exactly one target (it declares %d)", spec.ID, len(spec.Targets))
+	}
+	files, err := agentbench.SeedFiles(seed)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("task %q: seed %s holds no files", spec.ID, seed)
+	}
+	target := filepath.Clean(spec.Targets[0])
+	staged := make([]string, 0, len(files))
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(seed, filepath.FromSlash(rel)))
+		if err != nil {
+			return fmt.Errorf("read seed of %q: %w", spec.ID, err)
+		}
+		dst := filepath.Join(w.dir, target, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return err
+		}
+		staged = append(staged, filepath.ToSlash(filepath.Join(target, filepath.FromSlash(rel))))
+	}
+	if _, err := w.git(ctx, append([]string{"add", "-f", "--"}, staged...)...); err != nil {
+		return fmt.Errorf("stage the seed of %q: %w", spec.ID, err)
+	}
+	return nil
 }
 
 // specialHeads are the refs git keeps as files outside refs/. Each can name an

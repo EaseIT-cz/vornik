@@ -768,9 +768,11 @@ type AgentAdminConfig struct {
 	// Models is the catalogue of models an agent's roles may name
 	// (agent-administered design §18.6 item 2). Empty: no model is offered.
 	// PrivateAPIHosts are intranet hosts an agent project's approved https
-	// API may reach on a private address (agent-administered design part 06,
-	// §6.7, GitHub #734). Self-hosted only; folded at load.
-	PrivateAPIHosts []string           `yaml:"private_api_hosts" doc:"Host names an agent project's approved API may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the API's base URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API still needs its approval on an approver device. Empty (the default): agent APIs reach public addresses only. Refused under hosting.mode managed."`
+	// API or MCP server may reach on a private address (agent-administered
+	// design part 06, §6.7, GitHub #734; §6.8, GitHub #740). Self-hosted only;
+	// folded at load. Not renamed when it gained MCP servers: it shipped in
+	// 2026.11.5.
+	PrivateAPIHosts []string           `yaml:"private_api_hosts" doc:"Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed."`
 	Models          []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
 }
 
@@ -2989,10 +2991,13 @@ type ChatBedrockSubConfig struct {
 // only tools we declare are visible to the model.
 type ChatCodexSubscriptionSubConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// AuthPath overrides ~/.codex/auth.json. Empty = default.
-	AuthPath string `yaml:"auth_path"`
+	// AuthPath overrides ~/.codex/auth.json. Empty = default. A separate
+	// copy keeps the daemon and the interactive CLI from spending each
+	// other's single-use refresh tokens, but `codex login` then no longer
+	// reaches the daemon (subscription-auth.md, amendment 2026-11-14).
+	AuthPath string `yaml:"auth_path" doc:"The daemon's own copy of the Codex login; empty = ~/.codex/auth.json. With a separate copy, codex login does not reach the daemon: after logging in, copy ~/.codex/auth.json to this path (mode 0600); the daemon picks it up within a minute."`
 	// Model is the default model id passed in the request body.
-	// Empty = "gpt-5.4-mini".
+	// Empty = "gpt-6-luna" (#772; the subscription refuses gpt-5.4).
 	Model string `yaml:"model"`
 	// EffortLevel is the `reasoning.effort` field. Accepts
 	// "low" | "medium" | "high". Empty = don't send the field.

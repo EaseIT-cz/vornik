@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -354,7 +356,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		if cfg.Storage.ArtifactsPath == "" {
 			fmt.Println("  (skipping artifacts: no storage.artifacts_path configured)")
 		} else {
-			if err := copyDir(artifactsSrc, cfg.Storage.ArtifactsPath); err != nil {
+			if err := restoreTree(artifactsSrc, cfg.Storage.ArtifactsPath); err != nil {
 				return fmt.Errorf("restore artifacts: %w", err)
 			}
 			fmt.Printf("✔ artifacts restored to %s\n", cfg.Storage.ArtifactsPath)
@@ -367,7 +369,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		if cfg.Runtime.ProjectWorkspacePath == "" {
 			fmt.Println("  (skipping project workspaces: no runtime.project_workspace_path configured)")
 		} else {
-			if err := copyDir(workspacesSrc, cfg.Runtime.ProjectWorkspacePath); err != nil {
+			if err := restoreTree(workspacesSrc, cfg.Runtime.ProjectWorkspacePath); err != nil {
 				return fmt.Errorf("restore project workspaces: %w", err)
 			}
 			fmt.Printf("✔ project workspaces restored to %s\n", cfg.Runtime.ProjectWorkspacePath)
@@ -402,6 +404,53 @@ func runRestore(cmd *cobra.Command, args []string) error {
 func copyFile(src, dst string) error { return archiveutil.CopyFile(src, dst) }
 
 func copyDir(src, dst string) error { return archiveutil.CopyDir(src, dst) }
+
+// restoreEUID and restoreLchown are restore_owner_706_test.go's seams.
+var (
+	restoreEUID   = os.Geteuid
+	restoreLchown = os.Lchown
+)
+
+// restoreTree copies src into dst and, as root, gives the destination and
+// every copied directory and regular file the owner of dst's parent
+// (Lchown; archiveutil.CopyDir skips links). On a package install the parent
+// is /var/lib/vornik, the service user's, so the daemon can write what was
+// restored; before GitHub #706 only the start-time chown walk handed it back
+// (enterprise-packaging-design.md amendment 2026-11-14). Run as another
+// user, it changes no owner.
+func restoreTree(src, dst string) error {
+	if err := copyDir(src, dst); err != nil {
+		return err
+	}
+	if restoreEUID() != 0 {
+		return nil
+	}
+	info, err := os.Stat(filepath.Dir(filepath.Clean(dst)))
+	if err != nil {
+		return fmt.Errorf("owner of %s: %w", filepath.Dir(dst), err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("owner of %s: no uid on this platform; the restored tree kept the copy's owner", filepath.Dir(dst))
+	}
+	uid, gid := int(st.Uid), int(st.Gid)
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		if err := restoreLchown(filepath.Join(dst, rel), uid, gid); err != nil {
+			return fmt.Errorf("give %s to %d:%d: %w", filepath.Join(dst, rel), uid, gid, err)
+		}
+		return nil
+	})
+}
 
 func tarGzDir(dir, out string) error { return archiveutil.TarGzDir(dir, out) }
 

@@ -391,7 +391,7 @@ func TestRenderKeyRows_StatusAndNullDisplay(t *testing.T) {
 		{ID: "r", Name: "revoked", KeyPrefix: "p", CreatedAt: now,
 			RevokedAt: &revoked},
 	}
-	got := renderKeyRows(in)
+	got := renderKeyRows(in, now)
 	require.Len(t, got, 2)
 	assert.Equal(t, "active", got[0].Status)
 	assert.NotEqual(t, "—", got[0].LastUsed)
@@ -399,6 +399,8 @@ func TestRenderKeyRows_StatusAndNullDisplay(t *testing.T) {
 	assert.Equal(t, "revoked", got[1].Status)
 	assert.Equal(t, "—", got[1].LastUsed) // nil → "—"
 	assert.Equal(t, "—", got[1].Expires)
+	// #489: past its expiry a key reads "expired", not "active".
+	assert.Equal(t, "expired", renderKeyRows(in[:1], expires.Add(time.Minute))[0].Status)
 }
 
 func (*uiMemAPIKeyRepo) UpdateCapabilities(context.Context, string, persistence.APIKeyCapabilities) error {
@@ -410,4 +412,20 @@ func (*uiMemAPIKeyRepo) UpdateCapabilities(context.Context, string, persistence.
 // answer rather than a silent partial one.
 func (*uiMemAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
+}
+
+func (m *uiMemAPIKeyRepo) DeleteRetired(_ context.Context, projectID, keyID string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, r := range m.rows {
+		if r.ID != keyID || r.ProjectID != projectID {
+			continue
+		}
+		if r.RevokedAt == nil && (r.ExpiresAt == nil || r.ExpiresAt.After(now)) {
+			return persistence.ErrAPIKeyLive
+		}
+		m.rows = append(m.rows[:i], m.rows[i+1:]...)
+		return nil
+	}
+	return persistence.ErrAPIKeyNotFound
 }

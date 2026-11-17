@@ -1,0 +1,46 @@
+[
+  {
+    "id": "tw-ing-01-ingest",
+    "targets": [],
+    "name": "tripwire: ingest structures a staged document and writes ingestion.md",
+    "tier": "tripwire",
+    "workflow": "ingest",
+    "attachments": [
+      "fixtures/tw-review-subject.md"
+    ],
+    "prompt": "Structure the attached document into clean retrieval-friendly notes and write them to artifacts/out/ingestion.md. Work only from the staged file — do not browse, do not call recall, and do not read repository files. Keep it short: the point is the notes exist and reflect the document."
+  },
+  {
+    "id": "tw-ing-02-docingest",
+    "targets": [],
+    "name": "tripwire: document-ingest extracts and indexes a staged document",
+    "tier": "tripwire",
+    "workflow": "document-ingest",
+    "attachments": [
+      "fixtures/tw-review-subject.md"
+    ],
+    "prompt": "Extract and index the attached document into project memory."
+  },
+  {
+    "id": "tw-ing-03-ragingest",
+    "targets": [],
+    "name": "tripwire: companion-rag-ingest lands a staged artifact through IngestText",
+    "tier": "tripwire",
+    "workflow": "companion-rag-ingest",
+    "attachments": [
+      "fixtures/tw-review-subject.md"
+    ],
+    "prompt": "Ingest the attached document into project memory."
+  },
+  {
+    "id": "tw-vis-01-look",
+    "targets": [],
+    "name": "tripwire: vision reads text off a staged image",
+    "tier": "tripwire",
+    "workflow": "vision",
+    "attachments": [
+      "fixtures/tw-vision-subject.png"
+    ],
+    "prompt": "Read the text in the attached image and report it verbatim. There are two lines: an identifier of the form VORNIK-TRIPWIRE-<digits>, and a short description. Quote both exactly as they appear. Do not describe the image beyond that text."
+  }
+]

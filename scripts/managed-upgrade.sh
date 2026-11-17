@@ -11,7 +11,8 @@
 #   managed-upgrade --rollback --from-package CURRENT.rpm
 #
 # The order: check (signatures, versions, no upgrade in progress, the EULA
-# from the new package's own binary) → the idle gate --drain, then stop →
+# from the new package's own binary, then rpm -U --test: amendment
+# 2026-11-14, #775) → the idle gate --drain, then stop →
 # snapshot the stopped instance → install → start. The rollback boundary is
 # the unit becoming active (Type=notify: READY=1 after the listeners serve).
 # A failed start rolls back by itself: the from-version reinstalled, the
@@ -199,6 +200,17 @@ if ! "$newbin" eula check >/dev/null 2>&1; then
     fail eula "the new version's EULA (sha256 $hash) is not accepted; pass --eula-hash with that hash once the customer has accepted it"
   accept_eula=1
 fi
+# The transaction check, last: a missing requirement (or a conflict, or a
+# held RPM lock) is found before anything stops, not at step 4 as a
+# rollback (GitHub #775). LC_ALL=C pins RPM's messages. The full output goes
+# to stderr; 512 printable-ASCII characters go into the reason, so the JSON
+# line stays one line with no control character, which vornik-cloud's
+# parser (internal/provision/upgrade.go) refuses.
+if ! deps_out=$(LC_ALL=C "$MU_RPM" -U --test --define '_pkgverify_level signature' "$package" 2>&1); then
+  printf '%s\n' "$deps_out" >&2
+  fail deps "the transaction check refused the package: $(printf '%s' "$deps_out" | tr '\t\n\r' '   ' | LC_ALL=C tr -cd ' -~' | tr -s ' ' | cut -c1-512)"
+fi
+[ -z "$deps_out" ] || printf '%s\n' "$deps_out" >&2
 
 # 2. Wait for idle, drain, stop: nothing is cut, then nothing writes.
 "$MU_GATE" --drain --drain-ttl "$drain_ttl" --config "$MU_CONFIG" >&2 || fail gate "the idle gate did not reach idle (see stderr)"

@@ -150,6 +150,7 @@ var keyRoutes613 = []struct{ method, path string }{
 	{http.MethodPut, "/keys/akey_x/workflows"},
 	{http.MethodPut, "/keys/akey_x/allow-push"},
 	{http.MethodDelete, "/keys/akey_x"},
+	{http.MethodPost, "/keys/akey_x/remove"}, // #489
 }
 
 func TestPlainKey613_WorkflowListedKeyReachesOnlyA2A(t *testing.T) {

@@ -27,7 +27,7 @@ func TestRenderKeyRows_NoRateLimit(t *testing.T) {
 			KeyPrefix: "sk-vornik-p.ab12",
 			CreatedAt: now,
 		},
-	})
+	}, now)
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
@@ -53,7 +53,7 @@ func TestRenderKeyRows_WithRateLimit(t *testing.T) {
 			RateLimitRPS:   &rps,
 			RateLimitBurst: &burst,
 		},
-	})
+	}, time.Now())
 	if !rows[0].RateLimited {
 		t.Error("RateLimited should be true with non-zero rps + burst")
 	}

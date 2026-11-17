@@ -125,18 +125,34 @@
    inside it. */
 @layer components {
     .chat-shell {
-        @apply mx-auto flex w-full max-w-3xl flex-col px-4 sm:px-6;
+        @apply mx-auto flex w-full max-w-3xl flex-col px-3 sm:px-6;
         min-height: calc(100dvh - 4rem);
     }
+    .chat-shell > header {
+        @apply py-1 sm:py-3;
+    }
+    .chat-shell > header h1 {
+        @apply text-sm sm:text-base;
+    }
     .chat-thread {
-        @apply flex-1 space-y-6 py-4;
+        @apply flex-1 space-y-4 py-3 sm:space-y-6 sm:py-4;
     }
     .chat-user {
-        @apply max-w-[85%] rounded-2xl bg-surface-700 px-4 py-2.5 text-base leading-relaxed text-ink-100 whitespace-pre-wrap;
+        @apply max-w-[85%] rounded-2xl bg-surface-700 px-3 py-2 text-sm leading-6 text-ink-100 whitespace-pre-wrap sm:px-4 sm:py-2.5 sm:text-base sm:leading-relaxed;
         overflow-wrap: anywhere;
     }
     .chat-assistant {
-        @apply min-w-0 text-base leading-relaxed text-ink-100;
+        @apply min-w-0 text-sm leading-6 text-ink-100 sm:text-base sm:leading-relaxed;
+    }
+    /* A reply's text in a bubble on the left, a shade apart from the
+       person's (web-chat-design.md §7, 2026-11-15). The streaming reply and
+       the task notice share it. */
+    .chat-assistant > .chat-md {
+        @apply w-fit max-w-full rounded-2xl border border-surface-700 bg-surface-800 px-3 py-2 sm:px-4 sm:py-2.5;
+    }
+    .chat-assistant > .chat-md pre,
+    .chat-assistant > .chat-md th {
+        @apply bg-surface-900;
     }
     .chat-who {
         @apply mb-1 flex items-center gap-2 text-xs font-medium text-ink-400;
@@ -158,13 +174,13 @@
         overflow-wrap: anywhere;
     }
     .chat-md > * + * {
-        @apply mt-3;
+        @apply mt-2 sm:mt-3;
     }
     .chat-md h1 { @apply text-xl font-semibold; }
     .chat-md h2 { @apply text-lg font-semibold; }
     .chat-md h3, .chat-md h4 { @apply text-base font-semibold; }
-    .chat-md ul { @apply list-disc space-y-1 pl-6; }
-    .chat-md ol { @apply list-decimal space-y-1 pl-6; }
+    .chat-md ul { @apply list-disc space-y-1 pl-5 sm:pl-6; }
+    .chat-md ol { @apply list-decimal space-y-1 pl-5 sm:pl-6; }
     .chat-md a { @apply text-accent-500 underline underline-offset-2; }
     .chat-md blockquote { @apply border-l-2 border-surface-600 pl-3 text-ink-300; }
     .chat-md code { @apply rounded bg-surface-700 px-1 py-0.5 font-mono text-xs; }
@@ -183,6 +199,14 @@
     .chat-actions {
         @apply mt-1 flex gap-1 text-ink-500;
     }
+    /* A reply's Copy icon: 32px below sm (WCAG 2.5.8 asks 24), so it does not
+       open a 44px gap under every reply on a phone (web-chat-design.md §6). */
+    @media (max-width: 639px) {
+        .chat-actions .v-btn {
+            min-height: 32px;
+            padding: 4px 6px;
+        }
+    }
     .chat-thinking {
         @apply text-sm text-ink-400;
     }
@@ -193,18 +217,54 @@
         .chat-thinking-dot { animation: none; }
     }
     .chat-composer-wrap {
-        @apply sticky bottom-0 bg-surface-900 pb-4 pt-2;
+        @apply sticky bottom-0 bg-surface-900 pb-2 pt-1 sm:pb-4 sm:pt-2;
+    }
+    .chat-composer-wrap > form > p {
+        @apply hidden sm:block;
     }
     .chat-composer {
-        @apply flex items-end gap-2 rounded-3xl bg-surface-800 py-2 pl-4 pr-2 shadow-sm focus-within:border-accent-500;
+        @apply flex items-end gap-2 rounded-3xl bg-surface-800 py-1 pl-3 pr-1.5 shadow-sm focus-within:border-accent-500 sm:py-2 sm:pl-4 sm:pr-2;
     }
     .chat-composer textarea {
         @apply max-h-48 min-h-[1.5rem] flex-1 resize-none border-0 bg-transparent py-1.5 text-base leading-6 text-ink-100 outline-none placeholder:text-ink-500;
     }
     .chat-send {
-        @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0;
+        @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-full p-0 sm:h-9 sm:w-9;
+    }
+    /* Below md the phone bar is fixed over the bottom 64px plus the safe-area
+       inset (_partials.html): keep the composer above it, size the shell to
+       what the body padding leaves, and give the bar's room to the keyboard
+       while the composer has focus (web-chat-design.md §6). */
+    @media (max-width: 767px) {
+        /* 65px: the bar's 64px row plus its 1px top border. */
+        .chat-shell {
+            min-height: calc(100dvh - 65px - env(safe-area-inset-bottom) - env(safe-area-inset-top));
+        }
+        .chat-composer-wrap {
+            bottom: calc(65px + env(safe-area-inset-bottom));
+        }
+        body:has([data-chat-input]:focus) {
+            padding-bottom: 0;
+        }
+        body:has([data-chat-input]:focus) [data-phone-bar] {
+            display: none;
+        }
+        body:has([data-chat-input]:focus) .chat-composer-wrap {
+            bottom: 0;
+        }
     }
     .chat-suggest {
         @apply rounded-xl text-left text-sm;
+    }
+}
+
+/* No accidental zoom on a phone (web-chat-design.md §7, 2026-11-15): iOS
+   zooms into a focused input under 16px, and a double tap zooms any page. */
+html {
+    touch-action: manipulation;
+}
+@media (max-width: 639px) {
+    input, textarea, select {
+        font-size: 16px !important;
     }
 }

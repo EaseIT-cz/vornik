@@ -298,6 +298,7 @@ func (c *Container) initHTTPServer() error {
 		api.WithRatingRollupRepository(c.repos.RatingRollup),
 		api.WithProposalStore(c.repos.Proposals),
 		api.WithProposalApplier(c.newProposalApplier()),
+		api.WithAccountTransitionRecovery(accountRecovery{c: c}),
 		api.WithDiagnoser(c.newDiagnoser()),
 		api.WithAPIKeyLimiter(c.apiKeyLimiter),
 		// Per-IP backstop (hardening sub-item 2). Same instance is
@@ -1707,6 +1708,10 @@ func (c *Container) initHTTPServer() error {
 			Msg("credential session exchange enabled: POST /api/v1/auth/session")
 	}
 
+	// GitHub #794 (operations-API design §6.12 R1/R2): setup/status reads the
+	// one restart-pending registry, the UI's, plus the reloader's restart-only
+	// diff. Read lazily: the UI server is built after this one.
+	apiOpts = append(apiOpts, api.WithRestartPendingSource(c.restartPendingReasons))
 	apiServer := api.NewServer(apiOpts...)
 	c.apiServer = apiServer
 	// The webhook and backlog-deposit checkpoints record their findings too
@@ -1820,7 +1825,7 @@ func (c *Container) initHTTPServer() error {
 		// NewContainer, so the snapshot is populated by this point.
 		dh.SetSystemHandlerNames(c.systemHandlerNames)
 		dh.SetGitConfigComposition(c.gitConfigComposition) // nil → SKIPPED
-		dh.SetGatewayURL(c.Config.Gateway.Address)         // empty when unconfigured → SKIPPED
+		dh.SetGatewayURL(gatewayDoctorURL(c.Config))
 		// project_dependencies (dependency provisioning design §8.2): read
 		// per doctor run from the live registry, through the same planner
 		// the mount path uses. Unwired when no cache is configured, so the
@@ -2157,6 +2162,16 @@ func (c *Container) initHTTPServer() error {
 	if c.repos != nil && c.repos.ApproverDevices != nil {
 		uiOpts = append(uiOpts, ui.WithAgentApprovals(func(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
 			return c.approverDeviceService().ListPending(ctx)
+		}))
+		// Approved requests that could not be applied (#669 item 5), read,
+		// masked and cut by the same service the phone uses.
+		uiOpts = append(uiOpts, ui.WithAgentApplyFailed(func(ctx context.Context) ([]ui.ApplyFailedCard, bool, error) {
+			rows, more, err := c.approverDeviceService().ListApplyFailed(ctx)
+			cards := make([]ui.ApplyFailedCard, 0, len(rows))
+			for _, r := range rows {
+				cards = append(cards, ui.ApplyFailedCard{Sentence: r.Sentence, ApprovedAt: r.ApprovedAt, Reason: r.Reason})
+			}
+			return cards, more, err
 		}))
 	}
 	// The overview's doctor line: the last report's error checks (GitHub #603).
@@ -2537,6 +2552,9 @@ func (c *Container) initHTTPServer() error {
 	// dispatcher is wired.
 	if c.Dispatcher != nil {
 		uiOpts = append(uiOpts, ui.WithChatDispatcher(c.Dispatcher))
+		// A task a web chat starts reports back into it when the completion
+		// notifier runs (web-chat-design.md §5 N8, GitHub #771).
+		uiOpts = append(uiOpts, ui.WithWebChatLaterDelivery(c.chatCompletionEnabled()))
 		// A web chat turn outlives its request; the deploy idle gate must
 		// still wait for it (web-chat-design.md §2.3).
 		if c.apiServer != nil {
@@ -2625,6 +2643,11 @@ func (c *Container) initHTTPServer() error {
 	// GitHub #560 (M1c D3): the key login is offered on the operations
 	// listener only in managed hosting.
 	uiOpts = append(uiOpts, ui.WithManagedHosting(c.Config.Hosting.Managed()))
+	// GitHub #794 (design 18, amendment 2026-11-16, P4/F1): the owner's
+	// model-provider probe dials under managed mode's rule for models.
+	if c.Config.Hosting.Managed() {
+		uiOpts = append(uiOpts, ui.WithOwnerModelProbe(onboarding.NewManagedChatValidator(c.Config.Hosting.ModelHosts)))
+	}
 	if c.capabilities().ServeUI {
 		uiServer := ui.NewServer(uiOpts...)
 		// Task 3.4: stored so the Fix-It Doctor's IntegrationProbeProvider/
@@ -2787,7 +2810,7 @@ func (c *Container) initHTTPServer() error {
 	// The daemon unix socket gets its own server serving only the agent
 	// route set in front of the SAME mux (GitHub #95).
 	// see LLD § https://docs.vornik.io §12.2
-	if c.Config.Server.UnixSocket != "" {
+	if c.Config.DaemonSocketPath() != "" { // the managed default too (#786)
 		c.AgentSocketServer = newAgentSocketServer(mux, realIPMW, c.listenerGate(), readTimeout, writeTimeout)
 	}
 	if c.Config.Hosting.Managed() {
@@ -3064,6 +3087,11 @@ func wrapUIAdminGate(logger zerolog.Logger, adminCfg config.AdminConfig, inner h
 			return api.SessionRoleFromContext(r.Context()) == "admin"
 		},
 		"/admin",
+		// GitHub #787: the instance owner reads the console's observation
+		// pages. The router re-checks with the same function.
+		admin.WithOwnerRead(func(r *http.Request) bool {
+			return api.OwnerConsoleRead(r, api.AdminRouterPath(r.URL.Path))
+		}),
 	)(inner)
 	return uiSubtreeHandler(logger, gated)
 }
@@ -3435,4 +3463,15 @@ func subjectLedgerFor(driver string, db *sql.DB) *subjectstore.Repository {
 	default:
 		return nil
 	}
+}
+
+// gatewayDoctorURL is the address the doctor's gateway_healthy probes: empty,
+// so the check reports SKIPPED, unless the gateway is enabled. The shipped
+// example disables it but keeps an address, and the probe then found nothing
+// listening and reported ERROR (GitHub #786).
+func gatewayDoctorURL(cfg *config.Config) string {
+	if cfg == nil || !cfg.Gateway.Enabled {
+		return ""
+	}
+	return cfg.Gateway.Address
 }

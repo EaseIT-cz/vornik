@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"sort"
 	"strings"
@@ -233,4 +235,63 @@ func (r *AccountTransitionRepository) BeginConfig(ctx context.Context, scope, ow
 		return e
 	})
 	return
+}
+
+var _ persistence.AccountTransitionRecovery = (*AccountTransitionRepository)(nil)
+
+// ListBusy implements persistence.AccountTransitionRecovery (design 22
+// §22.2.16b, GitHub #669 item 3).
+func (r *AccountTransitionRepository) ListBusy(ctx context.Context) ([]persistence.AccountTransitionRow, int, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT scope,epoch,busy,owner,operation,started_at FROM agent_account_transitions ORDER BY scope`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	var busy []persistence.AccountTransitionRow
+	examined := 0
+	for rows.Next() {
+		var a persistence.AccountTransitionRow
+		if err := rows.Scan(&a.Scope, &a.Epoch, &a.Busy, &a.Owner, &a.Operation, &a.StartedAt); err != nil {
+			return nil, 0, err
+		}
+		examined++
+		if a.Busy {
+			busy = append(busy, a)
+		}
+	}
+	return busy, examined, rows.Err()
+}
+
+// Recover implements persistence.AccountTransitionRecovery: the reviewed
+// controlled-recovery CAS, exactly one row, in one write transaction (the
+// SQLite driver's transactions take the write lock at BEGIN, so the read of
+// the before-values and the CAS see one state).
+func (r *AccountTransitionRepository) Recover(ctx context.Context, scope string, epoch int64, owner string) (persistence.AccountTransitionRow, error) {
+	var before persistence.AccountTransitionRow
+	err := r.transaction(ctx, func(x persistence.DBTX) error {
+		err := x.QueryRowContext(ctx, `SELECT scope,epoch,busy,owner,operation,started_at FROM agent_account_transitions WHERE scope=?`, scope).
+			Scan(&before.Scope, &before.Epoch, &before.Busy, &before.Owner, &before.Operation, &before.StartedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return persistence.ErrAccountTransition
+		}
+		if err != nil {
+			return err
+		}
+		res, err := x.ExecContext(ctx, `UPDATE agent_account_transitions SET epoch=epoch+1,busy=0,owner='',operation='' WHERE scope=? AND epoch=? AND owner=? AND busy`, scope, epoch, owner)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return persistence.ErrAccountTransition
+		}
+		return nil
+	})
+	if err != nil {
+		return persistence.AccountTransitionRow{}, err
+	}
+	return before, nil
 }

@@ -278,3 +278,7 @@ func TestAdminKeyToRow_StatusTransitions(t *testing.T) {
 func (*adminKeysRepoStub) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (*adminKeysRepoStub) DeleteRetired(context.Context, string, string, time.Time) error {
+	return nil
+}

@@ -85,16 +85,23 @@ var adminClassResolvers = map[string]int{
 	"internal/api/middleware.go":         2,
 	"internal/api/reminders_handlers.go": 2,
 	"internal/api/routes.go":             2,
-	"internal/ui/admin.go":               1,
+	// GitHub #787: adminRouter's re-check also admits the owner's read
+	// (admin.OwnerReadOnlyFromContext + api.OwnerConsoleRead), never IsAdmin.
+	"internal/ui/admin.go": 2,
 	// GitHub #623: the credentials page's surface gate (OperatorSurfaceAccessFor
 	// takes the admin-key checker) and its IsAdmin nav flag. On a managed
 	// instance's public listener the listener gate refuses admin keys first,
 	// so a tenant_admin session is admitted only through the granted surface.
-	"internal/ui/admin_credentials.go": 2,
+	"internal/ui/admin_credentials.go":  2,
+	"internal/ui/model_provider_794.go": 1, // IsAdmin for the nav only; the page's gate is SurfaceModelProvider (#794)
 	// GitHub #754: the keys page's POST gate (OperatorSurfaceAccessFor with
 	// the admin-key checker, surface project_keys). As for credentials, the
 	// listener gate refuses admin keys on the public listener first.
 	"internal/ui/project_keys.go": 1,
+	// GitHub #780: the MCP tools page's gate (OperatorSurfaceAccessFor with
+	// the admin-key checker, surface mcp_tool_grant), the keys page's shape.
+	// The listener gate refuses admin keys on the public listener first.
+	"internal/ui/project_mcp_tools.go": 1,
 	// GitHub #759: the Manage overview shows an admin every card. A view,
 	// not a gate: each card's destination keeps its own server gate.
 	"internal/ui/manage.go":            1,

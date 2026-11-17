@@ -90,13 +90,13 @@ func navModel() []navAreaDef {
 	return []navAreaDef{
 		{Key: "home", Label: "Home", Icon: "navIconOverview", Href: "/ui/", Page: "dashboard", PhoneTab: true},
 		// Ask lands on the dispatcher project's chat (askHandler).
-		{Key: "ask", Label: "Ask", Icon: "navIconAsk", Href: "/ui/ask", PhoneTab: true},
+		{Key: "ask", Label: "Ask", Icon: "navIconAsk", Href: "/ui/ask", Page: "chat", PhoneTab: true}, // a chat page marks Ask (#777, design §19)
 		// Needs you is the outcome inbox; it carries the attention badge
 		// (navModelForPage), which sat on the "My requests" entry before.
 		{Key: "needs", Label: "Needs you", Short: "Needs", Icon: "navIconInbox", Href: "/ui/inbox", Page: "inbox", PhoneTab: true},
 		// Results & cost lands on the Results page (#757, design §15.2).
-		{Key: "results", Label: "Results & cost", Short: "Results", Icon: "navIconSpend", Href: "/ui/results", PhoneTab: true, Dests: []navDest{
-			{Key: "results", Label: "Results", Href: "/ui/results", Icon: "navIconSpend"},
+		{Key: "results", Label: "Results & cost", Short: "Results", Icon: "navIconResults", Href: "/ui/results", PhoneTab: true, Dests: []navDest{
+			{Key: "results", Label: "Results", Href: "/ui/results", Icon: "navIconResults"},
 			{Key: "spend", Label: "Spend", Href: "/ui/spend", Icon: "navIconSpend"},
 			{Key: "trends", Label: "Trends", Href: "/ui/insights/trends", Icon: "navIconInsight"},
 			{Key: "adoption", Label: "Adoption", Href: "/ui/insights/adoption", Icon: "navIconAdoption"},
@@ -107,12 +107,12 @@ func navModel() []navAreaDef {
 		// by OwnerHref. My account is the exception (below).
 		{Key: "manage", Label: "Manage", Icon: "navIconManage", Href: "/ui/manage", Dests: []navDest{
 			// The overview of Manage (#759, design §17.2 M1).
-			{Key: "manage-overview", Label: "Overview", Href: "/ui/manage", Icon: "navIconOverview"},
+			{Key: "manage-overview", Label: "Overview", Href: "/ui/manage", Icon: "navIconManage"},
 			{Key: "projects", Label: "Assistants", Href: "/ui/projects", Icon: "navIconProjects"},
 			{Key: "integrations", Label: "Integrations", Href: "/ui/integrations", Icon: "navIconIntegrations", AdminOnly: true},
 			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey", AdminOnly: true, OwnerHref: "/ui/credentials"},
-			{Key: "admin-agents", Label: "Coding agents", Href: "/ui/admin/agents", Icon: "navIconRobot", AdminOnly: true},
-			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill", AdminOnly: true},
+			{Key: "admin-agents", Label: "Coding agents", Href: "/ui/admin/agents", Icon: "navIconRobot", AdminOnly: true, OwnerHref: "/ui/admin/agents"},
+			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill", AdminOnly: true, OwnerHref: "/ui/admin/skills"},
 			{Key: "reminders", Label: "Reminders", Href: "/ui/reminders", Icon: "navIconReminders"},
 			{Key: "insights", Label: "Tool budget", Href: "/ui/insights/tool-budget", Icon: "navIconGauge"},
 			{Key: "trading", Label: "Trading", Href: "/ui/trading", Icon: "navIconTrading", Cap: "trading"},
@@ -124,7 +124,7 @@ func navModel() []navAreaDef {
 		// overview of the tiles that left the home page (#756).
 		{Key: "diagnostics", Label: "Diagnostics", Short: "Inspect", Icon: "navIconDiagnostics", Href: "/ui/diagnostics", Dests: []navDest{
 			// The tiles that left the home page (#756, design §14.2).
-			{Key: "diagnostics-overview", Label: "Overview", Href: "/ui/diagnostics", Icon: "navIconOverview"},
+			{Key: "diagnostics-overview", Label: "Overview", Href: "/ui/diagnostics", Icon: "navIconDiagnostics"},
 			{Key: "live", Label: "Live", Href: "/ui/live", Icon: "navIconLive"},
 			{Key: "tasks", Label: "Tasks", Href: "/ui/tasks", Icon: "navIconTasks"},
 			{Key: "executions", Label: "Executions", Href: "/ui/executions", Icon: "navIconExecutions"},
@@ -135,12 +135,15 @@ func navModel() []navAreaDef {
 			{Key: "audit", Label: "Audit", Href: "/ui/audit", Icon: "navIconAudit", AdminOnly: true},
 		}},
 		// The operator console: whoever runs the instance. Admin-only as
-		// the Admin area was; the owner's entries moved to Manage.
-		{Key: "operator", Label: "Operator console", Short: "Console", Icon: "navIconAdmin", Href: "/ui/admin/", AdminOnly: true, Dests: []navDest{
-			{Key: "admin", Label: "Admin console", Href: "/ui/admin/", Icon: "navIconAdmin"},
+		// the Admin area was; a managed instance's owner reads its
+		// observation pages (GitHub #787), so the area, its landing and the
+		// control plane carry an OwnerHref (#789). Accounts and the
+		// regulatory record stay admin-only.
+		{Key: "operator", Label: "Operator console", Short: "Console", Icon: "navIconAdmin", Href: "/ui/admin/", AdminOnly: true, OwnerHref: "/ui/admin/", Dests: []navDest{
+			{Key: "admin", Label: "Admin console", Href: "/ui/admin/", Icon: "navIconAdmin", OwnerHref: "/ui/admin/"},
 			{Key: "operator", Label: "Accounts", Href: "/ui/operator/accounts", Icon: "navIconUsers", AdminOnly: true},
-			{Key: "regulatory", Label: "Regulatory record", Href: "/ui/operator/regulatory", Icon: "navIconAudit", AdminOnly: true},
-			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane"},
+			{Key: "regulatory", Label: "Regulatory record", Href: "/ui/operator/regulatory", Icon: "navIconRegulatory", AdminOnly: true},
+			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane", OwnerHref: "/ui/admin/control-plane"},
 		}},
 	}
 }
@@ -244,7 +247,7 @@ func navModelForPage(tradingEnabled func() bool) func(data any) []navAreaDef {
 }
 
 // navAreaForPage returns the top-level area key for a CurrentPage token, or
-// "" when the page maps to no area (e.g. the dashboard, reached via the logo).
+// "" when the page maps to no area (a page outside the IA).
 // "" means: no rail icon highlighted and no contextual panel open — so pages
 // outside the IA don't leave a stale submenu hanging open.
 func navAreaForPage(page string) string {

@@ -341,6 +341,14 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"project_memory_chunks", "producer_role", `TEXT`},
 	{"project_memory_chunks", "validator_role", `TEXT`},
 	{"project_memory_chunks", "task_id", `TEXT`},
+	// Long on the Postgres table (migration 23); the verification
+	// repository caps and restores it on both drivers (design 22, amendment
+	// 2026-11-15, GitHub #550). Same default; no backfill.
+	{"project_memory_chunks", "confidence", `REAL NOT NULL DEFAULT 0.5`},
+	// Postgres migration 253: the confidence a demote changed, for the
+	// restore. Nullable: NULL means the event recorded none.
+	{"memory_verification_backup", "prior_confidence", `REAL`},
+	{"memory_verification_backup", "new_confidence", `REAL`},
 	// Postgres migration 200 — a document ingest's path in its repository
 	// (memory rollback x supersession design, amendment 2026-09-26). Nullable,
 	// no backfill: NULL means "not a document ingest".
@@ -503,6 +511,14 @@ var sqliteTableRebuilds = []tableRebuild{
 	// leaves: no foreign key references either.
 	{"mcp_oauth_tokens", "owner_user_id   TEXT", mcpOAuthTokensTableSQL},
 	{"agent_integration_approvals", "owner_user_id       TEXT", agentIntegrationApprovalsTableSQL},
+	// Postgres migration 253: memory_verification_events learns the demote
+	// kind (design 22, amendment 2026-11-15, GitHub #550). NOT a leaf:
+	// memory_verification_backup.event_id references it. The rebuild is safe
+	// because SQLite opens with foreign_keys OFF on every connection
+	// (Connect): dropping the old table deletes no backup row, and the
+	// backup's REFERENCES clause names the rebuilt table once the rename
+	// lands. TestSQLite_VerificationEventsRebuildKeepsBackup_550 holds it.
+	{"memory_verification_events", "'demote'", memoryVerificationEventsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

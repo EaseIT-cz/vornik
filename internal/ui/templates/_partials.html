@@ -4,7 +4,7 @@
 {{define "pageHead"}}
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     {{/* theme-color drives the mobile browser address-bar tint and the
          PWA title-bar accent. Updated at runtime by the theme-picker
          JS below so it tracks the operator's choice. The initial value
@@ -1022,6 +1022,8 @@
 {{define "navIconReminders"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6a5 5 0 0 0-5 5v3l-1.5 2.5h13L17 14v-3a5 5 0 0 0-5-5zM10 19a2 2 0 0 0 4 0"/></svg>{{end}}
 {{define "navIconInsight"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3v18h18M7 14l4-4 3 3 5-6"/></svg>{{end}}
 {{define "navIconAdoption"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 20V9h4v11M4 20v-6h6M14 20h6v-9M12 3l1.2 2.4 2.6.4-1.9 1.8.5 2.6L12 9l-2.4 1.2.5-2.6L8.2 5.8l2.6-.4z"/></svg>{{end}}
+{{define "navIconResults"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path stroke-linecap="round" stroke-linejoin="round" d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path stroke-linecap="round" stroke-linejoin="round" d="m9 14 2 2 4-4"/></svg>{{end}}
+{{define "navIconRegulatory"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v18M7 21h10M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/><path stroke-linejoin="round" d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1ZM16 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/></svg>{{end}}
 {{define "navIconSpend"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 7v10M14.5 9.3A2.5 2.5 0 0 0 12 8c-1.4 0-2.5.9-2.5 2s1.1 2 2.5 2 2.5.9 2.5 2-1.1 2-2.5 2a2.5 2.5 0 0 1-2.5-1.3"/></svg>{{end}}
 {{/* navIconScorecard — a checked list: the Quality dest grades a per-case
      validation report, not a continuous dial. Split from navIconGauge, which
@@ -1050,7 +1052,7 @@
 {{define "navIconProjects"}}<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2 8.5A2.5 2.5 0 014.5 6H9l2 2h8.5A2.5 2.5 0 0122 10.5V17a2.5 2.5 0 01-2.5 2.5h-15A2.5 2.5 0 012 17V8.5z"/></svg>{{end}}
 {{/* navIconResolve maps an icon name (from navModel) to its define —
      Go templates can't call a template by dynamic name, so dispatch. */}}
-{{define "navIconResolve"}}{{if eq . "navIconProjects"}}{{template "navIconProjects"}}{{else if eq . "navIconOverview"}}{{template "navIconOverview"}}{{else if eq . "navIconOrchestration"}}{{template "navIconOrchestration"}}{{else if eq . "navIconSwarms"}}{{template "navIconSwarms"}}{{else if eq . "navIconWorkflows"}}{{template "navIconWorkflows"}}{{else if eq . "navIconExecutions"}}{{template "navIconExecutions"}}{{else if eq . "navIconTasks"}}{{template "navIconTasks"}}{{else if eq . "navIconMemory"}}{{template "navIconMemory"}}{{else if eq . "navIconReminders"}}{{template "navIconReminders"}}{{else if eq . "navIconInsight"}}{{template "navIconInsight"}}{{else if eq . "navIconSpend"}}{{template "navIconSpend"}}{{else if eq . "navIconGauge"}}{{template "navIconGauge"}}{{else if eq . "navIconScorecard"}}{{template "navIconScorecard"}}{{else if eq . "navIconTrading"}}{{template "navIconTrading"}}{{else if eq . "navIconAudit"}}{{template "navIconAudit"}}{{else if eq . "navIconMcp"}}{{template "navIconMcp"}}{{else if eq . "navIconAdmin"}}{{template "navIconAdmin"}}{{else if eq . "navIconKey"}}{{template "navIconKey"}}{{else if eq . "navIconUser"}}{{template "navIconUser"}}{{else if eq . "navIconUsers"}}{{template "navIconUsers"}}{{else if eq . "navIconRobot"}}{{template "navIconRobot"}}{{else if eq . "navIconSkill"}}{{template "navIconSkill"}}{{else if eq . "navIconControlPlane"}}{{template "navIconControlPlane"}}{{else if eq . "navIconSteer"}}{{template "navIconSteer"}}{{else if eq . "navIconLive"}}{{template "navIconLive"}}{{else if eq . "navIconInbox"}}{{template "navIconInbox"}}{{else if eq . "navIconIntegrations"}}{{template "navIconIntegrations"}}{{else if eq . "navIconAdoption"}}{{template "navIconAdoption"}}{{else if eq . "navIconAsk"}}{{template "navIconAsk"}}{{else if eq . "navIconManage"}}{{template "navIconManage"}}{{else if eq . "navIconDiagnostics"}}{{template "navIconDiagnostics"}}{{end}}{{end}}
+{{define "navIconResolve"}}{{if eq . "navIconProjects"}}{{template "navIconProjects"}}{{else if eq . "navIconOverview"}}{{template "navIconOverview"}}{{else if eq . "navIconOrchestration"}}{{template "navIconOrchestration"}}{{else if eq . "navIconSwarms"}}{{template "navIconSwarms"}}{{else if eq . "navIconWorkflows"}}{{template "navIconWorkflows"}}{{else if eq . "navIconExecutions"}}{{template "navIconExecutions"}}{{else if eq . "navIconTasks"}}{{template "navIconTasks"}}{{else if eq . "navIconMemory"}}{{template "navIconMemory"}}{{else if eq . "navIconReminders"}}{{template "navIconReminders"}}{{else if eq . "navIconInsight"}}{{template "navIconInsight"}}{{else if eq . "navIconSpend"}}{{template "navIconSpend"}}{{else if eq . "navIconResults"}}{{template "navIconResults"}}{{else if eq . "navIconRegulatory"}}{{template "navIconRegulatory"}}{{else if eq . "navIconGauge"}}{{template "navIconGauge"}}{{else if eq . "navIconScorecard"}}{{template "navIconScorecard"}}{{else if eq . "navIconTrading"}}{{template "navIconTrading"}}{{else if eq . "navIconAudit"}}{{template "navIconAudit"}}{{else if eq . "navIconMcp"}}{{template "navIconMcp"}}{{else if eq . "navIconAdmin"}}{{template "navIconAdmin"}}{{else if eq . "navIconKey"}}{{template "navIconKey"}}{{else if eq . "navIconUser"}}{{template "navIconUser"}}{{else if eq . "navIconUsers"}}{{template "navIconUsers"}}{{else if eq . "navIconRobot"}}{{template "navIconRobot"}}{{else if eq . "navIconSkill"}}{{template "navIconSkill"}}{{else if eq . "navIconControlPlane"}}{{template "navIconControlPlane"}}{{else if eq . "navIconSteer"}}{{template "navIconSteer"}}{{else if eq . "navIconLive"}}{{template "navIconLive"}}{{else if eq . "navIconInbox"}}{{template "navIconInbox"}}{{else if eq . "navIconIntegrations"}}{{template "navIconIntegrations"}}{{else if eq . "navIconAdoption"}}{{template "navIconAdoption"}}{{else if eq . "navIconAsk"}}{{template "navIconAsk"}}{{else if eq . "navIconManage"}}{{template "navIconManage"}}{{else if eq . "navIconDiagnostics"}}{{template "navIconDiagnostics"}}{{end}}{{end}}
 
 {{define "navLogo"}}
 <a href="/ui/" title="Vornik — Dashboard" aria-label="Vornik — Dashboard" class="flex items-center justify-center text-gray-100">
@@ -1212,33 +1214,38 @@
     {{end}}
 </aside>
 {{end}}{{end}}
-{{/* Rail hover swaps the open panel; leaving reverts to the active area's.
-     A short revert delay bridges the icon→panel gap so it doesn't flicker. */}}
+{{/* Rail hover swaps the open panel; leaving closes it after 140 ms, which
+     bridges the icon→panel gap so it doesn't flicker. Bound once on document
+     and matched when the event fires, so a swap of the nav cannot leave it
+     dead (web-ui-design.md, "The nav binds its events from document", #583). */}}
 <script>
     (function () {
-        var rail = document.querySelector('.nav-rail');
-        if (!rail) return;
-        var panels = {};
-        document.querySelectorAll('[data-panel]').forEach(function (p) { panels[p.getAttribute('data-panel')] = p; });
+        if (window.__vornikRailBound) return;
+        window.__vornikRailBound = true;
         var timer;
         // Hover flyout: show one panel on hover, nothing open otherwise. The
         // active area is shown by the highlighted rail icon, NOT an auto-open
-        // panel — so the submenu never lingers on detail pages or reappears
-        // after an HTMX content swap.
+        // panel, so the submenu never lingers on detail pages.
         function show(k) {
-            Object.keys(panels).forEach(function (key) { panels[key].classList.toggle('panel-open', key === k); });
+            document.querySelectorAll('[data-panel]').forEach(function (p) { p.classList.toggle('panel-open', p.getAttribute('data-panel') === k); });
         }
-        function closeAll() { Object.keys(panels).forEach(function (key) { panels[key].classList.remove('panel-open'); }); }
-        function scheduleClose() { timer = window.setTimeout(closeAll, 140); }
-        function cancelClose() { window.clearTimeout(timer); }
-        document.querySelectorAll('[data-rail]').forEach(function (icon) {
-            icon.addEventListener('mouseenter', function () { cancelClose(); show(icon.getAttribute('data-rail')); });
+        function closeAll() { document.querySelectorAll('[data-panel]').forEach(function (p) { p.classList.remove('panel-open'); }); }
+        function region(x) { return x && x.closest ? x.closest('.nav-rail, [data-panel]') : null; }
+        document.addEventListener('mouseover', function (e) {
+            if (!e.target.closest) return;
+            var icon = e.target.closest('[data-rail]');
+            var panel = icon ? null : e.target.closest('[data-panel]');
+            if (!icon && !panel) return;
+            window.clearTimeout(timer);
+            show(icon ? icon.getAttribute('data-rail') : panel.getAttribute('data-panel'));
         });
-        Object.keys(panels).forEach(function (key) {
-            panels[key].addEventListener('mouseenter', function () { cancelClose(); show(key); });
-            panels[key].addEventListener('mouseleave', scheduleClose);
+        document.addEventListener('mouseout', function (e) {
+            var from = region(e.target);
+            if (from && !(e.relatedTarget && from.contains(e.relatedTarget))) {
+                window.clearTimeout(timer);
+                timer = window.setTimeout(closeAll, 140);
+            }
         });
-        rail.addEventListener('mouseleave', scheduleClose);
     })();
 </script>
 
@@ -1250,7 +1257,7 @@
      <details> group in the More drawer, with the same destinations and the
      same gating attributes as the rail; then Theme, and, for a session, My
      account and Sign out. */}}
-<nav class="md:hidden fixed bottom-0 left-0 right-0 z-50 glass menu-solid border-t safe-pb" role="navigation" aria-label="Primary">
+<nav data-phone-bar class="md:hidden fixed bottom-0 left-0 right-0 z-50 glass menu-solid border-t safe-pb" role="navigation" aria-label="Primary">
     <div class="flex h-16">
         {{range navModel .}}{{if .PhoneTab}}
         {{if .Dests}}
@@ -1315,10 +1322,13 @@
         </div>
     </div>
 </nav>
-{{/* Mobile drawer toggle — tap a tab to reveal/hide its destinations.
-     Inline-script precedent: themeToggle / signout-gate. */}}
+{{/* Mobile drawer toggle: tap a tab to reveal or hide its destinations.
+     One click listener on document, bound once, matched when the click
+     fires (#583, as the rail above). */}}
 <script>
     (function () {
+        if (window.__vornikDrawerBound) return;
+        window.__vornikDrawerBound = true;
         function syncExpanded() {
             document.querySelectorAll('[data-nav-tab]').forEach(function (b) {
                 var d = document.querySelector('[data-nav-drawer="' + b.getAttribute('data-nav-tab') + '"]');
@@ -1329,10 +1339,11 @@
             document.querySelectorAll('[data-nav-drawer]').forEach(function (d) { d.classList.add('hidden'); });
             syncExpanded();
         }
-        document.querySelectorAll('[data-nav-tab]').forEach(function (btn) {
-            btn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                var key = btn.getAttribute('data-nav-tab');
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest) return;
+            var tab = e.target.closest('[data-nav-tab]');
+            if (tab) {
+                var key = tab.getAttribute('data-nav-tab');
                 document.querySelectorAll('[data-nav-drawer]').forEach(function (d) {
                     if (d.getAttribute('data-nav-drawer') === key) {
                         d.classList.toggle('hidden');
@@ -1341,16 +1352,12 @@
                     }
                 });
                 syncExpanded();
-            });
-        });
-        // Auto-hide the drawer once a destination is chosen.
-        document.querySelectorAll('[data-nav-drawer] a').forEach(function (a) {
-            a.addEventListener('click', closeDrawers);
-        });
-        // Tap outside the bar/drawer closes any open drawer.
-        document.addEventListener('click', function (e) {
-            if (e.target.closest('[data-nav-tab]') || e.target.closest('[data-nav-drawer]')) return;
-            closeDrawers();
+                return;
+            }
+            // A destination chosen closes the drawer; any other tap inside a
+            // drawer (a group's summary, Theme) leaves it open; a tap outside
+            // the bar and the drawers closes them.
+            if (e.target.closest('[data-nav-drawer] a') || !e.target.closest('[data-nav-drawer]')) closeDrawers();
         });
     })();
 </script>

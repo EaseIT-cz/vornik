@@ -2,15 +2,16 @@
 
 Vornik comes in two editions built from the same core:
 
-- **Community Edition (CE)** — this repository, **AGPL-3.0**. The complete
-  orchestration core; fully usable for personal and small-team work.
-- **Enterprise Edition (EE)** — a proprietary overlay that adds advanced
-  capabilities, offered with commercial support and a hosted SaaS by EaseIT Labs.
+- **Community Edition (CE)** is open source under **AGPL-3.0**, published at
+  [EaseIT-cz/vornik](https://github.com/EaseIT-cz/vornik). It is the
+  complete orchestration core, fully usable for personal and small-team work.
+- **Enterprise Edition (EE)** is a proprietary overlay that adds the
+  capabilities marked Enterprise below. EaseIT Labs offers the Enterprise
+  Edition with commercial support.
 
 ## Feature matrix
 
-> The table below lists which capabilities are included in each edition. A
-> Community build includes only the rows marked **Community**.
+> A Community build includes only the rows marked **Community**.
 
 <!-- BEGIN GENERATED editions-matrix -->
 
@@ -36,15 +37,16 @@ Vornik comes in two editions built from the same core:
 
 <!-- END GENERATED editions-matrix -->
 
-A Community build **registers and wires none** of the Enterprise capabilities —
-they are not merely hidden, they are not present in the binary.
+A Community build registers and wires none of the Enterprise capabilities:
+they are absent from the binary, not hidden.
 
 ## Which edition do I need?
 
-- **Community** is the right choice for personal use, evaluation, and small
-  deployments — it is the full orchestration engine, not a crippled demo.
-- **Enterprise** is for teams that need the advanced capabilities above, SSO and
-  governance, horizontal scale, or commercial support / the hosted SaaS.
+- **Community**: personal use, evaluation and small deployments. It is the
+  full orchestration engine, not a limited demo.
+- **Enterprise**: teams that need the Enterprise capabilities above, SSO and
+  governance, horizontal scale, or commercial support.
 
-See [Support](support.md) for commercial options, and [Licensing](licensing.md)
-for what the AGPL-3.0 does and does not require when you use or fork Community.
+[Support](support.md) lists the commercial options. [Licensing](licensing.md)
+says what the AGPL-3.0 does and does not require when you use or fork
+Community.

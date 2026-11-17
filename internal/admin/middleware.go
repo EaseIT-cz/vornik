@@ -94,7 +94,11 @@ type SessionRoleChecker func(r *http.Request) bool
 //
 // Requests outside pathPrefix pass through unmodified — the gate is
 // scoped, not global.
-func Middleware(cfg config.AdminConfig, extract PrincipalExtractor, authEnabled AuthEnabledChecker, sessionAdmin SessionRoleChecker, pathPrefix string) func(http.Handler) http.Handler {
+func Middleware(cfg config.AdminConfig, extract PrincipalExtractor, authEnabled AuthEnabledChecker, sessionAdmin SessionRoleChecker, pathPrefix string, opts ...MiddlewareOption) func(http.Handler) http.Handler {
+	var o middlewareOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	isSessionAdmin := func(r *http.Request) bool {
 		return sessionAdmin != nil && sessionAdmin(r)
 	}
@@ -113,30 +117,7 @@ func Middleware(cfg config.AdminConfig, extract PrincipalExtractor, authEnabled 
 			}
 
 			if !pathInGate(r.URL.Path, pathPrefix) {
-				// Stamp IsAdmin=true on the context for non-admin
-				// paths too so the shared nav partial knows whether
-				// to render the Admin link on every page (not just
-				// inside the admin subtree). Without this an admin
-				// visiting /ui/ would never see the link.
-				if cfg.Enabled {
-					if extract != nil {
-						key := extract(r)
-						if cfg.IsAdminKey(key) {
-							ctx := context.WithValue(r.Context(), isAdminKey, true)
-							ctx = context.WithValue(ctx, principalKey, adminKeyPrincipal(key))
-							r = r.WithContext(ctx)
-						}
-					}
-					// A session-admin sees the Admin link too. Stamped
-					// after the key path so the key principal wins when
-					// both are somehow present.
-					if !IsAdminFromContext(r.Context()) && isSessionAdmin(r) {
-						ctx := context.WithValue(r.Context(), isAdminKey, true)
-						ctx = context.WithValue(ctx, principalKey, "session:admin")
-						r = r.WithContext(ctx)
-					}
-				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, stampNavAdmin(cfg, extract, isSessionAdmin, r))
 				return
 			}
 
@@ -156,6 +137,14 @@ func Middleware(cfg config.AdminConfig, extract PrincipalExtractor, authEnabled 
 				ctx := context.WithValue(r.Context(), principalKey, "session:admin")
 				ctx = context.WithValue(ctx, isAdminKey, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// The instance owner's read of a console page (GitHub #787): marked
+			// read-only, never admin. Checked after the session-admin path, so
+			// an admin is never downgraded.
+			if o.ownerRead != nil && o.ownerRead(r) {
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ownerReadOnlyKey, true)))
 				return
 			}
 
@@ -240,4 +229,54 @@ func ContextWithAdmin(ctx context.Context, principal string) context.Context {
 		ctx = context.WithValue(ctx, principalKey, principal)
 	}
 	return ctx
+}
+
+// ownerReadOnlyKey marks a request the gate admitted as the instance owner's
+// read of the console (GitHub #787): never IsAdmin, so the router must
+// re-check it with api.OwnerConsoleRead.
+const ownerReadOnlyKey contextKey = "admin_owner_read_only"
+
+// OwnerReadOnlyFromContext reports whether the gate admitted this request as
+// the owner's read of the console.
+func OwnerReadOnlyFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(ownerReadOnlyKey).(bool)
+	return v
+}
+
+// MiddlewareOption configures Middleware.
+type MiddlewareOption func(*middlewareOptions)
+
+type middlewareOptions struct{ ownerRead func(*http.Request) bool }
+
+// WithOwnerRead lets the gate admit a request ownerRead accepts (the instance
+// owner's read of a console page, GitHub #787) as read-only: it is marked
+// OwnerReadOnly and never IsAdmin.
+func WithOwnerRead(ownerRead func(*http.Request) bool) MiddlewareOption {
+	return func(o *middlewareOptions) { o.ownerRead = ownerRead }
+}
+
+// stampNavAdmin stamps IsAdmin on a request outside the admin subtree, so the
+// shared nav partial knows whether to render the Admin link on every page
+// (not just inside the admin subtree). Without this an admin visiting /ui/
+// would never see the link. A session-admin sees it too, stamped after the
+// key path so the key principal wins when both are somehow present. Split out
+// of Middleware (GitHub #787: the owner-read branch took it over the
+// complexity limit).
+func stampNavAdmin(cfg config.AdminConfig, extract PrincipalExtractor, isSessionAdmin func(*http.Request) bool, r *http.Request) *http.Request {
+	if !cfg.Enabled {
+		return r
+	}
+	if extract != nil {
+		if key := extract(r); cfg.IsAdminKey(key) {
+			ctx := context.WithValue(r.Context(), isAdminKey, true)
+			ctx = context.WithValue(ctx, principalKey, adminKeyPrincipal(key))
+			r = r.WithContext(ctx)
+		}
+	}
+	if !IsAdminFromContext(r.Context()) && isSessionAdmin(r) {
+		ctx := context.WithValue(r.Context(), isAdminKey, true)
+		ctx = context.WithValue(ctx, principalKey, "session:admin")
+		r = r.WithContext(ctx)
+	}
+	return r
 }

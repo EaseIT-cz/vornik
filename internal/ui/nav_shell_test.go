@@ -162,6 +162,7 @@ func TestNavIconsDefined(t *testing.T) {
 		"navIconWorkflows", "navIconExecutions", "navIconTasks",
 		"navIconMemory", "navIconReminders", "navIconInsight",
 		"navIconSpend", "navIconAudit", "navIconMcp", "navIconAdmin",
+		"navIconResults", "navIconRegulatory",
 	} {
 		out := renderTemplateString(t, name, nil)
 		if !strings.Contains(out, "<svg") {

@@ -26,10 +26,10 @@ type SecretSource interface {
 	Get(name string) (string, bool)
 }
 
-// EnvSecretSource reads secrets from the process environment, which is where
-// the daemon's secret store lands them: the daemon loads *.env from its secrets
-// dir at boot, and projectdoctor.EnvSecrets.Set os.Setenv's a freshly-supplied
-// value so it is live without a restart.
+// EnvSecretSource reads secrets from the process environment: the daemon
+// loads *.env from its secrets dir at boot. A value entered in the console
+// goes to the operator credential store instead, never to the environment
+// (GitHub #626; review-20261115-c5aa F3).
 type EnvSecretSource struct{}
 
 // Get implements SecretSource.

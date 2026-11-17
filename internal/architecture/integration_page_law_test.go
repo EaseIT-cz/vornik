@@ -97,6 +97,12 @@ type pageListing struct {
 // "<file>|<the read's source text, whitespace collapsed>". A key covers every
 // identical read in its file.
 var integrationPageListed = map[string]pageListing{
+	// GitHub #669 item 5: each subtest of the approver suite runs on a fresh
+	// repository (newApproverHarness(t, fresh)), so only its own rows exist.
+	"internal/persistence/repotest/approver_device_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 20)": {pageResetFirst,
+		"the subtest's repository is fresh (newApproverHarness(t, fresh)); it holds only the five rows the subtest creates"},
+	"internal/persistence/repotest/approver_device_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 1)": {pageLimitIsSubject,
+		"the call tests the limit itself, on the subtest's fresh repository"},
 	"internal/memory/classify_attempted_330_integration_test.go|newBF().BackfillBatchAcrossProjects(ctx, 2)": {pageOwnRowsFirst,
 		"the backfill reads oldest first and both rows are 30 years old; the restart check is an absence the rows would head the queue for"},
 	"internal/memory/embed_queue_lease_integration_test.go|repo.DequeueEmbedBatch(ctx, 10)": {pagePagedThrough,

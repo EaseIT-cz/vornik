@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +84,31 @@ var restartOnlyPaths = []restartOnlyPath{
 		path:   "telegram.enabled",
 		reason: "the Telegram bot is built once at start (initTelegram); a reload never rebuilds it",
 		value:  func(c *Config) string { return strconv.FormatBool(c.Telegram.Enabled) },
+	},
+	// GitHub #794 (security design 18, amendment 2026-11-16, P7): the chat
+	// router is built once from the start-up config (c.Config is never swapped,
+	// #738), so a chat edit is live only after a restart. chat.api_key is left
+	// out on purpose: the warning prints values, and the owner's model-provider
+	// save marks its own restart reason for a key-only change.
+	{
+		path:   "chat.enabled",
+		reason: "the chat router is built once at start",
+		value:  func(c *Config) string { return strconv.FormatBool(c.Chat.Enabled) },
+	},
+	{
+		path:   "chat.provider",
+		reason: "the chat router is built once at start",
+		value:  func(c *Config) string { return c.Chat.Provider },
+	},
+	{
+		path:   "chat.endpoint",
+		reason: "the chat router is built once at start",
+		value:  func(c *Config) string { return withoutUserInfo(c.Chat.Endpoint) },
+	},
+	{
+		path:   "chat.model",
+		reason: "the chat router is built once at start",
+		value:  func(c *Config) string { return c.Chat.Model },
 	},
 	{
 		path:   "telegram.bot_token",
@@ -185,6 +211,21 @@ func provenanceForgesSummary(c *Config) string {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
+// withoutUserInfo returns raw with any user:password@ removed, so a
+// credential embedded in a URL never reaches the restart-only warning.
+// A value that does not parse is reduced to "set" or "".
+func withoutUserInfo(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "set"
+	}
+	u.User = nil
+	return u.String()
+}
+
 // RestartOnlySnapshotOf reads the restart-only fields out of cfg. Nil cfg yields nil so
 // the probe can be called from a partially-built daemon without crashing the reload.
 func RestartOnlySnapshotOf(cfg *Config) map[string]string {
@@ -224,6 +265,32 @@ func DiffRestartOnly(was, now map[string]string) []RestartOnlyChange {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// PendingRestartOnlyPaths names the restart-only fields whose current value
+// differs from the start-up baseline, sorted, computed now (operations-API
+// design §6.12 R2, GitHub #794). Names only: never a value. Nil without a
+// probe or a baseline.
+func (r *ConfigReloader) PendingRestartOnlyPaths() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	probe, baseline, have := r.restartOnlyProbe, r.restartOnlyBaseline, r.restartOnlyBaselineSet
+	r.mu.Unlock()
+	if probe == nil || !have {
+		return nil
+	}
+	current := probe()
+	if current == nil {
+		return nil
+	}
+	changed := DiffRestartOnly(baseline, current)
+	out := make([]string, 0, len(changed))
+	for _, c := range changed {
+		out = append(out, c.Path)
+	}
 	return out
 }
 

@@ -534,7 +534,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		WorkflowProposals:       sqlite.NewWorkflowProposalRepository(db),
 		BrokerActions:           sqlite.NewBrokerActionRepository(db),
 		BrokerGrants:            sqlite.NewBrokerGrantRepository(db),
-		AccountTransitions:      sqlite.NewAccountTransitionRepository(db),
+		AccountTransitions:      persistence.TrackHeldTransitions(sqlite.NewAccountTransitionRepository(db)), // #669: held tickets
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
@@ -719,7 +719,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		WorkflowProposals:              postgres.NewWorkflowProposalRepository(dbtx),
 		BrokerActions:                  postgres.NewBrokerActionRepository(dbtx),
 		BrokerGrants:                   postgres.NewBrokerGrantRepository(dbtx),
-		AccountTransitions:             postgres.NewAccountTransitionRepository(dbtx),
+		AccountTransitions:             persistence.TrackHeldTransitions(postgres.NewAccountTransitionRepository(dbtx)), // #669: held tickets
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),

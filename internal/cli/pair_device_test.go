@@ -69,7 +69,7 @@ func TestDevices_ListAndRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := listDevices(ctx, svc, true, &out); err != nil {
+	if err := listDevices(ctx, svc, true, false, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), r.DeviceToken) || strings.Contains(out.String(), approverdevice.HashToken(r.DeviceToken)) {
@@ -87,7 +87,7 @@ func TestDevices_ListAndRevoke(t *testing.T) {
 		t.Fatalf("revoke: %v %s", err, out.String())
 	}
 	out.Reset()
-	_ = listDevices(ctx, svc, false, &out)
+	_ = listDevices(ctx, svc, false, true, &out) // --all: revoked rows are hidden by default (#489)
 	if !strings.Contains(out.String(), "revoked") {
 		t.Fatalf("table does not show the revocation:\n%s", out.String())
 	}

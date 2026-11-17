@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -351,6 +352,63 @@ func (s *Server) RevokeAPIKey(w http.ResponseWriter, r *http.Request, keyID stri
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveRetiredAPIKey serves POST /api/v1/projects/{id}/keys/{kid}/remove
+// (GitHub #489, 18-security-and-tenancy.md amendment 2026-11-15 R2): it
+// deletes a revoked or expired key of the project at once and writes one
+// key.remove audit row. C3 keeps database keys off the route; the
+// repository refuses a live key (409) and another project's key (404) in
+// the same statement as the delete.
+func (s *Server) RemoveRetiredAPIKey(w http.ResponseWriter, r *http.Request, keyID string) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	if s.apiKeyRepo == nil {
+		respondError(w, http.StatusServiceUnavailable, "API_KEYS_DISABLED", "api-key surface not configured")
+		return
+	}
+	if s.adminAuditRepo == nil {
+		// A removal is never unrecorded (code review 149d F1): without the
+		// audit sink nothing is deleted.
+		respondError(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "removing a key needs the admin audit, which is not configured")
+		return
+	}
+	projectID := extractProjectID(r)
+	if projectID == "" || keyID == "" {
+		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "projectId and keyId required")
+		return
+	}
+	prior, err := s.apiKeyRepo.GetByID(r.Context(), keyID)
+	if err != nil || prior.ProjectID != projectID {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "api key not found in this project")
+		return
+	}
+	switch err := s.apiKeyRepo.DeleteRetired(r.Context(), projectID, keyID, time.Now().UTC()); {
+	case errors.Is(err, persistence.ErrAPIKeyLive):
+		respondError(w, http.StatusConflict, "KEY_LIVE", "This key is still live. Revoke it first.")
+		return
+	case errors.Is(err, persistence.ErrAPIKeyNotFound):
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "api key not found in this project")
+		return
+	case err != nil:
+		s.logger.Warn().Err(err).Str("project", projectID).Str("key", keyID).Msg("api-key: remove failed")
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to remove api key")
+		return
+	}
+	resp := map[string]any{"removed": keyID}
+	actor := operatorActor(r)
+	entry := &persistence.AdminAuditEntry{ID: persistence.GenerateID("admaud"), Principal: actor.Principal, Source: "api",
+		Action: "key.remove", Target: keyID, IP: actor.IP, UserAgent: actor.UserAgent}
+	if b, err := json.Marshal(prior.RemovalAuditDetail()); err == nil {
+		entry.After = string(b)
+	}
+	if err := s.adminAuditRepo.Insert(r.Context(), entry); err != nil {
+		s.logger.Warn().Err(err).Str("key", keyID).Msg("api-key: remove audit write failed")
+		resp["auditError"] = "the key was removed, but its audit record could not be written"
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // updateAllowedWorkflowsRequest is the body shape for

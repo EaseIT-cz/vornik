@@ -116,6 +116,12 @@ type InboxData struct {
 	// AgentApprovalsFailed: the operator's load of that list failed, so the
 	// page says so instead of hiding it or saying "All clear" (GitHub #167).
 	AgentApprovalsFailed bool
+	// AgentApplyFailed are approved requests that could not be applied,
+	// recorded in the last 7 days; AgentApplyFailedMore says more exist
+	// (GitHub #669 item 5).
+	AgentApplyFailed       []applyFailedView
+	AgentApplyFailedMore   bool
+	AgentApplyFailedFailed bool
 }
 
 // NavAttentionCount implements navAttentionCounter (nav_model.go) so the
@@ -363,6 +369,7 @@ func (s *Server) inboxData(r *http.Request, withRequests bool) InboxData {
 	data.BrokerActions = s.loadPendingBrokerActions(r)
 	data.StandingGrants = s.loadStandingGrants(r)
 	data.AgentApprovals, data.AgentApprovalsFailed = s.loadAgentApprovals(r)
+	data.AgentApplyFailed, data.AgentApplyFailedMore, data.AgentApplyFailedFailed = s.loadAgentApplyFailed(r)
 	if v := strings.TrimSpace(r.URL.Query().Get("refused")); v != "" {
 		data.BrokerRefused = strings.Split(v, ",")
 	}
@@ -594,8 +601,12 @@ type requestCard struct {
 	Href        string // links out to the task/panel — no inline actions here (4.3)
 	Bucket      string // requestBucket* constant, for the badge color
 	BucketLabel string // "Needs you" / "Working" / "Done"
-	StatusLine  string // latest execution_narration line, or a fallback
-	Age         string // "5m ago", request-root creation age
+	// Summary is what was asked: a snippet of the request root's prompt,
+	// by the landing page's extractor (taskSummary). The card's first line
+	// when set (outcome-inbox-design.md, amendment 2026-11-15, #781).
+	Summary    string
+	StatusLine string // latest execution_narration line, or a fallback
+	Age        string // "5m ago", request-root creation age
 
 	// CTALabel is the state-specific call to action the card's link
 	// renders ("Approve or reject", "Answer the question", "Fix or
@@ -867,6 +878,7 @@ func newRequestCard(rootID string, g *requestGroup, winner *persistence.Task, bu
 		Href:          "/ui/tasks/" + winner.ID,
 		Bucket:        bucket,
 		BucketLabel:   requestBucketLabels[bucket],
+		Summary:       taskSummary(g.root.Payload),
 		fallbackLabel: requestRollupRanks[winner.Status].label,
 		Age:           humanizeSince(time.Since(g.root.CreatedAt)) + " ago",
 		rank:          requestRollupRanks[winner.Status].rank,

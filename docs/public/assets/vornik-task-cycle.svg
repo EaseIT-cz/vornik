@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 350" width="860" height="350" role="img"
+     aria-label="The life of a task, in six steps. 1 Ask: from chat, the console, an assistant, a schedule, a webhook or a standing goal. 2 Route: you, or the chat dispatcher, pick the project and workflow, and the task waits in a durable queue. 3 Run: each step runs a role in its own container; models propose and the daemon checks. 4 Approve, when needed: sensitive actions wait for you on your paired phone. 5 Deliver: results are saved as artifacts and sent back where you asked. 6 Remember: the audit trail, the cost and, if enabled, memory carry into the next task. A restart loses no work: unfinished tasks are recovered. Then the next task starts, either yours or one a project starts itself through autonomy.">
+  <title>The life of a task</title>
+  <desc>From the ask to the result and what Vornik keeps for next time.</desc>
+
+  <!-- Card background: an explicit light ground, as the other figures use. -->
+  <rect width="860" height="350" rx="10" fill="#F6F4EF"/>
+
+  <g font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <text x="32" y="40" font-size="20" font-weight="600" fill="#101826">The life of a task</text>
+    <text x="32" y="62" font-size="13" fill="#5E6672">From your ask to the result, and what Vornik keeps for next time. A restart loses no work: unfinished tasks are recovered.</text>
+
+    <!-- Six step cards: x = 29 + i*136, width 122 -->
+    <g font-size="11.5" fill="#5E6672">
+      <!-- 1 Ask -->
+      <rect x="29" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="49" cy="116" r="11" fill="#1C7ED6"/><text x="49" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+      <text x="66" y="121" font-size="14" font-weight="600" fill="#101826">Ask</text>
+      <text x="41" y="152">From chat, the</text>
+      <text x="41" y="168">console, an</text>
+      <text x="41" y="184">assistant, a</text>
+      <text x="41" y="200">schedule, a</text>
+      <text x="41" y="216">webhook or a</text>
+      <text x="41" y="232">standing goal.</text>
+
+      <!-- 2 Route -->
+      <rect x="165" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="185" cy="116" r="11" fill="#1C7ED6"/><text x="185" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+      <text x="202" y="121" font-size="14" font-weight="600" fill="#101826">Route</text>
+      <text x="177" y="152">You, or the chat</text>
+      <text x="177" y="168">dispatcher, pick</text>
+      <text x="177" y="184">the project and</text>
+      <text x="177" y="200">workflow. The task</text>
+      <text x="177" y="216">waits in a durable</text>
+      <text x="177" y="232">queue.</text>
+
+      <!-- 3 Run -->
+      <rect x="301" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="321" cy="116" r="11" fill="#1C7ED6"/><text x="321" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+      <text x="338" y="121" font-size="14" font-weight="600" fill="#101826">Run</text>
+      <text x="313" y="152">Each step runs a</text>
+      <text x="313" y="168">role in its own</text>
+      <text x="313" y="184">container. Models</text>
+      <text x="313" y="200">propose; the</text>
+      <text x="313" y="216">daemon checks.</text>
+
+      <!-- 4 Approve (when needed) -->
+      <rect x="437" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#1C7ED6" stroke-dasharray="5 4"/>
+      <circle cx="457" cy="116" r="11" fill="#1C7ED6"/><text x="457" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+      <text x="474" y="121" font-size="14" font-weight="600" fill="#101826">Approve</text>
+      <text x="449" y="140" font-size="10.5" fill="#1C7ED6">when needed</text>
+      <text x="449" y="168">Sensitive actions</text>
+      <text x="449" y="184">wait for you on</text>
+      <text x="449" y="200">your paired</text>
+      <text x="449" y="216">phone.</text>
+
+      <!-- 5 Deliver -->
+      <rect x="573" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="593" cy="116" r="11" fill="#1C7ED6"/><text x="593" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+      <text x="610" y="121" font-size="14" font-weight="600" fill="#101826">Deliver</text>
+      <text x="585" y="152">Results are saved</text>
+      <text x="585" y="168">as artifacts and</text>
+      <text x="585" y="184">sent back where</text>
+      <text x="585" y="200">you asked.</text>
+
+      <!-- 6 Remember -->
+      <rect x="709" y="92" width="122" height="160" rx="10" fill="#FFFFFF" stroke="#D5D2CA"/>
+      <circle cx="729" cy="116" r="11" fill="#1C7ED6"/><text x="729" y="120" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">6</text>
+      <text x="746" y="121" font-size="14" font-weight="600" fill="#101826">Remember</text>
+      <text x="721" y="152">The audit trail,</text>
+      <text x="721" y="168">the cost and, if</text>
+      <text x="721" y="184">enabled, memory</text>
+      <text x="721" y="200">carry into the</text>
+      <text x="721" y="216">next task.</text>
+    </g>
+
+    <!-- Arrows between cards -->
+    <g stroke="#101826" stroke-width="1.5" fill="none">
+      <path d="M153 172 L162 172"/><path d="M157 168 L163 172 L157 176"/>
+      <path d="M289 172 L298 172"/><path d="M293 168 L299 172 L293 176"/>
+      <path d="M425 172 L434 172"/><path d="M429 168 L435 172 L429 176"/>
+      <path d="M561 172 L570 172"/><path d="M565 168 L571 172 L565 176"/>
+      <path d="M697 172 L706 172"/><path d="M701 168 L707 172 L701 176"/>
+    </g>
+
+    <!-- The loop back: the next task -->
+    <g stroke="#1C7ED6" stroke-width="1.5" fill="none">
+      <path d="M770 254 L770 286 Q770 296 760 296 L100 296 Q90 296 90 286 L90 260"/>
+      <path d="M85 266 L90 256 L95 266"/>
+    </g>
+    <text x="430" y="318" font-size="12.5" fill="#101826" text-anchor="middle" font-weight="600">The next task: yours, or one a project starts itself (autonomy)</text>
+  </g>
+</svg>

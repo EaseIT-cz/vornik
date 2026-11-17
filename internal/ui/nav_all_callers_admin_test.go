@@ -31,7 +31,7 @@ func TestNavPartial_AllUICallersAdminShowsAdminOnlyEntries(t *testing.T) {
 	on := render(NewServer(WithAllUICallersAdmin()))
 	// Area-level: the operator console rail icon (Control plane lives in its
 	// panel; #755 renamed the Admin area).
-	if !strings.Contains(on, `data-admin-link class="rail-ico`) {
+	if !strings.Contains(on, `data-admin-link data-owner-href="/ui/admin/" class="rail-ico`) {
 		t.Errorf("nav should render the Admin rail icon visible when all callers are admin")
 	}
 	if strings.Contains(on, `data-admin-link class="hidden `) {
@@ -47,7 +47,7 @@ func TestNavPartial_AllUICallersAdminShowsAdminOnlyEntries(t *testing.T) {
 	// Control plane is un-gated inside the Admin area's panel — it was
 	// unreachable only because the area rail icon (asserted above) was
 	// hidden. Pin that it renders as a plain panel item.
-	if !strings.Contains(on, `href="/ui/admin/control-plane" data-owner-hide class="panel-item`) {
+	if !strings.Contains(on, `href="/ui/admin/control-plane" data-owner-href="/ui/admin/control-plane" class="panel-item`) {
 		t.Errorf("nav: /ui/admin/control-plane should render as a plain panel item")
 	}
 

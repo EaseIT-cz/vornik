@@ -170,6 +170,9 @@ var Excluded = map[string]string{
 	"SkillRepository.Upsert":                       "a write that returns the stored row, not a lookup",
 	"MemoryVerificationRepository.RestoreVerificationEvent": "a write that returns the restore event it recorded, " +
 		"not a lookup; an unknown event id is an error",
+	"MemoryVerificationRepository.SurveySelfCertified": "aggregate over a project; always produces a value (GitHub #550)",
+	"MemoryVerificationRepository.DemoteSelfCertified": "a write that returns the demote event it recorded, " +
+		"not a lookup (GitHub #550)",
 	"TaskRepository.LeaseTask": "a queue poll: an empty queue is the common case, not a miss",
 	// APIKeyRepository answers with its own ErrAPIKeyNotFound sentinel, which
 	// is a standalone errors.New and NOT persistence.ErrNotFound — so this

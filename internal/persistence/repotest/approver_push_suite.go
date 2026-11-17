@@ -46,6 +46,32 @@ func RunApproverPushSuite(t *testing.T, repo persistence.ApproverPushRepository,
 	t.Run("Upsert_get_replace_and_record", func(t *testing.T) { approverPushUpsert(open(t)) })
 	t.Run("Unknown_or_revoked_device_is_refused", func(t *testing.T) { approverPushRefused(open(t)) })
 	t.Run("Revoke_deletes_and_list_holds_only_active", func(t *testing.T) { approverPushRevoke(open(t)) })
+	// Design part 09 §9.2e, GitHub #489 (code review 149d F2).
+	t.Run("DeleteRevokedDevice_keeps_a_live_devices_subscription", func(t *testing.T) { approverPushDeleteRevoked(open(t)) })
+}
+
+// approverPushDeleteRevoked: a refused DeleteRevokedDevice (the device is
+// live) leaves its push subscription; a removed revoked device leaves none.
+func approverPushDeleteRevoked(t *testing.T, r approverPushRepo, h *approverHarness) {
+	d := pushDevice(t, h, "pushdel")
+	if err := r.UpsertPushSubscription(h.ctx, pushRow(d.ID, "https://fcm.googleapis.com/del", h.now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.DeleteRevokedDevice(h.ctx, d.ID); !errors.Is(err, persistence.ErrApproverDeviceLive) {
+		t.Fatalf("DeleteRevokedDevice on a live device: %v", err)
+	}
+	if _, err := r.GetPushSubscription(h.ctx, d.ID); err != nil {
+		t.Fatalf("a refused delete removed the live device's subscription: %v", err)
+	}
+	if err := h.repo.RevokeDevice(h.ctx, d.ID, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.DeleteRevokedDevice(h.ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.GetPushSubscription(h.ctx, d.ID); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("a removed device still has a subscription: %v", err)
+	}
 }
 
 // pushDevice enrolls device dev_<code>: the first through its pairing, a

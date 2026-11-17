@@ -149,10 +149,11 @@ func (c *Container) initScheduler() error {
 	if c.Config.Runtime.RunAsUser != "" {
 		runtimeOptions = append(runtimeOptions, runtime.WithRunAsUser(c.Config.Runtime.RunAsUser))
 	}
-	if c.Config.Server.UnixSocket != "" {
+	if sock := c.Config.DaemonSocketPath(); sock != "" {
 		// daemon-only agent roles bind-mount this socket to reach the
-		// daemon (MCP + LLM) under --network=none. See Step B.
-		runtimeOptions = append(runtimeOptions, runtime.WithDaemonSocketPath(c.Config.Server.UnixSocket))
+		// daemon (MCP + LLM) under --network=none. See Step B. A managed
+		// instance has one by default (GitHub #786).
+		runtimeOptions = append(runtimeOptions, runtime.WithDaemonSocketPath(sock))
 	}
 	if c.Config.Runtime.DefaultNetwork != "" {
 		// Network policy for roles that don't set runtime.network. New
@@ -259,7 +260,7 @@ func (c *Container) initScheduler() error {
 	}
 
 	// Resolve LLM config for agent containers (AgentLLM with ChatConfig fallback).
-	llm := c.Config.ResolvedAgentLLM()
+	llm := agentContainerLLM(c.Config)
 	// Hard misconfiguration, not a latency nudge (LLD 2026-07-12-agent-llm-health-breaker
 	// §8, tightened 2026-07-25 per design F2b): when the operator leaves
 	// runtime.agent_llm.endpoint empty, agents inherit chat.endpoint (the
@@ -270,7 +271,7 @@ func (c *Container) initScheduler() error {
 	// agents route through the daemon proxy (topology 2), which both
 	// accepts the minted key and gives sub-second fail-over via the
 	// chat-router breaker.
-	if c.Config.Runtime.AgentLLM.Endpoint == "" && llm.Endpoint != "" {
+	if c.Config.Runtime.AgentLLM.Endpoint == "" && !c.Config.Hosting.Managed() && llm.Endpoint != "" {
 		warnAgentLLMDirectRoute(c.Logger, llm.Endpoint)
 	}
 	if llm.Endpoint != "" {
@@ -335,7 +336,7 @@ func (c *Container) initScheduler() error {
 	// proxying, the only MCP path an agent has (the credentials-bearing
 	// /app/input/mcp.json fallback was removed, GitHub #498). Keep this
 	// independent from memory: without it a role gets no MCP tools.
-	executorConfig.AgentLLMEnv["VORNIK_API_URL"] = agentCallbackURL(c.Config.Server.Address)
+	executorConfig.AgentLLMEnv["VORNIK_API_URL"] = config.AgentCallbackURL(c.Config.Server.Address)
 
 	// Project-scoped named secrets: map the daemon config's per-secret
 	// allowlist into the executor (values are already ${VAR}-expanded at
@@ -1274,7 +1275,7 @@ func (c *Container) initScheduler() error {
 			}
 
 			// Inject VORNIK_MEM_URL into agent containers so they can call back.
-			memURL := agentCallbackURL(c.Config.Server.Address)
+			memURL := config.AgentCallbackURL(c.Config.Server.Address)
 			executorConfig.AgentLLMEnv["VORNIK_MEM_URL"] = memURL
 			c.Logger.Info().Str("mem_url", memURL).Msg("memory manager initialized")
 
@@ -2083,4 +2084,14 @@ func (c *Container) defaultMaxWallClock() time.Duration {
 		return 0
 	}
 	return d
+}
+
+// agentContainerLLM is the LLM config agent containers get: ResolvedAgentLLM
+// with the endpoint the executor injects, which on a managed instance with no
+// agent_llm.endpoint is the daemon's own proxy (GitHub #786). Only the agent
+// environment changes; daemon-side readers keep ResolvedAgentLLM.
+func agentContainerLLM(cfg *config.Config) config.AgentLLMConfig {
+	llm := cfg.ResolvedAgentLLM()
+	llm.Endpoint = cfg.AgentContainerLLMEndpoint()
+	return llm
 }

@@ -158,6 +158,15 @@ type standingData struct {
 	Grants []StandingView
 	Flash  string
 	Error  string
+	// Hidden counts the ended grants (revoked, expired, used up) left out
+	// unless ?status=all (design part 09 §9.2e D3, #489).
+	Hidden int
+}
+
+// standingEnded reports whether a grant can never cover a write again.
+// Paused and suspended grants are live: the user can resume or confirm them.
+func standingEnded(state string) bool {
+	return state == brokergrants.MissRevoked || state == brokergrants.MissExpired || state == brokergrants.MissUsed
 }
 
 // standingPage serves GET /ui/approve/standing and
@@ -180,7 +189,18 @@ func (s *Service) standingPage(w http.ResponseWriter, r *http.Request, rest stri
 			s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 			return
 		}
-		s.render(w, http.StatusOK, "standing.html", standingData{Grants: views, Flash: r.URL.Query().Get("done")})
+		data := standingData{Grants: views, Flash: r.URL.Query().Get("done")}
+		if r.URL.Query().Get("status") != "all" {
+			data.Grants = nil
+			for _, v := range views {
+				if standingEnded(v.State) {
+					data.Hidden++
+				} else {
+					data.Grants = append(data.Grants, v)
+				}
+			}
+		}
+		s.render(w, http.StatusOK, "standing.html", data)
 		return
 	}
 	id, verb, ok := strings.Cut(rest, "/")

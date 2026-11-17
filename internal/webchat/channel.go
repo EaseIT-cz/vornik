@@ -58,15 +58,40 @@ type Channel struct {
 
 	mu   sync.Mutex
 	sent []string
+
+	// laterDelivery says a task this chat starts reports back into it
+	// (web-chat-design.md §5 N8, GitHub #771). The UI sets it only when the
+	// completion notifier delivers to web chat.
+	laterDelivery bool
 }
+
+// Option configures a Channel.
+type Option func(*Channel)
+
+// WithLaterDelivery tells the dispatcher this chat hears back from the tasks
+// it starts (conversation.LaterDeliveryChannel). Pass true only when the
+// completion notifier's web chat branch is wired (§5 N8).
+func WithLaterDelivery(on bool) Option { return func(c *Channel) { c.laterDelivery = on } }
 
 // New returns a fresh Channel ready to capture one turn's reply.
 // The UI handler builds one per request — never reuse across
 // requests, the Sent buffer would leak prior responses into the
 // next render.
-func New(projectID string, speaker conversation.Speaker) *Channel {
-	return &Channel{ProjectID: projectID, Speaker: speaker}
+func New(projectID string, speaker conversation.Speaker, opts ...Option) *Channel {
+	c := &Channel{ProjectID: projectID, Speaker: speaker}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
+
+// CanDeliverLater implements conversation.LaterDeliveryChannel: true only
+// with WithLaterDelivery(true). A nil channel cannot.
+func (c *Channel) CanDeliverLater() bool { return c != nil && c.laterDelivery }
+
+// NoticeName is the chat.Message Name of a completion notice stored in a web
+// chat history (§5 N3): the page shows it as an entry of its own.
+const NoticeName = "vornik-notice"
 
 // Name implements conversation.Channel.
 func (c *Channel) Name() string { return ChannelName }

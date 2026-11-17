@@ -1,0 +1,266 @@
+[
+  {
+    "id": "sw-01-flag",
+    "targets": ["scratch/statusfmt"],
+    "acceptance": "testdata/acceptance/sw-01-flag",
+    "name": "simple/easy: add a read-only --json flag",
+    "tier": "tripwire",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/statusfmt/statusfmt.go (package statusfmt), write a function RenderStatus(name string, healthy bool, checks map[string]bool) string that renders a plain-text status block, plus RenderStatusJSON(name string, healthy bool, checks map[string]bool) string returning the same data as JSON. Add scratch/statusfmt/statusfmt_test.go covering: a healthy status, an unhealthy one, an empty checks map, and that the JSON form round-trips. Do not modify any existing file."
+  },
+  {
+    "id": "sw-02-offbyone",
+    "targets": ["scratch/trunc"],
+    "acceptance": "testdata/acceptance/sw-02-offbyone",
+    "name": "simple/easy: bounded truncation without an off-by-one",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/trunc/trunc.go (package trunc), write Truncate(s string, max int) string that returns s unchanged when it fits, and otherwise exactly max bytes with the last 3 replaced by '...'. It must never return more than max bytes and must handle max < 3 by returning the first max bytes verbatim. Add scratch/trunc/trunc_test.go pinning every boundary: len(s) == max, max-1, max+1, max == 0, max == 3, and a multi-byte UTF-8 string. Do not modify any existing file."
+  },
+  {
+    "id": "sw-03-refusal",
+    "targets": ["scratch/retention"],
+    "name": "simple/medium: a validation that fails closed",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/retention/retention.go (package retention), write ParseWindow(s string) (time.Duration, error) accepting values like '30d', '12h', '45m'. It must REFUSE rather than default: an empty string, a bare number, a negative value, a zero value, and an unknown unit each return a distinct error naming what was wrong. Add scratch/retention/retention_test.go with a case per refusal and three accepted values. Do not modify any existing file."
+  },
+  {
+    "id": "sw-04-extract",
+    "targets": ["scratch/dedupe"],
+    "name": "simple/medium: extract a duplicated helper",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "Create scratch/dedupe/dedupe.go (package dedupe) containing two functions that each independently deduplicate a []string while preserving order \u2014 write them deliberately as near-duplicates first, then extract the shared logic into one unexported helper both call, keeping both exported signatures unchanged. Add scratch/dedupe/dedupe_test.go proving order preservation, empty input, all-duplicates, and that both exported functions agree on 20 random-ish inputs. Do not modify any existing file."
+  },
+  {
+    "id": "sw-05-table-test",
+    "targets": ["scratch/semver"],
+    "name": "simple/easy: table-driven tests for a pure function",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/semver/semver.go (package semver), write Compare(a, b string) (int, error) implementing major.minor.patch ordering, returning an error for anything unparseable. Add scratch/semver/semver_test.go as a single table-driven test covering: equality, each field differing, multi-digit fields (1.10.0 vs 1.9.0), and three malformed inputs. Do not modify any existing file."
+  },
+  {
+    "id": "dp-01-nilguard",
+    "targets": ["scratch/registry"],
+    "acceptance": "testdata/acceptance/dp-01-nilguard",
+    "name": "pipeline/medium: nil guard plus regression test",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/registry/registry.go (package registry), write a Registry type with a New() *Registry constructor, Add(name string, v any) error and Get(name string) (any, bool). Every exported method must be safe to call on a nil *Registry \u2014 Get returns (nil,false), Add returns the exported error ErrNilRegistry rather than panicking. Add scratch/registry/registry_test.go that calls every method on a nil receiver and fails if any panics. Do not modify any existing file."
+  },
+  {
+    "id": "dp-02-parser-hardening",
+    "targets": ["scratch/kvline"],
+    "name": "pipeline/hard: harden a parser against malformed input",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/kvline/kvline.go (package kvline), write Parse(line string) (map[string]string, error) for 'k=v k2=\"quoted v\"' input. It must reject rather than guess: unterminated quotes, a key with no '=', a duplicate key, an empty key, and trailing garbage \u2014 each with a distinct error. Add scratch/kvline/kvline_test.go with a case per rejection plus five well-formed lines including escaped quotes and empty values. Do not modify any existing file."
+  },
+  {
+    "id": "dp-03-metric",
+    "targets": ["scratch/metrics"],
+    "acceptance": "testdata/acceptance/dp-03-metric",
+    "name": "pipeline/medium: a counter with a documented cardinality bound",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/metrics/metrics.go (package metrics), write a small counter registry: a Registry type with a New() *Registry constructor, Inc(name string, labels map[string]string) error and Snapshot() map[string]int. Label cardinality must be bounded \u2014 refuse a label set with more than 4 keys (Inc returns an error and records nothing), and document in a comment why an unbounded label set is a memory leak rather than a nuisance. Add scratch/metrics/metrics_test.go covering the refusal, ordering-independence of label maps in the key, and concurrent Inc from 50 goroutines. Do not modify any existing file."
+  },
+  {
+    "id": "dp-04-concurrency",
+    "targets": ["scratch/pool"],
+    "name": "pipeline/hard: a bounded worker pool that cannot leak",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/pool/pool.go (package pool), write Run(ctx context.Context, items []string, workers int, fn func(context.Context, string) error) error that runs fn over items with at most `workers` concurrent, returns the FIRST error, and guarantees every goroutine has exited before it returns even on early error or context cancellation. Add scratch/pool/pool_test.go covering: happy path ordering-independence, an early error, context cancellation mid-run, workers > len(items), and workers <= 0 (refuse). Do not modify any existing file."
+  },
+  {
+    "id": "sw-06-idempotent",
+    "targets": ["scratch/ensure"],
+    "name": "simple/medium: an idempotent operation",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/ensure/ensure.go (package ensure), write EnsureLine(path, line string) error that appends line to the file only if an identical line is not already present, creating the file when absent. It must be safe to call repeatedly. Add scratch/ensure/ensure_test.go proving: first call creates, second call is a no-op, a line that is a prefix of an existing line is still appended, and a file ending without a trailing newline is handled. Do not modify any existing file."
+  },
+  {
+    "id": "sw-07-parse-refuse",
+    "targets": ["scratch/csvish"],
+    "name": "simple/medium: a parser that refuses ambiguity",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/csvish/csvish.go (package csvish), write SplitFields(line string) ([]string, error) for comma-separated values with optional double quotes. It must REFUSE rather than guess on: an unterminated quote, a quote appearing mid-field (a\"b), and a trailing comma with nothing after it \u2014 each a distinct error. Empty fields between commas are legal and preserved. Add scratch/csvish/csvish_test.go with a case per refusal and five well-formed lines including an empty field and an escaped quote. Do not modify any existing file."
+  },
+  {
+    "id": "sw-08-clamp",
+    "targets": ["scratch/clamp"],
+    "name": "simple/easy: a clamp with explicit bound handling",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/clamp/clamp.go (package clamp), write Clamp(v, lo, hi int) (int, error) returning v bounded to [lo,hi], and an error when lo > hi rather than silently swapping them. Add scratch/clamp/clamp_test.go covering: v below, inside and above the range; v exactly at each bound; lo == hi; and the lo > hi refusal. Do not modify any existing file."
+  },
+  {
+    "id": "sw-09-stable-sort",
+    "targets": ["scratch/rank"],
+    "name": "simple/medium: a sort whose tie-break is specified",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/rank/rank.go (package rank), write SortByScore(items []Item) []Item where Item has Name string and Score int. Sort by Score descending, breaking ties by Name ascending, and do not mutate the input slice. Add scratch/rank/rank_test.go proving the tie-break, that the input is unmodified, and that an empty and a single-element slice both work. Do not modify any existing file."
+  },
+  {
+    "id": "sw-10-no-clean-answer",
+    "targets": ["scratch/window"],
+    "name": "simple/hard: an under-specified requirement",
+    "tier": "exploratory",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/window/window.go (package window), implement 'a function that returns the busiest hour from a list of timestamps'. The requirement does NOT say what to do when two hours tie, whether hours are local or UTC, or whether the range is half-open. Do not silently pick answers: implement one defensible interpretation, and write the ambiguities and your chosen resolution into a comment block at the top of the file. Add scratch/window/window_test.go covering your stated interpretation, including the tie case. Do not modify any existing file."
+  },
+  {
+    "id": "dp-05-retry-backoff",
+    "targets": ["scratch/retry"],
+    "name": "pipeline/medium: bounded retry that honours cancellation",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/retry/retry.go (package retry), write Do(ctx context.Context, attempts int, fn func() error) error which retries fn up to `attempts` times with a fixed 10ms delay, returns the LAST error, and returns immediately when ctx is cancelled. attempts <= 0 is refused with an error rather than treated as infinite. Add scratch/retry/retry_test.go covering: success on the first try, success on the last, exhaustion, cancellation mid-retry, and the attempts <= 0 refusal. Do not modify any existing file."
+  },
+  {
+    "id": "dp-06-idempotent-merge",
+    "targets": ["scratch/mergemap"],
+    "name": "pipeline/hard: a merge with a stated conflict rule",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/mergemap/mergemap.go (package mergemap), write Merge(base, overlay map[string]string) (map[string]string, error). Overlay wins on conflict EXCEPT when the overlay value is empty, which must be treated as 'not set' rather than 'set to empty' \u2014 document why in a comment. Neither input may be mutated. Add scratch/mergemap/mergemap_test.go proving overlay precedence, the empty-value rule, non-mutation of both inputs, and nil inputs on each side. Do not modify any existing file."
+  },
+  {
+    "id": "dp-07-bounded-cache",
+    "targets": ["scratch/lru"],
+    "name": "pipeline/hard: an LRU that cannot grow without bound",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/lru/lru.go (package lru), write a fixed-capacity LRU cache with Get(k) (string,bool) and Put(k,v). Capacity is set at construction and a capacity <= 0 is refused. Eviction is strictly least-recently-USED, where Get counts as a use. Add scratch/lru/lru_test.go proving: eviction order after interleaved Get/Put, that Get refreshes recency, capacity 1, the capacity <= 0 refusal, and that size never exceeds capacity across 100 mixed operations. Do not modify any existing file."
+  },
+  {
+    "id": "dp-08-error-wrapping",
+    "targets": ["scratch/errclass"],
+    "name": "pipeline/medium: errors that survive wrapping",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/errclass/errclass.go (package errclass), define a sentinel ErrNotFound and a function Classify(err error) string returning \"not-found\" for anything wrapping ErrNotFound (however deeply), \"timeout\" for anything wrapping context.DeadlineExceeded, and \"other\" otherwise. Add scratch/errclass/errclass_test.go covering: a bare sentinel, one wrapped twice with fmt.Errorf %w, a joined error containing it, a look-alike error with the same message but no wrapping (must be \"other\"), and nil. Do not modify any existing file."
+  },
+  {
+    "id": "dp-09-atomic-write",
+    "targets": ["scratch/atomicfile"],
+    "name": "pipeline/hard: atomic replacement without partial readers",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/atomicfile/atomicfile.go (package atomicfile), write Replace(path string, data []byte, perm fs.FileMode) error. Write a temporary file in the destination directory, sync and close it, then rename it over the destination. On every failure remove the temporary file; never truncate the existing destination before rename. Add scratch/atomicfile/atomicfile_test.go covering replacement, requested permissions, no leftover temporary file, and preservation of the old file when rename cannot succeed. Do not modify any existing file."
+  },
+  {
+    "id": "dp-10-csv-validation",
+    "targets": ["scratch/strictcsv"],
+    "name": "pipeline/medium: strict CSV rows with actionable errors",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/strictcsv/strictcsv.go (package strictcsv), write Parse(io.Reader) ([]Record, error), where Record has ID string and Count int. Require the exact header id,count, reject blank IDs, reject negative or non-integer counts, and include the one-based input line in every row error. Add scratch/strictcsv/strictcsv_test.go covering a valid two-row file, wrong header, blank ID, negative count, non-integer count, quoted commas, and a malformed quoted row. Do not modify any existing file."
+  },
+  {
+    "id": "dp-11-singleflight-cache",
+    "targets": ["scratch/fillcache"],
+    "name": "pipeline/hard: concurrent cache fill without duplicate work",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/fillcache/fillcache.go (package fillcache), implement a concurrency-safe string cache whose GetOrLoad(ctx, key, load) lets only one load for the same missing key run at a time while different keys may load concurrently. Waiting callers must be able to return on context cancellation, failed loads must not be cached, and successful values must be reused. Add scratch/fillcache/fillcache_test.go covering 20 concurrent callers causing one load, parallel different keys, cancellation of a waiter, a failed load followed by retry, and race-detector-safe repeated access. Do not modify any existing file."
+  },
+  {
+    "id": "dp-12-bounded-decoder",
+    "targets": ["scratch/boundedjson"],
+    "name": "pipeline/medium: JSON decoding with an explicit size ceiling",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/boundedjson/boundedjson.go (package boundedjson), write Decode(io.Reader, maxBytes int, dst any) error. Refuse maxBytes <= 0, reject input larger than maxBytes even when its prefix is valid JSON, disallow unknown object fields, require exactly one JSON value, and wrap errors with enough context to distinguish limit, syntax, and trailing-data failures. Add scratch/boundedjson/boundedjson_test.go pinning every rule plus an input exactly at the limit. Do not modify any existing file."
+  },
+  {
+    "id": "dp-13-toposort",
+    "targets": ["scratch/toposort"],
+    "name": "pipeline/hard: deterministic dependency ordering with cycle evidence",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/toposort/toposort.go (package toposort), write Sort(nodes map[string][]string) ([]string, error). Dependencies must precede dependants; choose lexicographically when several nodes are ready; reject a dependency that is not a map key; and return an error naming at least one node in a cycle. Do not mutate the input. Add scratch/toposort/toposort_test.go covering a diamond, deterministic independent nodes, missing dependencies, self-cycle, multi-node cycle, and input non-mutation. Do not modify any existing file."
+  },
+  {
+    "id": "dp-14-path-sandbox",
+    "targets": ["scratch/safepath"],
+    "name": "pipeline/hard: filesystem paths constrained to a root",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/safepath/safepath.go (package safepath), write Resolve(root, requested string) (string, error) returning an absolute cleaned path strictly inside root. Refuse empty input, absolute requested paths, lexical .. escapes, a path equal to root itself, and existing symlinks whose resolved target escapes root. Prefix similarities such as /tmp/root-other must not pass. Add scratch/safepath/safepath_test.go covering each refusal, a normal nested path, an internal symlink, and an escaping symlink. Do not modify any existing file."
+  },
+  {
+    "id": "dp-15-env-parser",
+    "targets": ["scratch/envfile"],
+    "name": "pipeline/medium: environment parsing without silent override",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/envfile/envfile.go (package envfile), write Parse(io.Reader) (map[string]string, error). Accept blank lines and comments whose first non-space character is #; split assignments at the first =; preserve spaces in values; require keys matching [A-Z_][A-Z0-9_]*; and reject duplicate keys instead of silently overriding. Include the line number in errors. Add scratch/envfile/envfile_test.go for valid input, an embedded = in a value, comments, invalid keys, missing =, duplicates, and scanner errors from an overlong line. Do not modify any existing file."
+  },
+  {
+    "id": "dp-16-pagination",
+    "targets": ["scratch/page"],
+    "name": "pipeline/medium: stable cursor pagination under ties",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/page/page.go (package page), implement Page(items []Item, after string, limit int) ([]Item, string, error), where Item has ID string and CreatedAt time.Time. Order by CreatedAt descending then ID ascending; use an opaque base64 JSON cursor containing both fields; do not mutate input; reject limit outside 1..100 and malformed cursors; and return no next cursor on the final page. Add scratch/page/page_test.go covering tied timestamps across page boundaries, no duplicates or omissions over all pages, malformed cursor, invalid limits, empty input, and non-mutation. Do not modify any existing file."
+  },
+  {
+    "id": "dp-17-redaction",
+    "targets": ["scratch/redact"],
+    "name": "pipeline/hard: deterministic longest-match secret redaction",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/redact/redact.go (package redact), write New(secrets []string) (*Redactor, error) and Redact(string) string. Refuse empty secrets, deduplicate exact repeats, replace every occurrence with [REDACTED], and when secrets overlap choose the longest match at each position so output does not depend on input order. The redactor must be safe for concurrent use and must not mutate the provided slice. Add scratch/redact/redact_test.go covering overlap in both input orders, repeated occurrences, Unicode, duplicates, empty-secret refusal, non-mutation, and concurrent calls under the race detector. Do not modify any existing file."
+  },
+  {
+    "id": "dp-18-batcher",
+    "targets": ["scratch/batcher"],
+    "name": "pipeline/hard: bounded batching with shutdown semantics",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/batcher/batcher.go (package batcher), implement a generic Batcher[T] with a bounded input queue, maximum batch size, flush interval, and callback. Submit must return an error rather than block when full; Close must flush accepted items exactly once, wait for the callback, be idempotent, and make later Submit calls fail. Refuse non-positive sizes or intervals. Add scratch/batcher/batcher_test.go with a controllable short interval covering size flush, timer flush, full-queue refusal, close flush, double close, submit-after-close, and no loss or duplication across concurrent submitters. Do not modify any existing file."
+  },
+  {
+    "id": "dp-19-circuit-breaker",
+    "targets": ["scratch/breaker"],
+    "name": "pipeline/hard: circuit breaker with an injectable clock",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/breaker/breaker.go (package breaker), implement a concurrency-safe circuit breaker with closed, open, and half-open states. Its constructor takes a failure threshold, cooldown, and injected now func. Consecutive failures open it; calls while open are refused without invoking the function; after cooldown exactly one probe may run; probe success closes and probe failure reopens. A normal success resets the failure count. Add scratch/breaker/breaker_test.go using a fake clock for every transition, the reset rule, one-probe concurrency, and invalid constructor arguments. Do not modify any existing file."
+  },
+  {
+    "id": "dp-20-dedup-window",
+    "targets": ["scratch/dedupwindow"],
+    "name": "pipeline/medium: bounded idempotency window",
+    "tier": "gate",
+    "workflow": "dev-pipeline",
+    "scoring": {"kind":"pinned_case_validation","producerStep":"analyze","verifierStep":"test"},
+    "prompt": "In a NEW file scratch/dedupwindow/dedupwindow.go (package dedupwindow), implement a concurrency-safe SeenOrAdd(key string) bool with a maximum entry count, TTL, and injected now func. It returns false for the first live occurrence and true for duplicates; expired entries behave as new; insertion at capacity evicts the entry with the earliest expiry, breaking ties lexicographically by key; and empty keys or invalid constructor arguments are refused. Add scratch/dedupwindow/dedupwindow_test.go covering TTL boundaries, deterministic eviction, duplicate refresh semantics (duplicates must NOT extend TTL), capacity 1, invalid inputs, and concurrent duplicate calls. Do not modify any existing file."
+  }
+]

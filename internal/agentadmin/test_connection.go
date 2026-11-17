@@ -59,7 +59,7 @@ type ConnectionResult struct {
 // TestConnectionRule is the agent-facing statement of what the answer means;
 // the tool description renders it.
 const TestConnectionRule = "Returns {code, http_status_class, checked_at}, and for a connection with a named account also account (its label) and identity_source (agent or provider). code is ok, auth_rejected, blocked_private_address, unreachable, tls_error, not_approved, credential_missing or unknown. " +
-	"blocked_private_address means the daemon refused the address the host resolves to (private, loopback or link-local). For an intranet host, the operator can allow it by name in agent_admin.private_api_hosts; that needs an https base URL, and never allows loopback or link-local. " +
+	"blocked_private_address means the daemon refused the address the host resolves to (private, loopback or link-local). For an intranet host, the operator can allow it by name in agent_admin.private_api_hosts; that needs an https URL, and never allows loopback or link-local. " +
 	"ok means the provider answered and did not refuse the credential; ok with 4xx means it answered and did not refuse the credential, not that the request was served. " +
 	"A stored credential is not proof the provider accepts it: call this after the user enters one, before you define a workflow that uses it."
 

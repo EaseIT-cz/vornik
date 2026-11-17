@@ -450,6 +450,8 @@
                         {{end}}
                         {{end}}
                         {{if $.MCPWritable}}
+                        {{/* Grant the server's tools to a project's roles (#627). */}}
+                        <a href="/ui/admin/control-plane/mcp/use?server={{.Name}}" class="px-2.5 py-1 text-xs rounded-md bg-dark-700 hover:bg-dark-600 text-gray-300 border border-dark-600">Use in a project</a>
                         <form method="POST" action="/ui/admin/control-plane/mcp" data-confirm="Propose removing MCP server {{.Name}}? (daemon-scope — you review + apply on the Proposals tab)">
                             <input type="hidden" name="action" value="remove">
                             <input type="hidden" name="name" value="{{.Name}}">

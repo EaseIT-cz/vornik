@@ -3,6 +3,7 @@ package api
 import (
 	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -111,6 +112,16 @@ func isDesignClass(class string) bool {
 	return strings.EqualFold(class, "spec") || strings.EqualFold(class, "decision")
 }
 
+// workflowOutputName is the source name the companion workflows give their
+// outputs: <kind>-<yyyymmdd>-<4 hex>.md (design 22, amendment 2026-11-15,
+// GitHub #550 D2). A design's source name is its repository path, which
+// never has this shape.
+var workflowOutputName = regexp.MustCompile(`^(review|critique|brief|readability|findings)-[0-9]{8}-[0-9a-f]{4}\.md$`)
+
+// isWorkflowOutputName reports whether a source name is a companion
+// workflow's output name.
+func isWorkflowOutputName(name string) bool { return workflowOutputName.MatchString(name) }
+
 // countDesigns counts, for scope, the design hits, the design-class workflow
 // output left out, and the NULL-scoped hits.
 func countDesigns(scope string, hits []recallHit) (designs, workflow, unscoped int) {
@@ -121,7 +132,7 @@ func countDesigns(scope string, hits []recallHit) (designs, workflow, unscoped i
 		if !isDesignClass(h.ContentClass) || (scope != "" && h.RepoScope != scope) {
 			continue
 		}
-		if h.TaskID != "" {
+		if h.TaskID != "" || isWorkflowOutputName(h.SourceName) {
 			workflow++
 			continue
 		}

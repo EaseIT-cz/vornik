@@ -354,7 +354,7 @@ chat:
   # each incoming request's `model` field pick the backend. Combined
   # with the internal chat proxy at /api/v1/chat/completions, this lets
   # swarm role `model:` fields like "claude-sonnet-4-6",
-  # "gpt-5.4-mini", or "google/gemini-2.5-pro" route to the right
+  # "gpt-6-luna", or "google/gemini-2.5-pro" route to the right
   # backend automatically.
   # router:
   #   default: claude-subscription   # fallback kind: claude-cli | claude-subscription | codex-cli | codex-subscription | http | vertex
@@ -382,7 +382,7 @@ chat:
   #   codex_subscription:
   #     enabled: true
   #     auth_path: ""                 # empty = ~/.codex/auth.json
-  #     model: "gpt-5.4-mini"
+  #     model: "gpt-6-luna"            # empty = gpt-6-luna
   #     effort_level: "low"           # low | medium | high
   #
   #   http:

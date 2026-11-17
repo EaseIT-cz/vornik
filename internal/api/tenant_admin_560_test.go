@@ -46,17 +46,23 @@ var allSurfaces = []Surface{
 	SurfaceConfigShow, SurfaceInstinctRetireGlobal, SurfaceMemoryFirewall, SurfaceOperatorAccounts,
 	SurfaceOperatorLinks, SurfaceOperatorProposals, SurfaceOperators, SurfaceSkillSetGlobal,
 	SurfaceOperatorCredentials, SurfaceConfigJournal, SurfaceInflight, SurfaceAgentGrant,
-	SurfaceProjectKeys, SurfaceSetupApply,
+	SurfaceProjectKeys, SurfaceSetupApply, SurfaceAccountTransitions, SurfaceMCPToolGrant,
+	SurfaceOperatorConsoleRead,
+	SurfaceModelProvider,
 }
 
 var grantedSurfaces = map[Surface]bool{
 	SurfaceWizardConverse: true, SurfaceWizard: true, SurfaceMCPOAuthConnect: true, SurfaceOperatorAudit: true,
 	SurfaceOperatorCredentials: true, // GitHub #623
 	SurfaceProjectKeys:         true, // GitHub #754
+	SurfaceMCPToolGrant:        true, // GitHub #780
+	SurfaceOperatorConsoleRead: true, // GitHub #787
+	SurfaceModelProvider:       true, // GitHub #794
 }
 
-// B3: exactly six surfaces are granted (the fifth, operator_credentials,
-// GitHub #623; the sixth, project_keys, GitHub #754).
+// B3: exactly eight surfaces are granted (the fifth, operator_credentials,
+// GitHub #623; the sixth, project_keys, GitHub #754; the seventh,
+// mcp_tool_grant, GitHub #780; the eighth, operator_console_read, #787).
 func TestTenantAdmin560_Allowlist(t *testing.T) {
 	n := 0
 	for _, s := range allSurfaces {
@@ -67,8 +73,8 @@ func TestTenantAdmin560_Allowlist(t *testing.T) {
 			n++
 		}
 	}
-	if n != 6 || len(tenantAdminSurfaces) != 6 {
-		t.Fatalf("granted %d surfaces (map holds %d), want 6", n, len(tenantAdminSurfaces))
+	if n != 9 || len(tenantAdminSurfaces) != 9 {
+		t.Fatalf("granted %d surfaces (map holds %d), want 9", n, len(tenantAdminSurfaces))
 	}
 	if TenantAdminMay(Surface("unlisted")) {
 		t.Fatal("an unlisted surface was granted")
@@ -186,12 +192,20 @@ func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 					}
 				}
 			case *ast.CallExpr:
-				sel, ok := x.Fun.(*ast.SelectorExpr)
-				if !ok {
+				// A selector call (s.requireOperatorScopeFor, api.OperatorSurfaceAccessFor)
+				// or a bare call inside this package (OwnerConsoleRead's
+				// OperatorSurfaceAccessFor, GitHub #787).
+				var name string
+				switch fn := x.Fun.(type) {
+				case *ast.SelectorExpr:
+					name = fn.Sel.Name
+				case *ast.Ident:
+					name = fn.Name
+				default:
 					return true
 				}
 				idx := -1
-				switch sel.Sel.Name {
+				switch name {
 				case "operatorOnly":
 					idx = 0
 				case "requireOperatorScopeFor", "OperatorSurfaceAccessFor":
@@ -206,7 +220,7 @@ func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 				}
 				id, ok := arg.(*ast.Ident)
 				if !ok {
-					t.Errorf("%s: %s is passed a non-constant surface", fset.Position(x.Pos()), sel.Sel.Name)
+					t.Errorf("%s: %s is passed a non-constant surface", fset.Position(x.Pos()), name)
 					return true
 				}
 				used[id.Name]++

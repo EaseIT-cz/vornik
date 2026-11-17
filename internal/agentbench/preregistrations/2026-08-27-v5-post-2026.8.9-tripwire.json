@@ -1,0 +1,16 @@
+{
+  "arms": [
+    "2026.8.9-49-gc380e996",
+    "2026.8.9-shipped"
+  ],
+  "metric": "tripwire_pass_rate",
+  "targetDelta": 0.0,
+  "sigmaD": 0.0,
+  "sigmaN": 0,
+  "computedPairs": 0,
+  "independentAxes": [
+    "binary_sha256",
+    "agent_images"
+  ],
+  "rationale": "Short regression tripwire over the four dev-swarm tripwire tasks (simple-workflow, issue-subtask, dev-pipeline, adaptive), 3 repeats, on the current tree 49 commits past 2026.8.9. Commissioned to answer ONE question: did the fixes landed since the last release break a shipped workflow path outright. LIMITS, registered BEFORE the run rather than explained after. FIRST AND LARGEST: this is NOT a comparison and cannot become one. No scored arm journal exists anywhere on disk — every artifact under agentbench-runs/ is a gold pass — and the 2026-08-21 store-clear amendment voided every pre-clear baseline, calibration and noise floor that might otherwise have been reused. The second arm named here is the baseline that does not yet exist; it is named because that is the comparison these figures are eventually for, and deciding afterwards what to compare against is the line between a benchmark and a press release. Until that arm runs, this pass yields ABSOLUTE pass/fail per tripwire task and nothing else. SECOND: sigmaD is recorded as 0 and computedPairs as 0 because neither is meaningful here. The tripwire tier is binary by construction — a repeat passes only if its task reached a successful terminal AND, where its workflow declares a contract, that contract was fully met — so there is no effect size to resolve and no noise floor to clear. A non-zero value in either field would be a fabricated number dressed as a measurement. THIRD: three repeats detect a hard break and a frequent flake. They do not detect a rare one, and a 3/3 pass is not evidence that a path is reliable; it is evidence that it is not broken. FOURTH: NO gold manifest is loaded. The tripwire tasks are not in dev-swarm-tasks-v1.json and have no recorded ground truth, so this pass runs only the probes that need none — schema-following and tool-use. The tool-grant probe is therefore dark for this pass by construction, not by defect. FIFTH: both the daemon binary and the agent image differ from anything previously run; they move together and neither can be attributed alone, which is why both are declared independent. EXPECTED DIRECTION: 4/4 tasks passing 3/3 repeats. The work since 2026.8.9 is registry, secrets-allowlist and validator/loader hardening plus outputguard rule naming — none of it touches workflow routing, so a tripwire failure would mean a config-validation or tool-gate change reached agent execution by a path nobody predicted, and that is the finding worth having."
+}

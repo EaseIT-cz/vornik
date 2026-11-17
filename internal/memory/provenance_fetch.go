@@ -138,12 +138,88 @@ func (s *ProvenanceSweeper) fetchClone(ctx context.Context, c ProvenanceClone) P
 	switch {
 	case err == nil:
 		res.Outcome = ProvenanceFetchOK
+		if !automatic {
+			s.markClone(dir, c.ProjectID)
+		}
 	case errors.Is(fctx.Err(), context.DeadlineExceeded):
 		res.Outcome, res.Error = ProvenanceFetchTimeout, err.Error()
 	default:
 		res.Outcome, res.Error = ProvenanceFetchFailed, err.Error()
 	}
 	return res
+}
+
+// ProvenanceCloneMarker is the file a configured clone carries at its root:
+// advice to a person that the daemon depends on the clone (GitHub #669 item
+// 4, design 22 §22.2.16b). The daemon never reads it back.
+const ProvenanceCloneMarker = "VORNIK-PROVENANCE-CLONE.txt"
+
+// markClone writes the marker into a configured clone after a fetch that
+// passed the verifier's clone checks, if absent, and lists it in the clone's
+// .git/info/exclude, so git status stays clean. A clone whose .git is a file
+// (a worktree or a submodule) gets nothing: no exclude can be written there,
+// and the clean tree wins. A write failure is a warning and changes nothing
+// else: verification reads git objects only.
+func (s *ProvenanceSweeper) markClone(dir, projectID string) {
+	gitDir := filepath.Join(dir, ".git")
+	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
+		return
+	}
+	marker := filepath.Join(dir, ProvenanceCloneMarker)
+	if err := excludeMarker(gitDir); err != nil {
+		s.Logger.Warn().Err(err).Str("project_id", projectID).Str("dir", dir).Msg("provenance clone: cannot exclude the marker; writing none")
+		return
+	}
+	if _, err := os.Lstat(marker); err == nil {
+		return
+	}
+	body := "This directory is a provenance clone that Vornik uses.\n\n" +
+		"Project " + projectID + " names it in memory.provenance_clone (projects/" + projectID + ".yaml).\n" +
+		"The daemon fetches the trusted branch into it and verifies memory against it.\n" +
+		"Deleting it stops provenance verification for that project, and any other\n" +
+		"project configured on this path, until it is cloned again.\n"
+	// O_EXCL: never through a link planted at the marker's path, and never
+	// over a file that appeared since the check above.
+	f, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err == nil {
+		_, err = f.WriteString(body)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil && !os.IsExist(err) {
+		s.Logger.Warn().Err(err).Str("project_id", projectID).Str("dir", dir).Msg("provenance clone: cannot write the marker")
+	}
+}
+
+// excludeMarker adds the marker to .git/info/exclude once.
+func excludeMarker(gitDir string) error {
+	line := "/" + ProvenanceCloneMarker
+	path := filepath.Join(gitDir, "info", "exclude")
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if l == line {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
+		line = "\n" + line
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // LastFetches returns each configured clone's last fetch, by project.

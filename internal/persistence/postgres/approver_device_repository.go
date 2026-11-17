@@ -391,6 +391,35 @@ func (r *ApproverDeviceRepository) RevokeDevice(ctx context.Context, id string, 
 	}))
 }
 
+// DeleteRevokedDevice implements persistence.ApproverDeviceRepository
+// (design part 09 §9.2e, GitHub #489).
+func (r *ApproverDeviceRepository) DeleteRevokedDevice(ctx context.Context, id string) error {
+	err := r.withTx(ctx, func(x persistence.DBTX) error {
+		if _, err := x.ExecContext(ctx, `DELETE FROM approver_push_subscriptions WHERE device_id = $1
+			AND EXISTS (SELECT 1 FROM approver_devices WHERE id = $1 AND revoked_at IS NOT NULL)`, id); err != nil {
+			return err
+		}
+		res, err := x.ExecContext(ctx, `DELETE FROM approver_devices WHERE id = $1 AND revoked_at IS NOT NULL`, id)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 1 {
+			return err
+		}
+		var one int
+		if err := x.QueryRowContext(ctx, `SELECT 1 FROM approver_devices WHERE id = $1`, id).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+			return persistence.ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		return persistence.ErrApproverDeviceLive
+	})
+	if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrApproverDeviceLive) {
+		return err
+	}
+	return mapDBError(err)
+}
+
 // CreateRequest implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) CreateRequest(ctx context.Context, q persistence.AgentApprovalRequestRow) error {
 	return insertApprovalRequest(ctx, r.db, q)
@@ -534,6 +563,13 @@ func (r *ApproverDeviceRepository) MarkApplyFailed(ctx context.Context, id, reas
 // ListApprovedUnapplied implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) ListApprovedUnapplied(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
 	return r.listRequests(ctx, `status = 'approved' AND applied_at IS NULL ORDER BY decided_at, id`)
+}
+
+// ListApplyFailedSince implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListApplyFailedSince(ctx context.Context, since time.Time, limit int) ([]persistence.AgentApprovalRequestRow, error) {
+	return r.listRequests(ctx, `status = 'approved' AND created_at >= $1 AND applied_at IS NOT NULL AND applied_at >= $2
+		AND apply_error IS NOT NULL AND apply_error <> '' ORDER BY applied_at DESC, id DESC LIMIT $3`,
+		since.Add(-persistence.ApplyFailedCreatedSlack), since, limit)
 }
 
 // ListRecentByNamespace implements persistence.ApproverDeviceRepository.

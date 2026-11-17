@@ -31,7 +31,15 @@ case "\$1" in
   --eval) v=\$(printf '%s' "\$2" | sed -n "s/.*vercmp('\\([^']*\\)', '\\([^']*\\)').*/\\1 \\2/p")
       set -- \$v
       if [ "\$1" = "\$2" ]; then echo 0; elif [ "\$(printf '%s\n%s\n' "\$1" "\$2" | sort -V | tail -n1)" = "\$1" ]; then echo 1; else echo -1; fi ;;
-  -U) [ -f "\$s/rpm_fail" ] && exit 1
+  -U) case "\$*" in *--test*)
+        echo "rpm-test LC_ALL=\${LC_ALL:-}" >> "\$s/calls"
+        if [ -f "\$s/deps_missing" ]; then
+          printf 'error: Failed dependencies:\n\tgit is needed by vornik-enterprise-2.0-1.x86_64 \303\251\n' >&2
+          exit 3
+        fi
+        exit 0 ;;
+      esac
+      [ -f "\$s/rpm_fail" ] && exit 1
       case "\$*" in *new.rpm*) echo -n 2.0-1 > "\$s/installed" ;; *old.rpm*) echo -n 1.0-1 > "\$s/installed" ;; esac ;;
   *) echo "fake rpm: unexpected \$*" >&2; exit 99 ;;
 esac
@@ -177,11 +185,11 @@ ever "it accepts with the installed binary" "daemon --accept-eula"
 
 reset; touch "$s/gate_fail"; rc=$(up)
 check "a gate that never idles stops nothing" 1 '"step":"gate"' "$rc"
-never "a gate failure stops nothing" "systemctl stop\|rpm -U"
+never "a gate failure stops nothing" "systemctl stop\|rpm -U --define"
 
 reset; touch "$s/backup_fail"; rc=$(up)
 check "a failed snapshot installs nothing and starts again" 1 '"step":"snapshot"' "$rc"
-never "a failed snapshot installs nothing" "rpm -U"
+never "a failed snapshot installs nothing" "rpm -U --define"
 [ -f "$s/active" ] || { echo "FAIL: a failed snapshot left the unit stopped"; fail=1; }
 
 reset; touch "$s/start_fail_2.0-1"; rc=$(up)
@@ -218,6 +226,32 @@ check "an upgrade is refused while one is in progress" 1 "an upgrade is in progr
 reset; echo -n 2.0-1 > "$s/installed"; printf '{"phase":"installed","from":"1.0-1","to":"2.0-1","snapshot":"x"}\n' > "$work/state/state.json"
 rc=$(run --package "$work/new.rpm" --from-package "$work/old.rpm")
 check "a stale state file at the to-version is removed (then the same version is refused)" 1 "is not newer" "$rc"
+
+# GitHub #775 (design: amendment 2026-11-14): a missing requirement is found
+# by rpm -U --test before anything changes. Found at: production (the first
+# managed upgrade, 2026.11.4 to 2026.11.5, lacked git). Regression test at:
+# unit (this file, as every D2 case). Lower because no lane holds a managed
+# image with an older release and a missing requirement.
+reset; touch "$s/deps_missing"; rc=$(up)
+check "a missing requirement is refused before any change" 1 '"ok":false,"release":"2.0-1","result":"failed","step":"deps"' "$rc"
+check "the reason names what is missing" 1 'git is needed by vornik-enterprise-2.0-1' "$rc"
+never "a missing requirement changes nothing" "gate\|systemctl stop\|vornikctl backup\|rpm -U --define"
+ever "the check runs in the C locale" "rpm-test LC_ALL=C"
+[ ! -e "$work/state/state.json" ] || { echo "FAIL: a deps refusal left state.json"; fail=1; }
+if [ "$(wc -l < "$work/out")" != 1 ] || LC_ALL=C grep -q '[^ -~]' "$work/out"; then
+  echo "FAIL: a deps refusal's stdout is not one printable-ASCII line:"; sed 's/^/  out: /' "$work/out"; fail=1
+else
+  echo "managed-upgrade: a deps refusal is one printable-ASCII line — OK"
+fi
+grep -q 'git is needed by' "$work/err" || { echo "FAIL: rpm's own output did not reach stderr"; fail=1; }
+reset; rc=$(up)
+t=$(grep -n -m1 '^rpm -U --test' "$s/calls" | cut -d: -f1); g=$(grep -n -m1 '^gate --drain' "$s/calls" | cut -d: -f1)
+if [ -n "$t" ] && [ -n "$g" ] && [ "$t" -lt "$g" ]; then
+  echo "managed-upgrade: the dependency check comes before the gate — OK"
+else
+  echo "FAIL: the dependency check (line ${t:-none}) is not before the gate (line ${g:-none})"; fail=1
+fi
+ever "the check tests the private copy with the signature enforced" "rpm -U --test --define _pkgverify_level signature .*/new/new.rpm"
 
 reset; touch "$s/rpm_fail"; rc=$(up)
 check "a failed install rolls back" 1 '"result":"failed","step":"install"' "$rc"

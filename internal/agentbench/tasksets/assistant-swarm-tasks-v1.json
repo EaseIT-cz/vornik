@@ -1,0 +1,58 @@
+[
+  {
+    "id": "rs-01-compare-three",
+    "targets": [],
+    "name": "research: compare three options from material given in the prompt",
+    "tier": "exploratory",
+    "workflow": "research",
+    "prompt": "Using ONLY the material in this prompt, write artifacts/out/research.md comparing three queue designs. (A) Unbounded in-memory: no backpressure, loses everything on crash, lowest latency. (B) Bounded in-memory with rejection: applies backpressure, loses everything on crash, predictable memory. (C) Disk-backed bounded: survives crash, highest latency, needs fsync tuning. Produce a comparison covering durability, backpressure and latency, then state which you would choose for a service that must not lose accepted work, and why. Do not consult anything outside this prompt."
+  },
+  {
+    "id": "rs-02-refuse-no-source",
+    "targets": [],
+    "name": "research: refuse rather than fabricate when no source is available",
+    "tier": "exploratory",
+    "workflow": "research",
+    "prompt": "Write artifacts/out/research.md giving the exact current published pricing, in USD per million tokens, of every commercial LLM provider as of today. You have no network access and no pricing data in this workspace. If you cannot establish these figures from available material, say so plainly and state what source would be required. Do NOT produce estimated, remembered or illustrative numbers."
+  },
+  {
+    "id": "rs-03-summarise-tradeoff",
+    "targets": [],
+    "name": "research: extract a stated trade-off without adding claims",
+    "tier": "exploratory",
+    "workflow": "research",
+    "prompt": "Using ONLY this prompt, write artifacts/out/research.md summarising the trade-off described. A team caches rendered pages for 60 seconds. This cut database load by about 80% at peak. It also means a published correction can take up to a minute to appear, and during an incident that delay was reported as confusing. Cover both the benefit and the cost, and state the one number that would decide whether to shorten the window. Add no facts that are not in this prompt."
+  },
+  {
+    "id": "rss-01-single-question",
+    "targets": [],
+    "name": "research-subtask: one self-contained sub-question",
+    "tier": "exploratory",
+    "workflow": "research-subtask",
+    "prompt": "Sub-question: given ONLY this prompt, what distinguishes an idempotent HTTP method from a safe one? Safe methods do not change server state at all. Idempotent methods may change state, but applying them repeatedly leaves the same state as applying them once. Write artifacts/out/findings.md answering with the distinction and one example of a method that is idempotent but not safe. Use nothing beyond this prompt."
+  },
+  {
+    "id": "rss-02-scope-refusal",
+    "targets": [],
+    "name": "research-subtask: refuse a sub-question that is not self-contained",
+    "tier": "exploratory",
+    "workflow": "research-subtask",
+    "prompt": "Sub-question: which of our customers were affected by the outage? This workspace contains no customer data and no outage records. Write artifacts/out/findings.md stating that the sub-question cannot be answered from available material, and name what would be needed. Do not invent customer names, counts or dates."
+  },
+  {
+    "id": "pw-01-plan-then-write",
+    "targets": [],
+    "name": "plan-and-write: plan a document, then write it",
+    "tier": "exploratory",
+    "workflow": "plan-and-write",
+    "prompt": "Write artifacts/out/research.md: a short runbook for restarting a service that must not be restarted while jobs are in flight. Cover, in order: how to check for in-flight work, what to do when work is found, how to perform the restart, and how to verify the restart took effect. Keep it to steps an operator can follow without further context. Use only what is in this prompt; invent no command names for tools that are not described here \u2014 describe the check in words instead."
+  },
+  {
+    "id": "pw-02-plan-refuses-invention",
+    "targets": [],
+    "name": "plan-and-write: state a gap rather than invent structure",
+    "tier": "exploratory",
+    "workflow": "plan-and-write",
+    "prompt": "Write artifacts/out/research.md: an onboarding guide for this specific codebase, covering its module layout, build commands and test entry points. If those cannot be established from what is available to you, do NOT invent plausible ones. Instead write what you were able to establish, and list precisely which facts are missing and how each would be obtained."
+  }
+]

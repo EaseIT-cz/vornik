@@ -43,6 +43,20 @@
                 </ul>
             </div>
             {{end}}
+            {{with .AgentApplyFailed}}
+            <div class="mb-4 space-y-2">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Approved, but could not be applied</h2>
+                <ul class="v-list">
+                    {{range .}}<li class="v-inbox-row"><div class="v-inbox-row__body min-w-0">
+                        <p class="text-sm text-gray-100">{{.Sentence}}</p><p class="text-xs text-gray-500">{{with .Approved}}Approved {{.}}. {{end}}{{.Reason}}</p>
+                    </div></li>{{end}}
+                </ul>
+                {{if $.AgentApplyFailedMore}}<p class="text-xs text-gray-500">More requests failed than are shown here.</p>{{end}}
+            </div>
+            {{end}}
+            {{if .AgentApplyFailedFailed}}
+            <p class="mb-4 rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">Could not load the approved requests that failed to apply, so they are not listed here.</p>
+            {{end}}
             {{if .AgentApprovalsFailed}}
             <div class="mb-4 space-y-2">
                 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Waiting on your approver device</h2>
@@ -55,7 +69,7 @@
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
                 </ul>
-            {{else if not (or .AgentApprovals .AgentApprovalsFailed)}}
+            {{else if not (or .AgentApprovals .AgentApprovalsFailed .AgentApplyFailed .AgentApplyFailedFailed)}}
                 {{template "emptyState" (dict "Icon" "tasks" "Title" "All clear" "Hint" "Nothing needs your attention — no approvals, checkpoints, recent failures, or blocked tasks.")}}
             {{end}}
             {{with .StandingGrants}}
@@ -132,7 +146,13 @@
         {{if gt .Subtasks 0}}<span class="text-xs px-1.5 py-0.5 rounded-md bg-violet-900/40 text-violet-700 dark:text-violet-300" title="{{.Subtasks}} step(s)">{{.Subtasks}} steps</span>{{end}}
         {{if .Origin}}<span class="text-xs text-gray-500 ml-auto">{{.Origin}}</span>{{end}}
     </div>
+    {{/* What was asked first, then where it stands (#781). */}}
+    {{if .Summary}}
+    <a href="{{.Href}}" class="block text-sm text-gray-200 hover:text-gray-100 line-clamp-2">{{.Summary}}</a>
+    <div data-request-status class="text-xs text-gray-500 truncate">{{.StatusLine}}</div>
+    {{else}}
     <div class="text-sm text-gray-200">{{.StatusLine}}</div>
+    {{end}}
     {{/* Deliverables collapse into a native <details> (2026-07-12
          mobile-usability pass) — chips ate vertical space on phones.
          No JS: <details> state survives HTMX list swaps rebuilding the

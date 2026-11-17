@@ -267,6 +267,38 @@
         });
     }
 
+    // Task completion notices (§5 N6, GitHub #771): while the page is
+    // visible and no turn runs, ask every 15 s, and once when the page comes
+    // back, for notices after the ones shown. The HTML is the server's.
+    var noticesURL = root.getAttribute('data-chat-notices');
+    var noticesSeen = parseInt(thread.getAttribute('data-notices') || '0', 10) || 0;
+    var noticesBusy = false;
+    function pollNotices() {
+        if (!noticesURL || running || noticesBusy || document.hidden) return;
+        noticesBusy = true;
+        fetch(noticesURL + '?after=' + noticesSeen, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+            .then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (b) {
+                noticesBusy = false;
+                if (!b || running) return;
+                if (b.html) {
+                    hideEmpty();
+                    var pending = thread.querySelector('[data-chat-pending]');
+                    if (pending) pending.insertAdjacentHTML('beforebegin', b.html);
+                    else thread.insertAdjacentHTML('beforeend', b.html);
+                    enhance(thread);
+                    scrollDown();
+                }
+                if (typeof b.count === 'number') {
+                    noticesSeen = b.count;
+                    thread.setAttribute('data-notices', String(b.count));
+                }
+            })
+            .catch(function () { noticesBusy = false; });
+    }
+    setInterval(pollNotices, 15000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) pollNotices(); });
+
     enhance(thread);
     grow();
     // A reload during a turn resumes polling it (§2.4).

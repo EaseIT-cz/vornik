@@ -217,6 +217,9 @@ type ArmFields struct {
 	// AcceptanceSHA256 pins the hidden acceptance suites (and which tasks
 	// have one): changing a test changes what "passed" means (§12.24).
 	AcceptanceSHA256 string `json:"acceptanceSha256,omitempty"`
+	// Scaffold is what ran the model: the swarm (every journal before GitHub
+	// #650, which records none) or a bare-model baseline. "" reads as swarm.
+	Scaffold string `json:"scaffold,omitempty"`
 
 	// Probes lists the probes that scored the run, sorted. A run scored by two
 	// probes is not a superset of one scored by three — the third may have
@@ -230,7 +233,7 @@ type ArmFields struct {
 //
 // Name is deliberately absent: an arm renamed is the same experiment.
 func (a ArmFields) fieldPairs() [][2]string {
-	return [][2]string{
+	pairs := [][2]string{
 		{"harness_version", a.HarnessVersion},
 		{"binary_sha256", a.BinarySHA256},
 		{"config_sha256", a.ConfigSHA256},
@@ -244,17 +247,39 @@ func (a ArmFields) fieldPairs() [][2]string {
 		{"acceptance_sha256", a.AcceptanceSHA256},
 		{"probes", strings.Join(sortedCopy(a.Probes), ",")},
 	}
+	// A swarm arm adds no pair, so every key recorded before the scaffold
+	// existed is unchanged (journals store their key and the gate recomputes
+	// it); a bare arm adds one, and the pair mismatch refuses comparison.
+	if sc := a.scaffold(); sc != ScaffoldSwarm {
+		pairs = append(pairs, [2]string{"scaffold", sc})
+	}
+	return pairs
+}
+
+// Scaffold values (GitHub #650).
+const (
+	ScaffoldSwarm       = "swarm"
+	ScaffoldBarePass1   = "bare-pass1"
+	ScaffoldBarePass2   = "bare-pass2"
+	ScaffoldBareMatched = "bare-matched"
+)
+
+func (a ArmFields) scaffold() string {
+	if a.Scaffold == "" {
+		return ScaffoldSwarm
+	}
+	return a.Scaffold
 }
 
 // ComparabilityAxes are the axis names CheckComparable reports, and the only
 // values a pre-registration may nominate as its independent variable.
 func ComparabilityAxes() []string {
 	pairs := ArmFields{}.fieldPairs()
-	out := make([]string, 0, len(pairs))
+	out := make([]string, 0, len(pairs)+1)
 	for _, p := range pairs {
 		out = append(out, p[0])
 	}
-	return out
+	return append(out, "scaffold")
 }
 
 // CheckComparableExcept is CheckComparable with a declared independent variable.

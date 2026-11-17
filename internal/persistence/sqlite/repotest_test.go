@@ -189,6 +189,7 @@ func TestIdentityRepository_Contract(t *testing.T) {
 func TestAPIKeyAttributable_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunAPIKeyAttributableSuite(t, sqlite.NewAPIKeyRepository(db.DB))
+	repotest.RunAPIKeyDeleteRetiredSuite(t, sqlite.NewAPIKeyRepository(db.DB))
 }
 
 func TestOperatorIdentityLinkRepository_Contract(t *testing.T) {

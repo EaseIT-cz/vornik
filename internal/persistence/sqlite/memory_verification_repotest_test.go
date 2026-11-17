@@ -25,11 +25,11 @@ func memoryVerificationHarness(db *sql.DB) repotest.MemoryVerificationHarness {
 		SeedChunk: func(ctx context.Context, c repotest.VerificationSeedChunk) error {
 			_, err := db.ExecContext(ctx, `INSERT INTO project_memory_chunks
 				(id, project_id, content, content_hash, created_at, artifact_id, task_id,
-				 producer_role, validator_role, validation_status, source_name, repo_scope)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				c.ID, c.ProjectID, c.Content, "h-"+c.ID, persistence.SQLiteTime(time.Now()), c.ArtifactID,
+				 producer_role, validator_role, validation_status, source_name, repo_scope, confidence)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				c.ID, c.ProjectID, c.Content, "h-"+c.ID, persistence.SQLiteTime(time.Now()), nullStr(c.ArtifactID),
 				nullStr(c.TaskID), nullStr(c.ProducerRole), nullStr(c.ValidatorRole), c.Status,
-				nullStr(c.SourceName), nullStr(c.RepoScope))
+				nullStr(c.SourceName), nullStr(c.RepoScope), c.Confidence)
 			return err
 		},
 		ReadChunk: func(ctx context.Context, id string) (string, string, error) {
@@ -41,6 +41,15 @@ func memoryVerificationHarness(db *sql.DB) repotest.MemoryVerificationHarness {
 		SetChunk: func(ctx context.Context, id, status, validator string) error {
 			_, err := db.ExecContext(ctx, `UPDATE project_memory_chunks SET validation_status = ?, validator_role = ? WHERE id = ?`,
 				status, nullStr(validator), id)
+			return err
+		},
+		ReadConfidence: func(ctx context.Context, id string) (float64, error) {
+			var v float64
+			err := db.QueryRowContext(ctx, `SELECT confidence FROM project_memory_chunks WHERE id = ?`, id).Scan(&v)
+			return v, err
+		},
+		SetConfidence: func(ctx context.Context, id string, v float64) error {
+			_, err := db.ExecContext(ctx, `UPDATE project_memory_chunks SET confidence = ? WHERE id = ?`, v, id)
 			return err
 		},
 		SetParent: func(ctx context.Context, taskID, parentID string) error {

@@ -144,6 +144,7 @@ func TestCodexCLIClient_SetMetrics_NilAndReal(t *testing.T) {
 // -- CodexSubscriptionClient option sweep ---------------------------------
 
 func TestCodexSubscriptionClient_OptionSweep(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no Codex CLI cache: the list is the wired catalog (#773)
 	catalog := []ModelInfo{{ID: "gpt-5.4"}}
 	c := NewCodexSubscriptionClient("gpt-5.4",
 		WithCodexSubscriptionAuthPath("/tmp/codex-auth.json"),
@@ -179,6 +180,7 @@ func TestCodexSubscriptionClient_DefaultsModel(t *testing.T) {
 }
 
 func TestCodexSubscriptionClient_ListModels_EmptyCatalog(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no Codex CLI cache: the list is the wired catalog (#773)
 	c := NewCodexSubscriptionClient("gpt-5.4-mini")
 	got, err := c.ListModels(context.Background())
 	if err != nil {

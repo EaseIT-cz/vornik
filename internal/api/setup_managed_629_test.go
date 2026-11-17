@@ -106,12 +106,12 @@ func TestSetupManaged629_OwnerBoundWithoutModels(t *testing.T) {
 	require.Equal(t, "OWNER_BOUND", out["error"].(map[string]any)["code"])
 }
 
-// The contract says models is optional, at 1.3.0.
+// The contract says models is optional (since 1.3.0; the version itself is
+// pinned by the latest contract test, TestOpsContract794_*).
 func TestSetupManaged629_ContractModelsOptional(t *testing.T) {
 	raw, ok := opsapi.Document("v1")
 	require.True(t, ok)
 	doc := string(raw)
-	require.Contains(t, doc, "  version: 1.3.0")
 	_, rest, ok := strings.Cut(doc, "/api/v1/setup/managed:")
 	require.True(t, ok)
 	section, _, ok := strings.Cut(rest, "responses:")

@@ -219,11 +219,11 @@ func TestAgentDialGuard(t *testing.T) {
 		t.Error("a public host was allow-listed, which skips the private-address check")
 	}
 	cfg := mcp.ServerConfig{URL: "https://bank.example/m"}
-	guardAgentServer(&cfg, "assistant")
+	(&Container{}).guardAgentServer(&cfg, "assistant")
 	if cfg.HTTPClient != nil {
 		t.Error("an operator server got the agent guard")
 	}
-	guardAgentServer(&cfg, "hermes--fin")
+	(&Container{}).guardAgentServer(&cfg, "hermes--fin")
 	if cfg.HTTPClient == nil {
 		t.Error("an agent server is dialled unguarded")
 	}

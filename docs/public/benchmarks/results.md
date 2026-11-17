@@ -41,8 +41,8 @@ agent root filesystem and a 2,048-process limit (ON).
 **Setup.** Model: `gemma-4-26b-a4b` (26B parameters, about 4B active per
 token), GGUF Q4_K_M, served by llama.cpp with native tool calls, 131,072-token
 context, about 141 tokens/s decode. Vornik's daemon, harness and agent image
-were built from one commit. The task set is 20 `dev-pipeline` and 10
-simple-workflow tasks, each run 3 times.
+were built from one commit. The task set is `dev-swarm-tasks-v1`: 20
+`dev-pipeline` and 10 simple-workflow tasks, each run 3 times.
 
 **Energy.** Metered at the model host's wall socket over each run window. The
 meter covers the model host only, not the machine running Vornik. Priced at
@@ -75,8 +75,9 @@ National Bank rate of 30 October 2026. Hardware cost is not included.
   previous task's failure left files in the workspace (a known harness
   gap), so it never reached a container. It was re-run on the same commit and configuration, outside the
   metered window, and passed.
-- **Not independently reproducible.** As for the 2026.9.0 row, the task set
-  and its answer key are not published.
+- **Reproducible since 2026-11-15.** The task set and its answer key were
+  not published when this row was; they are now, with the pre-registrations
+  and the reproduce script ([how to reproduce this row](../guides/run-a-model-comparison.md)).
 - **The electricity price is a national household average.** A different
   tariff changes the cost in proportion.
 
@@ -124,8 +125,9 @@ unaffected.
 - **No trend.** It is the first scored arm.
 - **No noise floor for this task set.** The σ comes from an earlier 3-task
   measurement of a different set.
-- **Not independently reproducible.** The task set and answer key are not
-  published.
+- **Partly reproducible.** The task sets and answer keys
+  were published on 2026-11-15. This row's record does not name its set's
+  version, so a re-run uses the closest published set, not this exact one.
 
 **Provenance.** The daemon binary and agent image are recorded by content
 digest in the arm key, and batches that disagree on any axis are not merged.
@@ -156,6 +158,7 @@ the dataset's gold documents). The store is cleared before every run.
 | `2026.11.1-76-g8e62945d8` (2026.11.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4888e3c70ece` |
 | `2026.11.2-60-ge0920131c` (2026.11.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `83861e2a27ad` |
 | `2026.11.4-93-g39bb57729` (2026.11.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `cc29288955b4` |
+| `2026.11.5-43-g9ddc2346b` (2026.11.6) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `b2f357f24226` |
 
 Figures from `bench memory aggregate` over three run directories; standard
 deviations are sample (n−1).
@@ -185,6 +188,7 @@ store of 1,897 chunks.
 | 13. 2026.11.2 | The search SQL gained a sensitivity cap, and an agent's search now records its task in the retrieval audit. Measured 2026-11-06 on `8e62945d8`; the commits after it are documentation and a test only | No role in this benchmark sets a cap, so the cap's filtering is covered by the daemon's tests (every search statement, on PostgreSQL) only |
 | 14. 2026.11.3 | Recall queries are scanned for secrets before the retrieval audit stores them; the memory secret checkpoint catches short unlabelled tokens; failed embeddings back off longer and a dead-lettered chunk is retried; provenance labels say when a version was pushed and replaced, or redacted. Measured 2026-11-09 on `e0920131c`; the commits after it are a Hermes plugin fix and documentation | The benchmark's items carry no secret-shaped text and no embedding fails, so the scan, the backoff and the dead-letter retry are covered by the daemon's tests only |
 | 15. 2026.11.5 | No retrieval, ingest, embedding or scoring path changed. The one memory change is an operator verb that retires a document whose file is gone (`vornikctl memory supersede-missing-documents`, GitHub #701), which the benchmark never calls. Measured 2026-11-14 on `39bb57729`; the commits after it are a settings-form check, the dispatcher's report-back wording and release documents | The verb's retirement is covered by the daemon's tests only |
+| 16. 2026.11.6 | The verification path changed: a chunk verified only on its own producer's stamp is demoted (GitHub #550). Measured 2026-11-16 on `9ddc2346b`; the commits after it are release documents | The benchmark deposits as one client and never re-verifies a chunk, so the demotion itself is covered by the daemon's tests only |
 
 Rows 2 to 13 carry `retrieval_path_unverified`: the harness trusts the
 daemon's reported recall method rather than observing it.

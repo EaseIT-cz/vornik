@@ -59,16 +59,32 @@ func loopbackAgentURL(rawURL string) bool {
 // pre-approval listing of rawURL failed (design §6.1 item 4, amended
 // 2026-10-12, audit finding G). A loopback URL is dialled before any person
 // approved it, so its outcome classes would make add_mcp_server a port
-// probe of the daemon host: every failure there reads the same. A variable
-// so a test can treat its loopback server as a public host.
-var probeOutcomeVisible = func(rawURL string) bool { return !loopbackAgentURL(rawURL) }
+// probe of the daemon host: every failure there reads the same. So does a
+// URL agent_admin.private_api_hosts admits (§6.8 item 5, GitHub #740): the
+// agent picks its path on an intranet host. A variable so a test can treat
+// its loopback server as a public host.
+var probeOutcomeVisible = func(rawURL string, privateHosts []string) bool {
+	return !loopbackAgentURL(rawURL) && !dialguard.PrivateHostGranted(rawURL, privateHosts)
+}
+
+// agentServerClientFor builds the client of every agent-server dial (§6.8
+// item 3, GitHub #740); a variable only so a test can record what it is
+// given, never to change the guard.
+var agentServerClientFor = dialguard.AgentURLClient
+
+// agentServerClient is the client for an agent project's API or MCP server:
+// the customer-URL guard plus the operator's private_api_hosts grant (§6.7,
+// §6.8), read on every dial (M1c D0).
+func (c *Container) agentServerClient(rawURL string, timeout time.Duration) *http.Client {
+	return agentServerClientFor(rawURL, c.agentPrivateAPIHosts(), timeout)
+}
 
 // uniformLoopbackFailure is the one failure class a loopback listing gets.
 const uniformLoopbackFailure = "could not connect"
 
-// guardAgentServer dials an agent project's server through agentDialGuard.
-// Operator projects keep today's client.
-func guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
+// guardAgentServer dials an agent project's server through the agent-server
+// client. Operator projects keep today's client.
+func (c *Container) guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
 	if _, agent := agentns.FromID(projectID); !agent || cfg.URL == "" {
 		return
 	}
@@ -76,7 +92,7 @@ func guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
-	cfg.HTTPClient = dialguard.CustomerURLClient(cfg.URL, nil, timeout) // live read (M1c D0)
+	cfg.HTTPClient = c.agentServerClient(cfg.URL, timeout) // live read (M1c D0); #740
 }
 
 // toolListing is what one listing advertised: every tool name, and the
@@ -91,7 +107,7 @@ type toolListing struct {
 // judged on each tool's full descriptor (annotations and input schema).
 // Errors name the server, never a header value.
 func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) (toolListing, error) {
-	cfg.HTTPClient = dialguard.CustomerURLClient(cfg.URL, nil, listToolsTimeout) // live read (M1c D0)
+	cfg.HTTPClient = c.agentServerClient(cfg.URL, listToolsTimeout) // live read (M1c D0); #740
 	cctx, cancel := context.WithTimeout(ctx, listToolsTimeout)
 	defer cancel()
 	cl, err := mcp.Connect(cctx, cfg, c.Logger)
@@ -231,7 +247,7 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 	listed, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")
-		if !probeOutcomeVisible(in.URL) {
+		if !probeOutcomeVisible(in.URL, s.c.agentPrivateAPIHosts()) {
 			return unauthListing{url: in.URL, failed: uniformLoopbackFailure}
 		}
 		if hint := wrongTransportHint(cfg, err); hint != "" {

@@ -131,6 +131,12 @@ var ErrBadWithdrawal = errors.New("approval request: a withdrawal needs an actor
 // MaxWithdrawReasonRunes bounds a withdrawal's reason.
 const MaxWithdrawReasonRunes = 300
 
+// ApplyFailedCreatedSlack bounds created_at in ListApplyFailedSince: a
+// request is decided within the device's 7-day request lifetime and gives up
+// within about an hour of the decision (design 22 §22.2.16a), so a failure at
+// or after since was created no earlier than since minus 8 days.
+const ApplyFailedCreatedSlack = 8 * 24 * time.Hour
+
 // ValidWithdrawal checks a withdrawal's actor and reason (design §9.2d; the
 // repository enforces it so every caller is held to it, review 0df6 F1). It
 // returns the trimmed reason.
@@ -150,6 +156,10 @@ func ValidWithdrawal(by, reason string) (string, error) {
 // ErrApprovalNoTransition means Decide matched no pending, unexpired row with
 // the shown hash: already decided, expired, unknown, or changed after display.
 var ErrApprovalNoTransition = errors.New("approval request: no transition")
+
+// ErrApproverDeviceLive is returned by DeleteRevokedDevice for a device that
+// is not revoked: revoke it first (§9.2e, #489).
+var ErrApproverDeviceLive = errors.New("approver device: still live")
 
 // ApprovalCap bounds CreateRequestCapped (Hermes approval transport design
 // §4.4): at most MaxPending pending, unexpired requests of the row's kind in
@@ -236,6 +246,10 @@ type ApproverDeviceRepository interface {
 	// RevokeDevice is a no-op for an already revoked or unknown device. It
 	// erases any open share (nonce included).
 	RevokeDevice(ctx context.Context, id string, now time.Time) error
+	// DeleteRevokedDevice deletes a revoked device row and its push
+	// subscription (design part 09 §9.2e, GitHub #489). A live device returns
+	// ErrApproverDeviceLive and an unknown one ErrNotFound; neither deletes.
+	DeleteRevokedDevice(ctx context.Context, id string) error
 
 	CreateRequest(ctx context.Context, r AgentApprovalRequestRow) error
 	// GetRequest returns ErrNotFound for an unknown id.
@@ -266,6 +280,12 @@ type ApproverDeviceRepository interface {
 	MarkApplyFailed(ctx context.Context, id, reason string, now time.Time) error
 	// ListApprovedUnapplied returns approved requests whose effect has not run.
 	ListApprovedUnapplied(ctx context.Context) ([]AgentApprovalRequestRow, error)
+	// ListApplyFailedSince returns approved requests recorded as failed
+	// (MarkApplyFailed) at or after since, by applied_at, newest first, at
+	// most limit. created_at is bounded as well (ApplyFailedCreatedSlack
+	// before since), so the (status, created_at) index serves it (design 22
+	// §22.2.16b, GitHub #669 item 5).
+	ListApplyFailedSince(ctx context.Context, since time.Time, limit int) ([]AgentApprovalRequestRow, error)
 	// ListRecentByNamespace returns a namespace's requests created at or
 	// after since, newest first (an exact namespace match).
 	ListRecentByNamespace(ctx context.Context, namespace string, since time.Time) ([]AgentApprovalRequestRow, error)

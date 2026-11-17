@@ -39,16 +39,16 @@ func TestNavPartial_IsAdminFlag(t *testing.T) {
 			// `hidden` when the caller is an admin.
 			name:        "IsAdmin=true renders Admin link visible",
 			data:        fixture{IsAdmin: true, CurrentPage: "dashboard"},
-			wantContain: `data-admin-link class="rail-ico`, // the operator console rail icon (#755)
+			wantContain: `data-admin-link data-owner-href="/ui/admin/" class="rail-ico`, // the operator console rail icon (#755)
 			wantAbsent: `data-rail="operator"
            data-admin-link class="hidden `,
 		},
 		{
 			name:        "IsAdmin=false renders Admin link hidden",
 			data:        fixture{IsAdmin: false, CurrentPage: "dashboard"},
-			wantContain: `data-admin-link class="hidden rail-ico`,
+			wantContain: `data-admin-link data-owner-href="/ui/admin/" class="hidden rail-ico`,
 			wantAbsent: `data-rail="operator"
-           data-admin-link class="rail-ico`,
+           data-admin-link data-owner-href="/ui/admin/" class="rail-ico`,
 		},
 	}
 
@@ -173,10 +173,10 @@ func TestMemoryIndex_DoesNotTreatAllProjectAccessAsAdmin(t *testing.T) {
 		t.Fatalf("ExecuteTemplate(memory_index.html): %v", err)
 	}
 	rendered := buf.String()
-	if !strings.Contains(rendered, `data-admin-link class="hidden rail-ico`) {
+	if !strings.Contains(rendered, `data-admin-link data-owner-href="/ui/admin/" class="hidden rail-ico`) {
 		t.Fatalf("memory index nav should keep the admin rail hidden for non-admin data; got:\n%s", rendered)
 	}
-	if strings.Contains(rendered, `data-admin-link class="rail-ico`) {
+	if strings.Contains(rendered, `data-admin-link data-owner-href="/ui/admin/" class="rail-ico`) {
 		t.Fatalf("memory index nav must not render a visible admin rail for non-admin data; got:\n%s", rendered)
 	}
 }

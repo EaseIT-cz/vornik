@@ -45,4 +45,17 @@ func TestLaterDelivery_MatchesTheDeliveryPaths_WebChat(t *testing.T) {
 	if got := strings.Join(allow, ","); got != "email,slack" {
 		t.Errorf("chat-completion allowlist %s, want email,slack (Telegram announces through its own path)", got)
 	}
+	// Web chat is the one conditional implementer (web-chat-design.md §5 N8,
+	// #771): true only when the notifier's web chat branch delivers, which
+	// is exactly when chatCompletionSink builds the notifier.
+	if !webchat.New("p", conversation.Speaker{}, webchat.WithLaterDelivery(true)).CanDeliverLater() {
+		t.Error("web chat with delivery wired should say it can deliver later")
+	}
+	n, ok := (&Container{}).chatCompletionSink().(*chatCompletionNotifier)
+	if ok && n != nil {
+		t.Error("an unconfigured container built a completion notifier")
+	}
+	if (&Container{}).chatCompletionEnabled() {
+		t.Error("an unconfigured container says web chat can deliver later")
+	}
 }

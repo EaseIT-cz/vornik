@@ -60,7 +60,7 @@ func TestManage759_EachAudienceSeesItsCards(t *testing.T) {
 		t.Errorf("project user sees %s", got)
 	}
 	owner := manageAs(t, srv, sessionReq(t, owner754), false)
-	if got := strings.Join(manageKeys759(owner), ","); got != "admin-keys,insights,my-account,projects,reminders" {
+	if got := strings.Join(manageKeys759(owner), ","); got != "admin-agents,admin-keys,admin-skills,insights,my-account,projects,reminders" { // #789 adds agents and skills
 		t.Errorf("owner sees %s", got)
 	}
 	if owner["admin-keys"] != "/ui/credentials" {

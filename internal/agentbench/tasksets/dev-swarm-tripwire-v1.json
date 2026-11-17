@@ -1,0 +1,34 @@
+[
+  {
+    "id": "tw-dev-01-simple",
+    "targets": ["scratch/twgreet"],
+    "name": "tripwire: simple-workflow writes one trivial function",
+    "tier": "tripwire",
+    "workflow": "simple-workflow",
+    "prompt": "In a NEW file scratch/twgreet/twgreet.go (package twgreet), write exactly one function: Greet(name string) string, returning \"hello, \" followed by name, and returning \"hello, world\" when name is empty. Add scratch/twgreet/go.mod with module scratch/twgreet. Do not write tests. Do not modify any existing file."
+  },
+  {
+    "id": "tw-dev-02-subtask",
+    "targets": ["scratch/twdouble"],
+    "name": "tripwire: issue-subtask writes one trivial function",
+    "tier": "tripwire",
+    "workflow": "issue-subtask",
+    "prompt": "In a NEW file scratch/twdouble/twdouble.go (package twdouble), write exactly one function: Double(n int) int, returning n*2. Add scratch/twdouble/go.mod with module scratch/twdouble. Do not write tests. Do not modify any existing file."
+  },
+  {
+    "id": "tw-dev-03-pipeline",
+    "targets": ["scratch/twabs"],
+    "name": "tripwire: dev-pipeline completes its analyze-implement-test-review cycle",
+    "tier": "tripwire",
+    "workflow": "dev-pipeline",
+    "prompt": "In a NEW file scratch/twabs/twabs.go (package twabs), write exactly one function: Abs(n int) int, returning the absolute value of n. Add scratch/twabs/twabs_test.go with exactly two cases: Abs(3) is 3 and Abs(-3) is 3. Add scratch/twabs/go.mod with module scratch/twabs. Do not modify any existing file."
+  },
+  {
+    "id": "tw-dev-04-adaptive",
+    "targets": ["scratch/twmax"],
+    "name": "tripwire: adaptive routes and its delegate completes",
+    "tier": "tripwire",
+    "workflow": "adaptive",
+    "prompt": "In a NEW file scratch/twmax/twmax.go (package twmax), write exactly one function: Max(a, b int) int, returning the larger value. Add scratch/twmax/go.mod with module scratch/twmax. Do not write tests. Do not modify any existing file."
+  }
+]

@@ -44,6 +44,9 @@ const (
 	SurfaceConfigJournal Surface = "config_journal"
 	SurfaceInflight      Surface = "inflight"
 	SurfaceAgentGrant    Surface = "agent_grant"
+	// SurfaceAccountTransitions is the account-transition recovery door
+	// (design 22 §22.2.16b, GitHub #669 item 3). Not granted to tenant_admin.
+	SurfaceAccountTransitions Surface = "account_transitions"
 	// SurfaceOperatorCredentials is the console's credentials page
 	// (/ui/credentials, GitHub #623; deliberately outside /ui/admin, which admin.Middleware reserves for admins): the operator, or a managed
 	// instance's owner with no shell, enters the values that
@@ -56,6 +59,22 @@ const (
 	// (#754)"): the managed instance's owner, who has no shell, mints and
 	// revokes their own project keys. Its gate is in the UI package.
 	SurfaceProjectKeys Surface = "project_keys"
+	// SurfaceMCPToolGrant is the project page that grants an MCP server's
+	// tools to a project's roles and applies it in one step (GitHub #780,
+	// control-plane hub design amendment 2026-11-15). Granted to the owner
+	// while managed mode serves one customer, as SurfaceProjectKeys; Stage T
+	// (multi-tenant) must revisit it.
+	SurfaceMCPToolGrant Surface = "mcp_tool_grant"
+	// SurfaceOperatorConsoleRead is the operator console's observation pages
+	// read by the instance owner (/ui/admin/*, GET and HEAD; GitHub #787,
+	// 18-security-and-tenancy.md amendment 2026-11-15). The decision is
+	// OwnerConsoleRead.
+	SurfaceOperatorConsoleRead Surface = "operator_console_read"
+	// SurfaceModelProvider is the owner's model-provider page
+	// (/ui/model-provider, managed instances only; GitHub #794,
+	// 18-security-and-tenancy.md amendment 2026-11-16). Its gate is in the
+	// UI package.
+	SurfaceModelProvider Surface = "model_provider"
 )
 
 // tenantAdminSurfaces is the closed allowlist of B3: granted surfaces only.
@@ -72,6 +91,18 @@ var tenantAdminSurfaces = map[Surface]bool{
 	// above (the owner's ["*"] is that customer's projects); a multi-tenant
 	// instance (Stage T) must revisit it.
 	SurfaceProjectKeys: true,
+	// GitHub #780: the owner grants MCP tools to their projects' roles.
+	SurfaceMCPToolGrant: true,
+	// GitHub #787: the owner reads the operator console's observation pages,
+	// GET and HEAD only (OwnerConsoleRead). Valid while managed mode is
+	// single-customer: the pages are instance-wide; a multi-tenant instance
+	// (Stage T) must revisit it.
+	SurfaceOperatorConsoleRead: true,
+	// GitHub #794: the owner connects their own model provider. Valid while
+	// managed mode is single-customer (tenant_admin is the instance's owner,
+	// and the instance's model is theirs to choose); a multi-tenant instance
+	// (Stage T) must revisit it.
+	SurfaceModelProvider: true,
 }
 
 // TenantAdminMay reports whether a tenant_admin session may use surface.

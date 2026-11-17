@@ -51,6 +51,9 @@ already have a project up and running — if you don't, start with
 - **[Evals](evals.md)** — author repeatable swarm test suites with pass/fail
   predicates and run them with `vornikctl eval run`, with a regression diff
   across runs.
+- **[Run a model comparison](run-a-model-comparison.md)** — compare two models
+  on the agent benchmark, with a pre-registration and a scoreboard that refuses
+  incomparable arms.
 - **[Clustering and the DMZ webhook relay](clustering.md)** — scale the worker
   tier or isolate webhook ingress in a DMZ with a mutual-TLS relay.
 - **[The automation composer ("Describe it")](automation-composer.md)** —

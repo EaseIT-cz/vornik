@@ -59,7 +59,7 @@ func TestNewContainer_CommunityRendersAdminNavEntries(t *testing.T) {
 	}
 	body := rec.Body.String()
 	// The operator console's rail icon (the Admin area before #755).
-	if !strings.Contains(body, `data-admin-link class="rail-ico`) {
+	if !strings.Contains(body, `data-admin-link data-owner-href="/ui/admin/" class="rail-ico`) { // #789 adds the owner target
 		t.Error("CE /ui/tasks: operator console rail icon should render visible — ui.WithAllUICallersAdmin is not wired in the uiOpts site")
 	}
 	for _, h := range []string{"/ui/swarms", "/ui/workflows"} {

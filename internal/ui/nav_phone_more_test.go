@@ -143,8 +143,9 @@ func TestPhoneBar_MoreHoldsTheOtherAreas_18(t *testing.T) {
 			t.Errorf("admin: the %q group is hidden", k)
 		}
 	}
-	if g := more("owner")["operator"]; g == nil || !phHiddenInTree(g) {
-		t.Error("owner: the operator console group should be hidden")
+	// GitHub #789: the owner reads the console, so its group is shown.
+	if g := more("owner")["operator"]; g == nil || phHiddenInTree(g) {
+		t.Error("owner: the operator console group should be shown")
 	}
 	if g := more("project user")["operator"]; g == nil || !phHiddenInTree(g) {
 		t.Error("project user: the operator console group should be hidden")
@@ -217,16 +218,17 @@ func TestPhoneBar_MoreIsActiveOnItsAreas_18(t *testing.T) {
 	}
 }
 
-// The drawer script has no DOM test lane; this pins the selector contract
-// it relies on (review-20261114-3224 F7): each tab names a drawer that
-// exists, the outside-tap and auto-hide selectors are the ones in the
-// script, and no drawer claims role="menu" (F5: details and buttons are
-// not menu items).
+// This pins the selector contract the drawer script relies on
+// (review-20261114-3224 F7): each tab names a drawer that exists, the
+// tab, auto-hide and outside-tap selectors are the ones in the script, and
+// no drawer claims role="menu" (F5: details and buttons are not menu
+// items). The script's behaviour is tested in a browser by
+// TestConsoleNav_SurvivesASwap_583.
 func TestPhoneBar_DrawerScriptContract_18(t *testing.T) {
 	src := renderTemplateString(t, "nav", navFixture{CurrentPage: "tasks", IsAdmin: true, IsSession: true})
 	for _, want := range []string{
-		"e.target.closest('[data-nav-tab]') || e.target.closest('[data-nav-drawer]')",
-		"document.querySelectorAll('[data-nav-drawer] a')",
+		"e.target.closest('[data-nav-tab]')",
+		"e.target.closest('[data-nav-drawer] a') || !e.target.closest('[data-nav-drawer]')",
 		"b.setAttribute('aria-expanded'",
 	} {
 		if !strings.Contains(src, want) {

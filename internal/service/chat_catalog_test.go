@@ -166,3 +166,36 @@ func TestChatModelCatalogFromPricing(t *testing.T) {
 		t.Errorf("empty match: got %v, want nil", got)
 	}
 }
+
+// #772 (2026-11-14): the Codex subscription serves gpt-6-luna and the
+// gpt-5.6 family; with no pricing row a model is absent from the router
+// catalog and its spend falls to the default row. The shipped
+// pricing.yaml prices them and the catalog filter keeps them.
+func TestShippedPricing_CurrentCodexModelsAreInTheCatalog(t *testing.T) {
+	table, err := pricing.Load(filepath.Join("..", "..", "configs", "pricing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]float64{
+		"gpt-6-luna":    {0.10, 0.50},
+		"gpt-5.6-terra": {2.00, 12.00},
+		"gpt-5.6-luna":  {0.20, 1.20},
+	}
+	inCatalog := map[string]bool{}
+	for _, m := range chatModelCatalogFromPricing(table, isOpenAIModelID, "openai") {
+		inCatalog[m.ID] = true
+	}
+	for id, rates := range want {
+		e, ok := table.Lookup(id)
+		if !ok {
+			t.Errorf("pricing.yaml has no row for %s", id)
+			continue
+		}
+		if e.InputUSDPerMillion != rates[0] || e.OutputUSDPerMillion != rates[1] {
+			t.Errorf("%s = %v/%v, want %v/%v", id, e.InputUSDPerMillion, e.OutputUSDPerMillion, rates[0], rates[1])
+		}
+		if !inCatalog[id] {
+			t.Errorf("%s missing from the OpenAI catalog", id)
+		}
+	}
+}

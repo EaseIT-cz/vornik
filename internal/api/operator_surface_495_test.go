@@ -35,7 +35,8 @@ const staticKey495 = "sk-static-not-admin-495"
 type route495 struct{ method, path, body string }
 
 // operatorSurface495 is the census of design A3 and A4a: every working
-// method/path pair behind the operator-surface gate (34; #503 added five).
+// method/path pair behind the operator-surface gate (36; #503 added five,
+// #669 two).
 var operatorSurface495 = []route495{
 	{http.MethodGet, "/api/v1/config", ""},                                                // 1
 	{http.MethodGet, "/api/v1/memory/policy/evaluations", ""},                             // 2
@@ -72,6 +73,9 @@ var operatorSurface495 = []route495{
 	{http.MethodPost, "/api/v1/mcp/oauth/begin", `{"server":"x"}`},      // 32
 	{http.MethodGet, "/api/v1/mcp/oauth/status?state=s503", ""},         // 33
 	{http.MethodPost, "/api/v1/mcp/oauth/disconnect", `{"server":"x"}`}, // 34
+	// GitHub #669 item 3: account-transition recovery (design 22 §22.2.16b).
+	{http.MethodGet, "/api/v1/operator/account-transitions", ""},                                                // 35
+	{http.MethodPost, "/api/v1/operator/account-transitions/recover", `{"scope":"ns:a","epoch":1,"owner":"x"}`}, // 36
 }
 
 // newHarness495 is the #466 harness (real router, real SQLite, an admin
@@ -87,7 +91,7 @@ func newHarness495(t *testing.T) *harness466 {
 }
 
 func TestOperatorSurface495_CensusSize(t *testing.T) {
-	require.Len(t, operatorSurface495, 34, "design A3 + A4a: 27 operator pairs plus config reload and reload-status, plus #503's five")
+	require.Len(t, operatorSurface495, 36, "design A3 + A4a: 27 operator pairs plus config reload and reload-status, plus #503's five, plus #669's two")
 }
 
 func TestOperatorSurface495_UnscopedStaticKeyRefused(t *testing.T) {
@@ -186,6 +190,8 @@ var expectedOperatorGated495 = []string{
 	"MCPOAuthStatus",
 	"OperatorJournal",
 	"companionGrantAgentAdmin",
+	// GitHub #669 item 3.
+	"OperatorAccountTransitions",
 }
 
 // Limit (code review review-20261022-5c5f, F2): this is a list of names.

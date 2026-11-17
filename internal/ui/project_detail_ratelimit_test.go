@@ -127,3 +127,5 @@ func (*stubAPIKeyRepo) UpdateCapabilities(context.Context, string, persistence.A
 func (*stubAPIKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (*stubAPIKeyRepo) DeleteRetired(context.Context, string, string, time.Time) error { return nil }

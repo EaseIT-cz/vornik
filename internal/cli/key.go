@@ -80,6 +80,19 @@ var keyListCmd = &cobra.Command{
 	RunE:  runKeyList,
 }
 
+// keyListAll prints retired (revoked or expired) keys too (#489).
+var keyListAll bool
+
+var keyRemoveCmd = &cobra.Command{
+	Use:   "remove <keyID>",
+	Short: "Delete a retired (revoked or expired) key now; a live key is refused",
+	Long: `Delete a revoked or expired key from the project's list at once. The
+retention sweep would delete it 7 days after it retired. A live key is
+refused: revoke it first. The removal is audited (key.remove).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runKeyRemove,
+}
+
 var keyRotateCmd = &cobra.Command{
 	Use:   "rotate <keyID>",
 	Short: "Mint a new key with the same name + expiry; revoke the old",
@@ -149,7 +162,8 @@ func init() {
 	_ = keyCreateCmd.MarkFlagRequired("name")
 
 	keyListCmd.Flags().StringVarP(&keyProject, "project", "p", "", "Project ID (required)")
-	keyListCmd.Flags().BoolVar(&keyJSONFlag, "json", false, "Emit JSON instead of a table")
+	keyListCmd.Flags().BoolVar(&keyJSONFlag, "json", false, "Emit JSON instead of a table (every row the API returns)")
+	keyListCmd.Flags().BoolVar(&keyListAll, "all", false, "Also list retired (revoked or expired) keys")
 	_ = keyListCmd.MarkFlagRequired("project")
 
 	keyRotateCmd.Flags().StringVarP(&keyProject, "project", "p", "", "Project ID (required)")
@@ -158,6 +172,9 @@ func init() {
 
 	keyRevokeCmd.Flags().StringVarP(&keyProject, "project", "p", "", "Project ID (required)")
 	_ = keyRevokeCmd.MarkFlagRequired("project")
+
+	keyRemoveCmd.Flags().StringVarP(&keyProject, "project", "p", "", "Project ID (required)")
+	_ = keyRemoveCmd.MarkFlagRequired("project")
 
 	keyUpdateCmd.Flags().StringVarP(&keyProject, "project", "p", "", "Project ID (required)")
 	keyUpdateCmd.Flags().StringSliceVar(&keyUpdateAddWorkflows, "add-workflow", nil,
@@ -173,7 +190,7 @@ func init() {
 	keyUpdateCmd.Flags().BoolVar(&keyJSONFlag, "json", false, "Emit JSON instead of human text")
 	_ = keyUpdateCmd.MarkFlagRequired("project")
 
-	keyCmd.AddCommand(keyCreateCmd, keyListCmd, keyRotateCmd, keyRevokeCmd, keyUpdateCmd)
+	keyCmd.AddCommand(keyCreateCmd, keyListCmd, keyRotateCmd, keyRevokeCmd, keyRemoveCmd, keyUpdateCmd)
 	rootCmd.AddCommand(keyCmd)
 }
 
@@ -248,13 +265,22 @@ func runKeyList(cmd *cobra.Command, args []string) error {
 		fmt.Printf("No keys for project %q.\n", keyProject)
 		return nil
 	}
+	now := time.Now().UTC()
+	shown, hidden := out.Keys, 0
+	if !keyListAll {
+		shown = nil
+		for _, k := range out.Keys {
+			if keyStatus(k, now) == "active" {
+				shown = append(shown, k)
+			} else {
+				hidden++
+			}
+		}
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "ID\tNAME\tPREFIX\tCREATED\tLAST USED\tEXPIRES\tSTATUS\tPUSH")
-	for _, k := range out.Keys {
-		status := "active"
-		if k.RevokedAt != nil && *k.RevokedAt != "" {
-			status = "revoked"
-		}
+	for _, k := range shown {
+		status := keyStatus(k, now)
 		lastUsed := "—"
 		if k.LastUsedAt != nil && *k.LastUsedAt != "" {
 			lastUsed = *k.LastUsedAt
@@ -270,7 +296,48 @@ func runKeyList(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			k.ID, k.Name, k.KeyPrefix, k.CreatedAt, lastUsed, expires, status, push)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if hidden > 0 {
+		fmt.Printf("%d retired keys (revoked or expired) are hidden; --all shows them.\n", hidden)
+	}
+	return nil
+}
+
+// keyStatus is the console keys page's rule (filterActiveKeys): revoked,
+// expired at now, or active. An expiry the CLI cannot parse counts as not
+// expired, so a key is never hidden on a guess.
+func keyStatus(k keyListEntry, now time.Time) string {
+	if k.RevokedAt != nil && *k.RevokedAt != "" {
+		return "revoked"
+	}
+	if k.ExpiresAt != nil && *k.ExpiresAt != "" {
+		if t, err := time.Parse(time.RFC3339, *k.ExpiresAt); err == nil && !t.After(now) {
+			return "expired"
+		}
+	}
+	return "active"
+}
+
+func runKeyRemove(_ *cobra.Command, args []string) error {
+	resp, err := ClientFromEnv().Post(fmt.Sprintf("/api/v1/projects/%s/keys/%s/remove", keyProject, args[0]), nil)
+	if err != nil {
+		return fmt.Errorf("remove: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return ParseAPIError(resp)
+	}
+	var out struct {
+		AuditError string `json:"auditError"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	fmt.Printf("Removed key %s.\n", args[0])
+	if out.AuditError != "" {
+		return fmt.Errorf("%s", out.AuditError)
+	}
+	return nil
 }
 
 func runKeyRotate(cmd *cobra.Command, args []string) error {

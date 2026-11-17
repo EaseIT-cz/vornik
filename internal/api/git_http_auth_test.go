@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/persistence"
 )
@@ -274,3 +275,5 @@ func (fakeKeyRepo) UpdateCapabilities(context.Context, string, persistence.APIKe
 func (fakeKeyRepo) ListAttributable(context.Context) ([]*persistence.APIKey, error) {
 	return nil, nil
 }
+
+func (fakeKeyRepo) DeleteRetired(context.Context, string, string, time.Time) error { return nil }

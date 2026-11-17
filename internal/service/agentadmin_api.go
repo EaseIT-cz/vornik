@@ -5,7 +5,6 @@ import (
 
 	"vornik.io/vornik/internal/agentapi"
 	"vornik.io/vornik/internal/apigateway"
-	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // Agent projects' REST clients (agent-administered Vornik plan P4.5).
@@ -29,8 +28,8 @@ func (c *Container) agentAPIClient(projectID string, write bool, methods map[str
 		ProjectID: projectID, Project: c.Registry.GetProject, Grants: c.repos.AgentGrants,
 		Secrets: c.secretSource(), AllowedMethods: methods, Write: write,
 		HTTP: func(base string) *http.Client {
-			return dialguard.AgentAPIClient(base, c.agentPrivateAPIHosts(), mcpOAuthHTTPTimeout)
-		}, // #560 M1c D5; #734
+			return c.agentServerClient(base, mcpOAuthHTTPTimeout)
+		}, // #560 M1c D5; #734; #740
 		Logger: c.Logger.With().Str("component", "agent-api").Str("project", projectID).Logger(),
 	}
 }

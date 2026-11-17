@@ -1,0 +1,56 @@
+[
+  {
+    "id": "tw-comp-01-summarize",
+    "targets": [],
+    "name": "tripwire: report-summarize writes summary.md from inline content",
+    "tier": "tripwire",
+    "workflow": "companion-report-summarize",
+    "prompt": "target_audience: engineer\n\nSummarise the following release note.\n\n---\nRelease 4.2 replaces the nightly export job with an incremental one. Exports now run every 15 minutes instead of once a day. The old job is removed. Operators must update the EXPORT_INTERVAL setting; the previous EXPORT_HOUR setting is ignored and will be deleted in 4.4. One known issue: the first incremental run after upgrade re-exports every row, so expect one large batch.\n---"
+  },
+  {
+    "id": "tw-comp-02-gather",
+    "targets": [],
+    "name": "tripwire: research-gather writes findings.md on a self-contained topic",
+    "tier": "tripwire",
+    "workflow": "companion-research-gather",
+    "prompt": "topic: What is the difference between a git branch and a git tag?\nconstraints: Answer from general knowledge in at most 200 words. Do not search the repository, do not call memory_search, and do not cite sources you cannot name."
+  },
+  {
+    "id": "tw-comp-03-validate",
+    "targets": [],
+    "name": "tripwire: data-validation reads a fixture dataset and writes findings.md",
+    "tier": "tripwire",
+    "workflow": "companion-data-validation",
+    "prompt": "dataset: fixtures/orders.csv\nschema: fixtures/orders-schema.md\n\nValidate the 5-row dataset at fixtures/orders.csv against the schema at fixtures/orders-schema.md. Both files are committed fixtures and will not change. Read them with file_read. The data is clean, so the expected verdict is pass; report it with the row count and a one-line distribution per field. Do not look for other datasets and do not browse."
+  },
+  {
+    "id": "tw-comp-04-audit",
+    "targets": [],
+    "name": "tripwire: coverage-audit finds the one seeded gap and writes review.md",
+    "tier": "tripwire",
+    "workflow": "companion-test-coverage-audit",
+    "prompt": "files:\n  - fixtures/clamp.go\n\nAudit test coverage for fixtures/clamp.go against fixtures/clamp_test.go. Both are committed fixtures and will not change. It exports exactly two functions, Clamp and IsEven; Clamp is tested and IsEven is not, so there is exactly one gap to report. Do not search the wider repository and do not browse."
+  },
+  {
+    "id": "tw-comp-05-archreview",
+    "targets": [],
+    "name": "tripwire: architectural-review reads a staged artifact and writes review.md",
+    "tier": "tripwire",
+    "workflow": "companion-architectural-review",
+    "attachments": [
+      "fixtures/tw-review-subject.md"
+    ],
+    "prompt": "Review the attached design for the export worker's retry budget. It is short and self-contained; base the review only on the staged file. Give a verdict and at most three findings. Do not call recall and do not read repository files."
+  },
+  {
+    "id": "tw-comp-06-docreview",
+    "targets": [],
+    "name": "tripwire: doc-review reads a staged artifact and writes review.md",
+    "tier": "tripwire",
+    "workflow": "companion-doc-review",
+    "attachments": [
+      "fixtures/tw-review-subject.md"
+    ],
+    "prompt": "Review the attached document for clarity and completeness. It is short and self-contained; base the review only on the staged file. At most three points. Do not call recall and do not read repository files."
+  }
+]

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/forgeci"
 	"vornik.io/vornik/internal/forgereview"
 	"vornik.io/vornik/internal/github"
@@ -112,15 +114,71 @@ func buildGitHubChannelWithAllowedHosts(
 	allowedHosts []string,
 	logger zerolog.Logger,
 ) (*github.Channel, []*registry.Project, error) {
-	var enabled []*registry.Project
-	for _, p := range projects {
-		if !p.GitHubApp.Enabled() {
-			continue
-		}
-		enabled = append(enabled, p)
+	return buildGitHubChannelRegistered(projects, taskCreatorFor, allowedHosts, logger, nil)
+}
+
+// githubRegisteredOpts makes the channel serve the instance's registered App
+// beside any hand-made projects (GitHub #800).
+type githubRegisteredOpts struct {
+	secret, apiBase string
+	onEvent         func(context.Context, github.InstallationEvent) error
+	onDrop          func(reason string)
+}
+
+func (o *githubRegisteredOpts) apply(cfg *github.Config) error {
+	if o == nil {
+		return nil
 	}
+	if cfg.WebhookSecret != "" && cfg.WebhookSecret != o.secret {
+		return errors.New("a hand-made github_app project's webhook secret differs from the registered App's (" +
+			config.GitHubAppWebhookSecretCredential + "): one route serves one App; give the project the registered App or remove it")
+	}
+	if cfg.APIBaseURL != "" && strings.TrimRight(cfg.APIBaseURL, "/") != strings.TrimRight(o.apiBase, "/") && o.apiBase != "" {
+		return errors.New("a hand-made github_app project's api_base_url differs from the registered App's")
+	}
+	cfg.WebhookSecret, cfg.Registered, cfg.OnInstallationEvent, cfg.OnDrop = o.secret, true, o.onEvent, o.onDrop
+	if cfg.APIBaseURL == "" {
+		cfg.APIBaseURL = o.apiBase
+	}
+	return nil
+}
+
+// handMadeGitHubProjects are the projects whose own github_app block routes
+// them. An App-backed project routes through its binding instead (#800).
+func handMadeGitHubProjects(projects []*registry.Project) []*registry.Project {
+	var out []*registry.Project
+	for _, p := range projects {
+		if p.GitHubApp.Enabled() && !p.GitHubApp.UseRegistration {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// buildRegisteredOnly is the registered App's channel with no hand-made
+// project beside it; nil when nothing is registered.
+func buildRegisteredOnly(reg *githubRegisteredOpts, allowedHosts []string, logger zerolog.Logger) (*github.Channel, error) {
+	if reg == nil {
+		return nil, nil
+	}
+	cfg := github.Config{HTTPClient: githubAPIClient(reg.apiBase, allowedHosts), Logger: channelLogger(logger, "github-app", "")}
+	if err := reg.apply(&cfg); err != nil {
+		return nil, err
+	}
+	return github.New(cfg)
+}
+
+func buildGitHubChannelRegistered(
+	projects []*registry.Project,
+	taskCreatorFor func(*registry.Project) github.TaskCreator,
+	allowedHosts []string,
+	logger zerolog.Logger,
+	reg *githubRegisteredOpts,
+) (*github.Channel, []*registry.Project, error) {
+	enabled := handMadeGitHubProjects(projects)
 	if len(enabled) == 0 {
-		return nil, nil, nil
+		ch, err := buildRegisteredOnly(reg, allowedHosts, logger)
+		return ch, nil, err
 	}
 
 	// Single-installation back-compat path. Behaviour matches the
@@ -140,6 +198,9 @@ func buildGitHubChannelWithAllowedHosts(
 			}
 		}
 		cfg.Logger = channelLogger(logger, "github-app", picked.ID)
+		if err := reg.apply(&cfg); err != nil {
+			return nil, []*registry.Project{picked}, fmt.Errorf("project %q github_app: %w", picked.ID, err)
+		}
 		ch, err := github.New(cfg)
 		if err != nil {
 			return nil, []*registry.Project{picked}, fmt.Errorf("project %q github_app: %w", picked.ID, err)
@@ -183,6 +244,9 @@ func buildGitHubChannelWithAllowedHosts(
 		// One handler serves every installation, so the logger
 		// carries no single project_id.
 		Logger: channelLogger(logger, "github-app", ""),
+	}
+	if err := reg.apply(&multiCfg); err != nil {
+		return nil, enabled, fmt.Errorf("github-app multi-installation channel: %w", err)
 	}
 	ch, err := github.New(multiCfg)
 	if err != nil {
@@ -232,6 +296,7 @@ func installationConfigFromConfig(projectID string, cfg github.Config) github.In
 		InstallationID:  cfg.InstallationID,
 		AppID:           cfg.AppID,
 		PrivateKey:      cfg.PrivateKey,
+		PrivateKeyHash:  cfg.PrivateKeyHash,
 		RepoAllowlist:   cfg.RepoAllowlist,
 		TaskLabels:      cfg.TaskLabels,
 		PRReviewLabels:  cfg.PRReviewLabels,
@@ -291,6 +356,7 @@ func resolveGitHubAppConfig(project *registry.Project) (github.Config, error) {
 			return github.Config{}, err
 		}
 		cfg.PrivateKey = key
+		cfg.PrivateKeyHash = github.KeyHash(pemBytes) // #820 mint-time guard
 	} else if p.AppID != 0 || p.InstallationID != 0 {
 		// Validate at the registry layer should have caught this
 		// (all-or-nothing), but belt-and-braces: refuse to construct

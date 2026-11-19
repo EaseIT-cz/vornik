@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/enterprise/blackbox/engine/detector.go
-      sha256: 05d47800b4dc20c956b4c324e1829ee066a977692036fdace2741eddfb928e45
+      sha256: 51047036fea8634d9e13dd6ea9ffb777fdf133b2ad2ed398696ded493ad40cfc
     - path: internal/workflowhealing/promoter.go
       sha256: d486c00a4fbb96d7d1bfdf0582372893d5cdc4872100297a5c0728d0b68c5dd4
 ---

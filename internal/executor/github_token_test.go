@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"vornik.io/vornik/internal/github"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -21,7 +22,7 @@ func enabledGitHubProject() *registry.Project {
 // (the shared helper both the warm and ephemeral step paths call), and leaves
 // env untouched when it doesn't.
 func TestInjectGitHubToken(t *testing.T) {
-	e := &Executor{ghMintFn: func(context.Context, string, int64, int64, string) (string, time.Time, error) {
+	e := &Executor{ghMintFn: func(context.Context, github.KeyFileMint) (string, time.Time, error) {
 		return "ghs_inject", time.Now().Add(time.Hour), nil
 	}}
 	env := map[string]string{}
@@ -40,7 +41,7 @@ func TestInjectGitHubToken(t *testing.T) {
 // TestInstallationToken_DisabledProject: no `github` creds → no token, no mint.
 func TestInstallationToken_DisabledProject(t *testing.T) {
 	calls := 0
-	e := &Executor{ghMintFn: func(context.Context, string, int64, int64, string) (string, time.Time, error) {
+	e := &Executor{ghMintFn: func(context.Context, github.KeyFileMint) (string, time.Time, error) {
 		calls++
 		return "ghs_x", time.Now().Add(time.Hour), nil
 	}}
@@ -61,7 +62,8 @@ func TestInstallationToken_DisabledProject(t *testing.T) {
 // the cached token across a task's later steps.
 func TestInstallationToken_MintsAndCaches(t *testing.T) {
 	calls := 0
-	e := &Executor{ghMintFn: func(_ context.Context, apiBase string, appID, installID int64, keyPath string) (string, time.Time, error) {
+	e := &Executor{ghMintFn: func(_ context.Context, m github.KeyFileMint) (string, time.Time, error) {
+		apiBase, appID, installID, keyPath := m.APIBase, m.AppID, m.InstallationID, m.KeyPath
 		calls++
 		if apiBase != "https://api.github.com" || appID != 4040507 || installID != 139940331 || keyPath != "/run/secrets/key.pem" {
 			t.Errorf("mint got unexpected args: %s %d %d %s", apiBase, appID, installID, keyPath)
@@ -84,7 +86,7 @@ func TestInstallationToken_MintsAndCaches(t *testing.T) {
 // re-minted rather than handed out about to lapse.
 func TestInstallationToken_RemintsNearExpiry(t *testing.T) {
 	calls := 0
-	e := &Executor{ghMintFn: func(context.Context, string, int64, int64, string) (string, time.Time, error) {
+	e := &Executor{ghMintFn: func(context.Context, github.KeyFileMint) (string, time.Time, error) {
 		calls++
 		return "ghs_short", time.Now().Add(time.Minute), nil // < ghTokenRenewBuffer
 	}}
@@ -98,7 +100,7 @@ func TestInstallationToken_RemintsNearExpiry(t *testing.T) {
 
 // TestInstallationToken_MintError: a mint failure surfaces, no token cached.
 func TestInstallationToken_MintError(t *testing.T) {
-	e := &Executor{ghMintFn: func(context.Context, string, int64, int64, string) (string, time.Time, error) {
+	e := &Executor{ghMintFn: func(context.Context, github.KeyFileMint) (string, time.Time, error) {
 		return "", time.Time{}, errors.New("boom")
 	}}
 	tok, err := e.installationToken(context.Background(), enabledGitHubProject())
@@ -111,8 +113,8 @@ func TestInstallationToken_MintError(t *testing.T) {
 // naming another project's installation id with a different App id or key
 // must mint with its own key, never receive the cached push token.
 func TestInstallationToken508_CacheKeyIsTheWholeAppIdentity(t *testing.T) {
-	e := &Executor{ghMintFn: func(_ context.Context, _ string, _, _ int64, keyPath string) (string, time.Time, error) {
-		return "tok-" + keyPath, time.Now().Add(time.Hour), nil
+	e := &Executor{ghMintFn: func(_ context.Context, m github.KeyFileMint) (string, time.Time, error) {
+		return "tok-" + m.KeyPath, time.Now().Add(time.Hour), nil
 	}}
 	mk := func(app int64, key string) *registry.Project {
 		p := &registry.Project{ID: key}

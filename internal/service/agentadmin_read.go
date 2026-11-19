@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -420,6 +421,9 @@ type Capabilities struct {
 	EgressScan    string  `json:"egress_scan"`
 	DefaultBudget float64 `json:"default_project_budget_usd"`
 	CeilingUSD    float64 `json:"monthly_budget_ceiling_usd"`
+	// Limits are the caps update_project and define_swarm may set, and the
+	// defaults a role gets when it sets none (part 06 §6.9, #798, #805).
+	Limits AdminLimits `json:"limits"`
 	// Models are the models a role may name in define_swarm (design §18.6
 	// item 2); empty when the operator offers none.
 	Models []DescribedModel `json:"models"`
@@ -430,6 +434,15 @@ type Capabilities struct {
 	// Harness is what the key's harness class means for the guarantees
 	// (design §3; plan P6.4).
 	Harness HarnessView `json:"harness"`
+}
+
+// AdminLimits is describe_installation's limits (part 06 §6.9).
+type AdminLimits struct {
+	MaxConcurrentTasks    int    `json:"max_concurrent_tasks"`
+	MaxRoleTokens         int    `json:"max_role_tokens"`
+	MaxRoleToolIterations int    `json:"max_role_tool_iterations"`
+	DefaultToolIterations int    `json:"default_role_tool_iterations"`
+	DefaultRoleTokens     string `json:"default_role_tokens"`
 }
 
 // HarnessView is design §3's row for the key's client kind.
@@ -501,6 +514,7 @@ func (s *agentAdminService) Describe(ctx context.Context, key *persistence.APIKe
 		EgressScan: "Tool arguments, API requests, proposed writes and returned documents are scanned for credential-shaped values " +
 			"(keys, tokens); a finding refuses the call and names the field, never the value. Personal data in general is not detected.",
 		DefaultBudget: s.c.Config.AgentAdmin.EffectiveDefaultProjectBudget(),
+		Limits:        s.describeLimits(),
 		CeilingUSD:    setup.CeilingUSD,
 		Setup:         setup,
 		Harness:       harnessView(key.ClientKind),
@@ -724,4 +738,18 @@ func credentialAccounts(p *agentadmin.ProjectState, creds []SetupCredential) {
 	for i := range creds {
 		creds[i].Account = label[creds[i].Name]
 	}
+}
+
+// describeLimits fills describe_installation's limits from the config.
+func (s *agentAdminService) describeLimits() AdminLimits {
+	a := s.c.Config.AgentAdmin
+	// The executor's order (roleTokenDefault): the model's model_limits
+	// entry first, then the agent LLM's max_tokens.
+	tokens := "the provider's default"
+	if n := agentContainerLLM(s.c.Config).MaxTokens; n > 0 {
+		tokens = strconv.Itoa(n)
+	}
+	tokens = "the role's model's model_limits max_tokens when it has one, else " + tokens
+	return AdminLimits{MaxConcurrentTasks: a.EffectiveMaxConcurrentTasks(), MaxRoleTokens: a.EffectiveMaxRoleTokens(),
+		MaxRoleToolIterations: a.EffectiveMaxRoleToolIterations(), DefaultToolIterations: agentadmin.DefaultToolSteps, DefaultRoleTokens: tokens}
 }

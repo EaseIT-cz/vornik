@@ -28,6 +28,7 @@ var scorerImportExclusions = map[string]string{
 	"internal/persistence": "the ledger schema; the harness's reads of it are internal/agentbench/store_sql.go, which is listed",
 	"internal/version":     "build stamping only",
 	"internal/swarmclass":  "membench's scope guard refusing trading swarms — decides whether a run may start, not what it scores",
+	"internal/config":      "the bench.learning trigger tuning the autopilot reads (GitHub #809): it decides when the autopilot acts, not how a run is scored, and the tuning values are in the arm's config hash",
 }
 
 func guardScorerPaths(t *testing.T) []string {

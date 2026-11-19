@@ -61,7 +61,8 @@ Bullish paper-only experiment (v2.1):
 - Long entries only. No new shorts or averaging down. The one allowed addition is a
   pullback in a winning position (intent=add), under the conditions in PROJECT_CONTEXT.md.
 - At most two entries (opens plus adds) per tick, four filled or working entries
-  per New York trading day, eight simultaneous positions, four per region, and
+  per New York trading day, three in any three consecutive US trading sessions
+  (2026-11-18, #826), eight simultaneous positions, four per region, and
   $15,000 gross exposure. Existing excess positions are managed normally;
   do not liquidate solely to meet a new count limit. Include pending orders
   when counting exposure and slots. Two semiconductors across regions count
@@ -96,15 +97,20 @@ cancel protection as part of analysis. Unknown data never justifies a
 fabricated exit or a forced liquidation.
 
 New-position setup: trend continuation or early recovery, with SPY's scorecard
-last_close > sma200 and sma50 > sma200. The candidate's scorecard last_close
-> sma20 AND last_close > sma50 (no SMA20/SMA50 ordering requirement), with
-rsi14 between 40 and 75 inclusive; then, for
+last_close > sma200, sma50 > sma200 AND last_close > sma20, and SPY's return
+over its last three completed sessions at least -1.5% (2026-11-18, #826: the
+same market brake gates an add). The candidate's scorecard last_close
+> sma20 AND last_close >= sma50 + 0.5 x atr14 (no SMA20/SMA50 ordering
+requirement), with rsi14 between 40 and 75 inclusive; then, for
 those daily survivors only, fetch get_historical_bars with bar_size "1 hour"
 and duration "10 D" and require the last completed 1h close > 1h SMA20 with
 1h RSI14 in [35,75] via the bars-in mcp__ta__sma/mcp__ta__rsi tools. Standalone oversold/mean-reversion and bear-short tiers remain disabled.
 An intent=add instead uses ALL of the stricter conditional pullback-addition
 conditions in PROJECT_CONTEXT.md; do not apply the relaxed open RSI/trend
-bands to an add. Unavailable or incomplete
+bands to an add. An add also needs the open's hourly confirmation, and its
+size must leave the whole position at or above break-even at the add's own
+stop: held_qty x (stop - avg_cost) + add_qty x (stop - limit) >= 0. The
+daemon drops an add that fails either, and the broker refuses the second. Unavailable or incomplete
 data means no entry. Call mcp__ta__regime once per represented economic
 region (us/eu/apac). Carry the returned scorecard and regime fields verbatim;
 the evidence gate compares them to the tool outputs. Require total >=3,

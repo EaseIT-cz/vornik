@@ -1,0 +1,62 @@
+{{define "approvers.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+    <main id="main" tabindex="-1" class="flex-1 max-w-5xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5">
+            <h1 class="text-xl font-semibold text-gray-100">Approver devices</h1>
+            <p class="text-sm text-gray-400">An approver device is a phone that approves what an agent asks Vornik to do. Pairing a phone here is the same as <code>vornikctl pair-device</code>: the first phone is paired by its code alone; a further phone must also be approved on one you already paired. Every pairing raises an alert.</p>
+            {{if .Notice}}<p class="text-sm text-gray-300" role="status">{{.Notice}}</p>{{end}}
+
+            {{if .Code}}
+            <div class="glass rounded-xl border border-dark-700 px-5 py-4 space-y-2" data-pair-code>
+                <p class="text-sm text-gray-300">Open this address on the phone and enter the code. It works once, until {{.Expires.Format "15:04 MST"}}.</p>
+                <p class="text-2xl font-mono tracking-widest text-gray-100">{{.Code}}</p>
+                <p class="text-sm font-mono text-accent-300 break-all">{{.PairURL}}</p>
+                {{if .HTTPWarn}}<p class="text-sm text-amber-700 dark:text-amber-400">Pairing needs HTTPS: the approver pages refuse plain http to a host other than this machine. Serve Vornik over HTTPS, or pair through localhost.</p>{{end}}
+                {{if .NoAlert}}<p class="text-sm text-amber-700 dark:text-amber-400" data-no-alert>No alert channel is configured, so a pairing you did not make would raise no alert. Configure the operator alert channel.</p>{{end}}
+            </div>
+            {{end}}
+
+            <form method="post" action="/ui/settings/approvers/pair" class="glass rounded-xl border border-dark-700 px-5 py-4 flex flex-wrap items-end gap-3">
+                <label class="text-sm text-gray-300">Name for the phone (optional)
+                    <input name="label" maxlength="40" type="text" class="mt-1 block bg-dark-700 border border-control text-gray-200 rounded-md px-2 py-1">
+                </label>
+                <button type="submit" class="v-btn v-btn--primary">Pair a phone</button>
+            </form>
+
+            <div class="glass rounded-xl border border-dark-700 overflow-hidden">
+                {{if .Devices}}
+                <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="text-xs text-gray-500 uppercase tracking-wider border-b border-dark-700/60">
+                        <tr><th class="px-5 py-2 text-left">Name</th><th class="px-3 py-2 text-left">Id</th><th class="px-3 py-2 text-left">Paired</th><th class="px-3 py-2 text-left">Last used</th><th class="px-3 py-2 text-left">State</th><th class="px-3 py-2"></th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-dark-700/30">
+                    {{range .Devices}}
+                        <tr data-device="{{.ID}}">
+                            <td class="px-5 py-2 text-gray-200">{{.Label}}</td>
+                            <td class="px-3 py-2 font-mono text-gray-400">{{.ID}}</td>
+                            <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{.PairedAt.Format "2006-01-02 15:04"}}</td>
+                            <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{.LastUsedAt.Format "2006-01-02 15:04"}}</td>
+                            <td class="px-3 py-2">{{if .RevokedAt}}<span class="text-gray-500">revoked</span>{{else}}<span class="text-emerald-800 dark:text-emerald-400">live</span>{{end}}</td>
+                            <td class="px-3 py-2 text-right whitespace-nowrap">
+                                {{if .RevokedAt}}<form method="post" action="/ui/settings/approvers/{{.ID}}/remove" class="inline"><button type="submit" class="v-btn v-btn--secondary">Remove</button></form>
+                                {{else}}<form method="post" action="/ui/settings/approvers/{{.ID}}/revoke" class="inline"><button type="submit" class="v-btn v-btn--danger">Revoke</button></form>{{end}}
+                            </td>
+                        </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                </div>
+                {{else}}
+                <p class="px-5 py-4 text-sm text-gray-500">No phone is paired yet.</p>
+                {{end}}
+            </div>
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

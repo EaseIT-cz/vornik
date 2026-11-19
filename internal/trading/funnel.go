@@ -214,13 +214,29 @@ func ForwardOutcome(bars []DailyBar, observed time.Time, refClose, refATR float6
 }
 
 // SessionDate is the New York calendar date of an instant, at midnight UTC,
-// the form DailyBar.Session uses.
+// the form CompletedThrough compares. A daily bar's session is BarSession
+// (#824), not this: a bar is stamped with its date, not an instant.
 func SessionDate(at time.Time) time.Time {
 	ny := at
 	if tz, err := time.LoadLocation("America/New_York"); err == nil {
 		ny = at.In(tz)
 	}
 	return time.Date(ny.Year(), ny.Month(), ny.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// BarSession is a daily bar's session: the calendar date its timestamp
+// carries, at midnight UTC (GitHub #824). The IBKR sidecar stamps a daily
+// bar <date>T00:00:00Z, so converting it to New York time (SessionDate)
+// would land it on the evening before. SessionDate stays for instants.
+func BarSession(ts time.Time) time.Time {
+	return time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// IsUSTradingDay reports whether session (a date at midnight UTC) is a NYSE
+// trading day: a weekday that is not a US market holiday.
+func IsUSTradingDay(session time.Time) bool {
+	wd := session.Weekday()
+	return wd != time.Saturday && wd != time.Sunday && !IsUSMarketHoliday(session)
 }
 
 // CompletedThrough is the latest session date whose daily bar is final at

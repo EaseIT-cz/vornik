@@ -124,7 +124,7 @@ func TestTradingPerf_RendersEntrySignal_596(t *testing.T) {
 	body := rec.Body.String()
 
 	assert.Contains(t, body, "Entry signal")
-	assert.Contains(t, body, "rejected: regime")
+	assert.Contains(t, body, "Rejected by the market regime") // plain words since #825
 	assert.Contains(t, body, "&#43;2.00%", "the 1-session mean return renders")
 	assert.Contains(t, body, "2 candidates")
 	assert.Contains(t, body, "Too few sessions to judge")

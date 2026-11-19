@@ -163,6 +163,17 @@ type ChangeRequestSpec struct {
 type ReviewSpec struct {
 	Body  string
 	Event ReviewEvent
+	// CommitID and Comments make inline review comments (GitHub #244): each
+	// on an added line of the reviewed head. Empty: the review is the body.
+	CommitID string
+	Comments []ReviewLineComment
+}
+
+// ReviewLineComment is one inline comment on a new-file line.
+type ReviewLineComment struct {
+	Path string
+	Line int
+	Body string
 }
 
 // ForgeProvider abstracts a code-hosting forge. Implementations live in

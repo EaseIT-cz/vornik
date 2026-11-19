@@ -155,7 +155,7 @@ func (m *markRecorder) MarkReviewed(_ context.Context, _, _ string, _ int, sha s
 func TestPostReview_AdvancesTheBaselineOnSuccess(t *testing.T) {
 	rec := &markRecorder{}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(rec)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(rec)
 
 	task := taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-new"})
 	task.ID = "task-1"
@@ -176,7 +176,7 @@ func TestPostReview_AdvancesTheBaselineOnSuccess(t *testing.T) {
 func TestPostReview_FailedPost_DoesNotAdvanceTheBaseline(t *testing.T) {
 	rec := &markRecorder{}
 	prov := &fakeProvider{reviewErr: errors.New("502 from the forge")}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(rec)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(rec)
 
 	task := taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-new"})
 	task.ID = "task-1"
@@ -278,7 +278,7 @@ func TestFetchDiff_NoHeadAnywhere_FallsBackToFull(t *testing.T) {
 // hypothetical — it happened on the first PR this feature reviewed.
 func TestPostReview_QuotesTheRequestingComment(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 
 	task := taskWithJob(forgeapi.ForgeJob{
 		Repo: "o/r", Number: 4, HeadSHA: "sha-new",
@@ -310,7 +310,7 @@ func TestPostReview_QuotesTheRequestingComment(t *testing.T) {
 // would be noise on every single push.
 func TestPostReview_EventDrivenReviewHasNoQuote(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 
 	task := taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-new"})
 	task.ID = "task-1"
@@ -329,7 +329,7 @@ func TestPostReview_EventDrivenReviewHasNoQuote(t *testing.T) {
 // A very long comment must not push the review itself out of view.
 func TestPostReview_LongCommentIsTruncated(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 
 	task := taskWithJob(forgeapi.ForgeJob{
 		Repo: "o/r", Number: 4, OnDemand: true, Command: "review",

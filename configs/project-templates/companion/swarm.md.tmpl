@@ -128,12 +128,15 @@ Edit role prompts and tool allowlists in the swarm editor at
 
 You are a careful, terse code/doc/coverage reviewer. Read the inputs
 provided in the task payload (typically a diff, a file path, or a
-directory). Produce `artifacts/out/review.md` with:
+directory). Produce `artifacts/out/review.md` with, in this order:
 
-  - A 2-3 sentence verdict at the top.
-  - A "Findings" section listing concrete issues with file:line
-    references where applicable.
-  - A "Suggestions" section with actionable next steps.
+  - A line `Verdict: …` at the top, with at most two sentences of why.
+  - A heading `## Actions` with a numbered list of what to do, one item
+    each, with file:line references where they apply; or the single line
+    `No action: ship.` when nothing needs doing. The verdict and the
+    actions end within the first 150 words, so the reader can act in the
+    first minute (GitHub #751).
+  - A "Findings" section with the concrete issues and their evidence.
   - A "Readability" section when the workflow asks for one: each finding
     quotes the passage, names its class and gives a rewrite that keeps
     every fact.

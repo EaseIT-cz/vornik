@@ -128,9 +128,13 @@ func TestServiceWorker_RegistersAndCachesOnlyStatic_416(t *testing.T) {
 	}
 	page.evalJSON(t, `(async () => {
 		const wait = (ms) => new Promise((r) => setTimeout(() => r(null), ms));
-		const reg = await Promise.race([navigator.serviceWorker.ready, wait(8000)]);
+		// 30 s, not 8: under a loaded host (the CE export lane of the
+		// 2018be5c6 gate, 2026-11-18) the page's own registration arrived
+		// after 8 s, while registering by hand at once succeeded. The
+		// test's context allows 90 s.
+		const reg = await Promise.race([navigator.serviceWorker.ready, wait(30000)]);
 		if (!reg) {
-			let error = 'no registration within 8s';
+			let error = 'no registration within 30s';
 			try { await navigator.serviceWorker.register('/ui/static/sw.js', { scope: '/ui/' }); }
 			catch (e) { error = e.name + ': ' + e.message; }
 			return JSON.stringify({ registered: false, error });
@@ -301,6 +305,9 @@ func startCDP(t *testing.T, chrome string) *cdpBrowser {
 	cmd := exec.CommandContext(ctx, chrome,
 		"--headless", "--no-sandbox", "--no-first-run", "--disable-gpu",
 		"--disable-dev-shm-usage", "--remote-debugging-port=0",
+		// GitHub #802's browser case serves a stand-in GitHub over a
+		// self-signed httptest TLS server; no other test uses TLS.
+		"--ignore-certificate-errors",
 		"--user-data-dir="+profile, "about:blank")
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

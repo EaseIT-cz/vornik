@@ -104,10 +104,15 @@ type Service struct {
 	notifyChannel string
 	notifyActive  bool
 	origin        string
-	mu            sync.RWMutex
-	effects       map[string]Effect
-	onReject      map[string]func(ctx context.Context, r persistence.AgentApprovalRequestRow)
-	terminal      map[string][]TerminalObserver
+	// revokeMu serializes RevokeBy and RevokeKeepingOne, so two concurrent
+	// revokes cannot both see a second live device (#763 review 016f M1);
+	// afterLiveCount is a test seam between that count and the revoke.
+	revokeMu       sync.Mutex
+	afterLiveCount func()
+	mu             sync.RWMutex
+	effects        map[string]Effect
+	onReject       map[string]func(ctx context.Context, r persistence.AgentApprovalRequestRow)
+	terminal       map[string][]TerminalObserver
 	// values are the value-entry handlers by kind (plan P4.2).
 	values map[string]ValueEntry
 	// describers produce each kind's plain summary and level (§18.7).
@@ -133,7 +138,7 @@ type Service struct {
 	// withheldTools lists the agent read tools the daemon suspended because
 	// their server now says they change things (agent-administered design
 	// §6.5 item 6, GitHub #413); nil shows none.
-	withheldTools func(ctx context.Context) []string
+	withheldTools func(ctx context.Context) []Notice
 	// withdrawable are the kinds the daemon may withdraw (design §9.2d).
 	withdrawable map[string]bool
 	// choices are the registered choice kinds (choice_kind.go, GitHub #302).
@@ -152,6 +157,15 @@ type Service struct {
 // applyLease bounds how long one holder may run an effect before another
 // node may take the request over.
 const applyLease = 5 * time.Minute
+
+// approvalEffectTimeout bounds an approved request's effect, which runs
+// detached from its caller (GitHub #795, part 22 §22.2.16c item 1). It stays
+// under applyLease so no other node claims a request whose effect still runs.
+const approvalEffectTimeout = 4 * time.Minute
+
+// approvalRecordTimeout bounds the writes after the effect (MarkApplied,
+// MarkApplyFailed, the terminal notice), on a fresh detached context.
+const approvalRecordTimeout = 30 * time.Second
 
 // Option configures a Service.
 type Option func(*Service)
@@ -778,6 +792,11 @@ const approvalApplyCeiling = 60
 // AS DECIDED (re-read after the transition, so an effect sees the approver and
 // the decision time, the same row the re-apply loop reads; review 4de8 F1).
 // Another node holding the lease means it is being applied there: not an error.
+//
+// The effect and the writes after it run detached from ctx's cancellation
+// (GitHub #795): the phone's request is ctx when the device decides, and a
+// client that left mid-reload cancelled a change it had approved. ctx's
+// values carry over.
 func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error {
 	now := s.now()
 	ok, err := s.repo.ClaimApply(ctx, id, s.holder, now.Add(applyLease), now)
@@ -788,7 +807,12 @@ func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error
 	if err != nil {
 		return err
 	}
-	if err := fn(ctx, *r); err != nil {
+	effectCtx, cancelEffect := context.WithTimeout(context.WithoutCancel(ctx), approvalEffectTimeout)
+	err = fn(effectCtx, *r)
+	cancelEffect()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalRecordTimeout)
+	defer cancel()
+	if err != nil {
 		// A transient failure is retried until the ceiling, then the request
 		// ends failed like a permanent one, so the proposal stops blocking and
 		// the agent can propose again (part 22, §22.2.16a, GitHub #579: two
@@ -797,7 +821,7 @@ func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error
 		if errors.Is(err, ErrPermanent) || giveUp {
 			reason := err.Error()
 			if giveUp {
-				reason = fmt.Sprintf("gave up after %d attempts: %s", r.ApplyAttempts, err.Error())
+				reason = fmt.Sprintf(GaveUpPrefix+"%d attempts: %s", r.ApplyAttempts, err.Error())
 			}
 			now := s.now()
 			if merr := s.repo.MarkApplyFailed(ctx, id, reason, now); merr != nil {

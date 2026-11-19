@@ -33,6 +33,9 @@ type ClosedTrade struct {
 	// EntryOrderID is the order of the opening fill this lot came from
 	// (GitHub #597): R is computed per entry order.
 	EntryOrderID string
+	// ExitFillID is the fill that closed this lot (GitHub #825): the
+	// dashboard sums an exit fill's lots into its realized P&L.
+	ExitFillID string
 }
 
 // DailyPoint is one calendar day's realized P&L and mark-to-market equity.
@@ -122,7 +125,7 @@ func matchClose(
 	fillQty, fillPrice float64,
 	fillAt time.Time,
 	fillComm float64,
-	sym string,
+	sym, fillID string,
 ) ([]ClosedTrade, float64) {
 	remaining := fillQty
 	var trades []ClosedTrade
@@ -151,6 +154,7 @@ func matchClose(
 			ExitAt:       fillAt,
 			RealizedUSD:  realized,
 			EntryOrderID: lot.orderID,
+			ExitFillID:   fillID,
 		})
 
 		lot.qty -= matched
@@ -222,7 +226,7 @@ func PairRoundTrips(fills []*persistence.TradingFill, sideByOrderID map[string]s
 
 		switch action {
 		case "BUY":
-			closed, remaining := matchClose(&sq.short, "short", f.Qty, f.Price, f.FilledAt, comm, sym)
+			closed, remaining := matchClose(&sq.short, "short", f.Qty, f.Price, f.FilledAt, comm, sym, f.ID)
 			trades = append(trades, closed...)
 			if remaining > 0 {
 				openComm := comm * (remaining / f.Qty)
@@ -232,7 +236,7 @@ func PairRoundTrips(fills []*persistence.TradingFill, sideByOrderID map[string]s
 				})
 			}
 		case "SELL":
-			closed, remaining := matchClose(&sq.long, "long", f.Qty, f.Price, f.FilledAt, comm, sym)
+			closed, remaining := matchClose(&sq.long, "long", f.Qty, f.Price, f.FilledAt, comm, sym, f.ID)
 			trades = append(trades, closed...)
 			if remaining > 0 {
 				openComm := comm * (remaining / f.Qty)

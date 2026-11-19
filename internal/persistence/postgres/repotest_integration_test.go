@@ -1152,9 +1152,9 @@ func TestApproverDevice_PostgresContract(t *testing.T) {
 	// Wave 6 (2026-10-13): this list missed 228 and then 217 + 227, and each
 	// miss surfaced only as constraint/column errors deep in the suite. The
 	// guard below fails up front, naming the migration, instead.
-	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true, 227: true, 228: true, 249: true}
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true, 227: true, 228: true, 249: true, 255: true}
 	partial := map[int]bool{217: true}
-	approverTables := []string{"agent_approval_requests", "approver_devices", "approver_pairings", "approver_push_subscriptions"}
+	approverTables := []string{"agent_approval_requests", "approver_devices", "approver_pairings", "approver_push_subscriptions", "approver_notice_acks"}
 	namesApproverTable := func(sql string) bool {
 		for _, tbl := range approverTables {
 			if strings.Contains(sql, tbl) {

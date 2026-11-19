@@ -108,6 +108,10 @@ type Metrics struct {
 	EdgesTotal     prometheus.Gauge
 	MentionsTotal  prometheus.Gauge
 	EntitiesByType *prometheus.GaugeVec
+	// EntitiesReembeddedTotal counts the re-embed step's outcomes for
+	// entities stored without a vector (GitHub #459). Labels: outcome
+	// (embedded | failed).
+	EntitiesReembeddedTotal *prometheus.CounterVec
 }
 
 // NewMetrics registers and returns a Metrics struct.
@@ -269,6 +273,15 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 				Help:      "Entity counts by closed-vocabulary type (PERSON, VENDOR, …).",
 			},
 			[]string{"type"},
+		),
+		EntitiesReembeddedTotal: promauto.With(reg).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: graphNamespace,
+				Subsystem: graphSubsystem,
+				Name:      "entities_reembedded_total",
+				Help:      "Entities stored without a vector that the KG worker re-embedded, by outcome (GitHub #459).",
+			},
+			[]string{"outcome"},
 		),
 	}
 }

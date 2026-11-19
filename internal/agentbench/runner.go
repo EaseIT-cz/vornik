@@ -118,8 +118,13 @@ type ExecutionStateStore interface {
 // RunConfig is everything one arm's run needs.
 type RunConfig struct {
 	RunID string
-	Arm   ArmFields
-	Scope membench.RunScope
+	// Phase is "warmup" for a learning study's warm-up pass (GitHub #809).
+	Phase string
+	// TaskSetPublished stamps a release-gate run on a published task set
+	// (--published-task-set, GitHub #790).
+	TaskSetPublished bool
+	Arm              ArmFields
+	Scope            membench.RunScope
 
 	PreRegistration PreRegistration
 	Power           PowerCheck
@@ -222,9 +227,11 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 		Power:               cfg.Power,
 		TaskTiers:           taskTierMap(cfg.Tasks),
 		WorkspaceReset:      WorkspaceResetNoWorkspace,
+		Phase:               cfg.Phase,
+		TaskSetPublished:    cfg.TaskSetPublished,
 	}}
 	if r.Workspace != nil {
-		j.Manifest.WorkspaceReset = WorkspaceResetTargetsStateAndHistory
+		j.Manifest.WorkspaceReset = WorkspaceResetBaseline
 	}
 
 	repeats := cfg.Repeats

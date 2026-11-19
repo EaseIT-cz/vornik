@@ -9935,5 +9935,128 @@ CREATE INDEX IF NOT EXISTS idx_task_llm_usage_recorded_at
     ON task_llm_usage (recorded_at);
 `,
 		Down: `DROP INDEX IF EXISTS idx_task_llm_usage_recorded_at;`,
+	}, {
+		Version: 255,
+		Name:    "approver_dismiss_retry_and_notice_acks",
+		// A failed apply can be dismissed from the phone or the console, and
+		// a given-up one retried from the phone; a withheld-tools notice can
+		// be acknowledged (GitHub #806; agent-administered design part 22
+		// §22.2.16d, part 06 §6.5 amendment 2026-11-17). SQLite: the same
+		// columns in schema.go and sqliteAdditiveColumns, the table in
+		// schemaSQL.
+		Up: `
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS dismissed_by TEXT;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS retried_at TIMESTAMPTZ;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS retried_by TEXT;
+CREATE TABLE IF NOT EXISTS approver_notice_acks (
+    notice_key TEXT PRIMARY KEY,
+    acked_at   TIMESTAMPTZ NOT NULL,
+    acked_by   TEXT NOT NULL
+);
+`,
+		Down: `
+DROP TABLE IF EXISTS approver_notice_acks;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS retried_by;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS retried_at;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS dismissed_by;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS dismissed_at;
+`,
+	}, {
+		Version: 256,
+		Name:    "github_app_manifest_states",
+		// The console's GitHub App-manifest states: a hash of the state and
+		// of the session that made it, consumed once within an hour (GitHub
+		// #802; github-app-channel design, "One-click App creation", Data).
+		// SQLite: the same table in schemaSQL.
+		Up: `
+CREATE TABLE IF NOT EXISTS github_app_manifest_states (
+    state_hash   TEXT PRIMARY KEY,
+    session_hash TEXT NOT NULL,
+    api_base     TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    used_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_manifest_states_session ON github_app_manifest_states (session_hash);
+`,
+		Down: `DROP TABLE IF EXISTS github_app_manifest_states;`,
+	}, {
+		Version: 257,
+		Name:    "github_app_bindings",
+		// The bindings an App-signed installation event writes: the
+		// deliveries applied once, the repositories and their projects, the
+		// installations' suspension (GitHub #800; github-app-channel design,
+		// "Install-to-onboard"). SQLite: the same tables in schemaSQL.
+		Up: `
+CREATE TABLE IF NOT EXISTS github_app_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    received_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_deliveries_received ON github_app_deliveries (received_at);
+CREATE TABLE IF NOT EXISTS github_app_repositories (
+    repo            TEXT PRIMARY KEY,
+    installation_id BIGINT NOT NULL,
+    project_id      TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_repositories_installation ON github_app_repositories (installation_id);
+CREATE TABLE IF NOT EXISTS github_app_installations (
+    installation_id BIGINT PRIMARY KEY,
+    suspended       BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at      TIMESTAMPTZ NOT NULL
+);
+`,
+		Down: `
+DROP TABLE IF EXISTS github_app_installations;
+DROP TABLE IF EXISTS github_app_repositories;
+DROP TABLE IF EXISTS github_app_deliveries;
+`,
+	},
+	{
+		Version: 258,
+		Name:    "trading_orders_filled_qty_backfill_823",
+		// GitHub #823 (trading-fill-reconciliation design, Amendment
+		// 2026-11-18): migration 198's repair, again, for rows written after
+		// it whose broker row carried no count (13 on ibkr-trader on
+		// 2026-11-18). From this release the fill insert keeps the count;
+		// this repairs the rows before it. The same rule as 198: a filled
+		// row only when its fill sum EQUALS qty, a partial row only when
+		// 0 < sum < qty; anything else stays as it is. Idempotent; Postgres
+		// only (SQLite has no trading history).
+		Up: `
+UPDATE trading_orders o
+   SET filled_qty = f.total
+  FROM (SELECT order_id, project_id, SUM(qty) AS total FROM trading_fills GROUP BY order_id, project_id) f
+ WHERE f.order_id = o.id
+   AND f.project_id = o.project_id
+   AND o.filled_qty = 0
+   AND ((o.status = 'filled'  AND f.total = o.qty)
+     OR (o.status = 'partial' AND f.total > 0 AND f.total < o.qty));
+`,
+		// The repaired values are the fills' own sums: nothing to undo.
+		Down: ``,
+	},
+	{
+		Version: 259,
+		Name:    "trading_bar_session_repair_824",
+		// GitHub #824 (trading entry-policy design, Amendment 2026-11-18
+		// (GitHub #824)): the executor dated each daily bar one session early
+		// (the sidecar stamps <date>T00:00:00Z; New York time made it the
+		// evening before). Every stored benchmark close is one day early, and
+		// every funnel outcome filled since #719 used a late baseline. Both
+		// are cleared; the next indicator pre-warm records the 120-bar window
+		// again. SQLite: applyBarSessionRepair. Down restores nothing: the
+		// cleared values were wrong.
+		Up: `
+DELETE FROM trading_benchmark_closes;
+UPDATE trading_funnel_candidates
+   SET ret_1 = NULL, ret_3 = NULL, ret_5 = NULL,
+       mfe_1 = NULL, mfe_3 = NULL, mfe_5 = NULL,
+       mae_1 = NULL, mae_3 = NULL, mae_5 = NULL;
+`,
+		Down: `SELECT 1;`,
 	},
 }

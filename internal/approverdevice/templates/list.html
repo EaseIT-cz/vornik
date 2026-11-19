@@ -3,13 +3,13 @@
 <h1>Waiting for you</h1>
 {{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
 {{with .Refused}}<p class="err">Not decided, because it changed after you opened it or was already decided: {{range $i, $id := .}}{{if $i}}, {{end}}<a class="ref" href="/ui/approve/{{$id}}">{{$id}}</a>{{end}}. Review it again.</p>{{end}}
-{{range .Withheld}}<div class="card"><p>{{.}}</p></div>
+{{range .Withheld}}<div class="card"><p>{{.Text}}</p><form method="post" action="/ui/approve/notices/{{.Key}}/ack"><button class="act" type="submit">Acknowledge</button></form></div>
 {{end}}{{range .Groups}}<div class="card"><p>{{.Count}} waiting: {{.Title}}</p><a class="act" href="/ui/approve/group/{{.Key}}">Review together</a></div>
 {{end}}
 {{range .Pending}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{when .CreatedAt}}</p><a class="act" href="/ui/approve/{{.ID}}">Review</a></div>
 {{else}}{{if not .Groups}}<div class="card"><p class="mut">Nothing is waiting for a decision.</p></div>{{end}}{{end}}
 {{with .Failed}}<h2>Could not be applied</h2>
-{{range .}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{if not .ApprovedAt.IsZero}}Approved {{when .ApprovedAt}}. {{end}}{{.Reason}}</p></div>
+{{range .}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{if not .ApprovedAt.IsZero}}Approved {{when .ApprovedAt}}. {{end}}{{.Reason}}</p>{{if .Retryable}}<form method="post" action="/ui/approve/{{.ID}}/retry"><button class="act" type="submit">Retry</button></form>{{else}}<p class="mut">Ask your assistant to request it again.</p>{{end}}<form method="post" action="/ui/approve/{{.ID}}/dismiss"><button class="no" type="submit">Dismiss</button></form></div>
 {{end}}{{if $.FailedMore}}<p class="mut">More requests failed than are shown here.</p>{{end}}{{end}}
 <p class="mut">This device: {{.Device.Label}}. {{.Notify}}</p>
 {{with .Push}}<p class="mut">{{.}} <a class="ref" href="/ui/approve/push">Notifications</a></p>{{end}}

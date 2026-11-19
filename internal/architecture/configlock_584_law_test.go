@@ -27,6 +27,7 @@ var configWriterSites = map[string]string{
 	"internal/api/featuredoctor_enable_handler.go": "passes the writer to featuredoctor.ApplyEnable, which holds LockConfigFile (configlock)",
 	"internal/service/fixit_dispatch_adapter.go":   "passes the writer to featuredoctor.ApplyEnable, which holds LockConfigFile (configlock)",
 	"internal/integrations/save.go":                "Save holds LockConfigFile (configlock) before it builds the writer",
+	"internal/integrations/github_app_802.go":      "RegisterGitHubApp and ForgetGitHubApp hold LockConfigFile (configlock) across the read, write and validate (#802)",
 }
 
 var (

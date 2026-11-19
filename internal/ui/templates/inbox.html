@@ -47,11 +47,24 @@
             <div class="mb-4 space-y-2">
                 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Approved, but could not be applied</h2>
                 <ul class="v-list">
-                    {{range .}}<li class="v-inbox-row"><div class="v-inbox-row__body min-w-0">
-                        <p class="text-sm text-gray-100">{{.Sentence}}</p><p class="text-xs text-gray-500">{{with .Approved}}Approved {{.}}. {{end}}{{.Reason}}</p>
+                    {{range .}}<li class="v-inbox-row"><div class="v-inbox-row__body flex flex-wrap items-center justify-between gap-2">
+                        <div class="min-w-0"><p class="text-sm text-gray-100">{{.Sentence}}</p><p class="text-xs text-gray-500">{{with .Approved}}Approved {{.}}. {{end}}{{.Reason}}</p>
+                        <p class="text-xs text-gray-500">{{if .Retryable}}Retry it from your approver device.{{else}}Ask your assistant to request it again.{{end}}</p></div>
+                        {{if $.CanClearApproverCards}}<form method="post" action="/ui/inbox/apply-failed/{{.ID}}/dismiss"><button type="submit" class="v-btn">Dismiss</button></form>{{end}}
                     </div></li>{{end}}
                 </ul>
                 {{if $.AgentApplyFailedMore}}<p class="text-xs text-gray-500">More requests failed than are shown here.</p>{{end}}
+            </div>
+            {{end}}
+            {{with .ApproverNotices}}
+            <div class="mb-4 space-y-2">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Notices</h2>
+                <ul class="v-list">
+                    {{range .}}<li class="v-inbox-row"><div class="v-inbox-row__body flex flex-wrap items-center justify-between gap-2">
+                        <p class="min-w-0 text-sm text-gray-100">{{.Text}}</p>
+                        {{if $.CanClearApproverCards}}<form method="post" action="/ui/inbox/notices/{{.Key}}/ack"><button type="submit" class="v-btn">Acknowledge</button></form>{{end}}
+                    </div></li>{{end}}
+                </ul>
             </div>
             {{end}}
             {{if .AgentApplyFailedFailed}}
@@ -69,7 +82,7 @@
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
                 </ul>
-            {{else if not (or .AgentApprovals .AgentApprovalsFailed .AgentApplyFailed .AgentApplyFailedFailed)}}
+            {{else if not (or .AgentApprovals .AgentApprovalsFailed .AgentApplyFailed .AgentApplyFailedFailed .ApproverNotices)}}
                 {{template "emptyState" (dict "Icon" "tasks" "Title" "All clear" "Hint" "Nothing needs your attention — no approvals, checkpoints, recent failures, or blocked tasks.")}}
             {{end}}
             {{with .StandingGrants}}

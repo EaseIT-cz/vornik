@@ -38,7 +38,7 @@
             </header>
 
             {{if .Error}}
-            <div class="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap" data-testid="chat-error">{{.Error}}</div>
+            <div class="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap" data-testid="chat-error">{{.Error}}{{if .ConnectProvider}} <a href="/ui/model-provider" class="underline">Connect your model provider.</a>{{end}}</div>
             {{end}}
 
             <section class="chat-thread" id="chat-thread" data-testid="chat-message-list" aria-live="polite" data-notices="{{.NoticeCount}}">

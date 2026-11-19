@@ -93,7 +93,8 @@ func TestProjectScopedTablesNotWiped_EveryReasonDecided(t *testing.T) {
 		}
 	}
 	sort.Strings(kept)
-	if got, want := strings.Join(kept, ","), "secret_redaction_audit"; got != want {
+	// github_app_repositories: section J amendment 2026-11-18 (#800).
+	if got, want := strings.Join(kept, ","), "github_app_repositories,secret_redaction_audit"; got != want {
 		t.Errorf("kept tables = %s, want %s (archival design section J)", got, want)
 	}
 }

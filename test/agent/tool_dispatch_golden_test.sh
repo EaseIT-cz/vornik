@@ -124,6 +124,7 @@ CASES=(
   "file_edit-ambiguous|file_edit|{\"path\":\"sub/back.txt\",\"old_string\":\"a\",\"new_string\":\"z\"}"
   "file_edit-replace-all|file_edit|{\"path\":\"sub/back.txt\",\"old_string\":\"a\",\"new_string\":\"z\",\"replace_all\":true}"
   "file_edit-not-found|file_edit|{\"path\":\"notes.txt\",\"old_string\":\"nope\",\"new_string\":\"x\"}"
+  "file_edit-noop|file_edit|{\"path\":\"notes.txt\",\"old_string\":\"world\",\"new_string\":\"world\"}"
   "file_edit-missing-file|file_edit|{\"path\":\"missing.txt\",\"old_string\":\"x\",\"new_string\":\"y\"}"
   "file_edit-empty-old|file_edit|{\"path\":\"notes.txt\",\"old_string\":\"\",\"new_string\":\"y\"}"
   "file_edit-no-path|file_edit|{\"old_string\":\"x\",\"new_string\":\"y\"}"

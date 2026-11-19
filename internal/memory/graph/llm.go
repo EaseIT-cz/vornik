@@ -151,8 +151,8 @@ func isRetryableLLMErr(err error) bool {
 // isTransientProviderErr reports whether a pipeline error is a provider
 // AVAILABILITY failure — throttling, overload, an unreachable endpoint — as
 // opposed to a failure the chunk itself can cause. The worker does not count
-// such a failure toward the chunk's quarantine bound (within
-// MaxTransientRetries; knowledge-graph LLD §3.3c, GitHub #419).
+// such a failure toward the chunk's quarantine bound (knowledge-graph LLD
+// §3.3c; GitHub #419, and with no ceiling since #369).
 //
 // Deliberately narrower than isRetryableLLMErr, which answers a different
 // question (is it worth another try inside this call?) and so also retries

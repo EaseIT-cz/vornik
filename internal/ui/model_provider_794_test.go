@@ -24,6 +24,7 @@ import (
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/auth"
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/onboarding"
@@ -71,11 +72,23 @@ hosting:
 type probe794 struct {
 	res   onboarding.ChatValidationResult
 	calls []onboarding.ChatConfigProposal
+	// listing are the bases ListModels answers for (GitHub #807); listed
+	// records each base it was asked.
+	listing map[string]bool
+	listed  []string
 }
 
 func (p *probe794) Validate(_ context.Context, pr onboarding.ChatConfigProposal) onboarding.ChatValidationResult {
 	p.calls = append(p.calls, pr)
 	return p.res
+}
+
+func (p *probe794) ListModels(_ context.Context, endpoint, _ string) ([]chat.ModelInfo, error) {
+	p.listed = append(p.listed, endpoint)
+	if p.listing[endpoint] {
+		return []chat.ModelInfo{{ID: "m"}}, nil
+	}
+	return nil, errors.New("404")
 }
 
 var probeOK794 = onboarding.ChatValidationResult{EndpointOK: true, ModelsListed: true, ModelKnown: true, PingOK: true}

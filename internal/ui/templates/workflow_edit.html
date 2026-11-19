@@ -9,9 +9,10 @@
         <div class="space-y-6">
             <div class="flex items-start justify-between gap-3">
                 <div>
-                    <h1 class="text-xl font-semibold text-gray-100">Edit workflow</h1>
+                    <h1 class="text-xl font-semibold text-gray-100">{{if .ReadOnly}}View{{else}}Edit{{end}} workflow</h1>
                     <p class="text-xs text-gray-500 font-mono mt-1">{{.WorkflowID}}{{if .WorkflowPath}} · {{.WorkflowPath}}{{end}}</p>
-                    <a href="/ui/workflows/{{.WorkflowID}}/schema{{if .AssistProjectID}}?projectId={{.AssistProjectID}}{{end}}" class="text-xs text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">All parameters (steps + advanced) →</a>
+                    {{if not .ReadOnly}}
+                    <a href="/ui/workflows/{{.WorkflowID}}/schema{{if .AssistProjectID}}?projectId={{.AssistProjectID}}{{end}}" class="text-xs text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">All parameters (steps + advanced) →</a>{{end}}
                 </div>
                 {{if .AssistProjectID}}
                 <a href="/ui/projects/{{.AssistProjectID}}" class="flex items-center gap-1 text-gray-500 hover:text-gray-300 text-sm transition-colors">
@@ -42,6 +43,7 @@
             </p>
 
             <form method="POST" action="/ui/workflows/{{.WorkflowID}}/edit" class="space-y-6">
+            <fieldset class="contents" {{if .ReadOnly}}disabled{{end}}>
 
                 <!-- Identity -->
                 <section class="glass rounded-lg border border-dark-700 p-5 space-y-4">
@@ -223,6 +225,7 @@
                     {{range .EntrypointOptions}}<option value="{{.}}"></option>{{end}}
                 </datalist>
 
+                {{if not .ReadOnly}}
                 <div class="flex items-center justify-end gap-3">
                     <a href="/ui/projects" class="px-4 py-2 rounded-md bg-dark-700 text-gray-300 hover:bg-dark-600 text-sm font-medium">Cancel</a>
                     <button type="submit" class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-500 text-sm font-medium">
@@ -230,6 +233,8 @@
                         Save workflow
                     </button>
                 </div>
+                {{end}}
+            </fieldset>
             </form>
 
             <!-- Danger zone: delete the workflow. Separate form +
@@ -237,6 +242,7 @@
                  accidentally trigger deletion. The server refuses
                  the delete when any project still references this
                  workflow via defaultWorkflowId. -->
+            {{if not .ReadOnly}}
             <section class="rounded-lg border border-red-500/30 bg-red-500/5 p-5 space-y-3" data-testid="workflow-delete-section">
                 <header>
                     <h2 class="text-sm font-semibold text-red-700 dark:text-red-300 uppercase tracking-wide">Danger zone</h2>
@@ -249,9 +255,10 @@
                     </button>
                 </form>
             </section>
+            {{end}}
         </div>
     </main>
-    {{template "assistScript" .}}
+    {{if not .ReadOnly}}{{template "assistScript" .}}{{end}}
 </body>
 </html>
 {{end}}

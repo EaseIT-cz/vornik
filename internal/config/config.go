@@ -495,6 +495,9 @@ type Config struct {
 	// built-in default (blackbox.DefaultReplaySafeTools). See
 	// https://docs.vornik.io § Phase C.
 	Blackbox BlackboxConfig `yaml:"blackbox"`
+	// Bench marks a benchmark daemon and carries the learning study's
+	// bench-only switches (GitHub #809; bench_809.go).
+	Bench BenchConfig `yaml:"bench" doc:"Benchmark-instance marker and the learning study's bench-only switches." since:"2026.11.7"`
 	// Integrations configures the Guided Integrations Hub (task 5.4). See
 	// https://docs.vornik.io §6.
 	Integrations IntegrationsConfig `yaml:"integrations"`
@@ -529,6 +532,11 @@ type Config struct {
 	// approver device. See
 	// https://docs.vornik.io
 	AgentAdmin AgentAdminConfig `yaml:"agent_admin"`
+	// GitHubAppRegistration is the instance's GitHub App, written by the
+	// console's one-click create (GitHub #802). See
+	// https://docs.vornik.io, "One-click App
+	// creation".
+	GitHubAppRegistration GitHubAppRegistration `yaml:"github_app_registration" json:"github_app_registration"`
 	// Gateway configures the local API gateway (Kong DB-less) that fronts
 	// authenticated third-party HTTP APIs for the query_api tool. See
 	// https://docs.vornik.io
@@ -774,6 +782,11 @@ type AgentAdminConfig struct {
 	// 2026.11.5.
 	PrivateAPIHosts []string           `yaml:"private_api_hosts" doc:"Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed."`
 	Models          []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
+	// The caps on what the admin verbs may set (agent-administered design
+	// part 06 §6.9, GitHub #798, #805); accessors in agent_admin_limits_798.go.
+	MaxConcurrentTasks    int `yaml:"max_concurrent_tasks" doc:"Highest maxConcurrentTasks update_project may set on an agent project (default 2, below the scheduler's default cap of 4, so one project cannot take every slot). scheduler.max_concurrent_tasks still caps all projects together. Raising a project's value needs approval on an approver device."`
+	MaxRoleTokens         int `yaml:"max_role_tokens" doc:"Highest max_tokens define_swarm may set on an agent role (default 32768). A value above the role's current one needs approval on an approver device."`
+	MaxRoleToolIterations int `yaml:"max_role_tool_iterations" doc:"Highest max_tool_iterations define_swarm may set on an agent role (default 120). It caps the role's base budget; with tool_budget.enabled the executor may scale that base by up to tool_budget.max_factor. A value above the role's current one (30 when unset) needs approval on an approver device."`
 }
 
 // AgentModelConfig is one model of agent_admin.models.
@@ -3367,7 +3380,7 @@ type MemoryConfig struct {
 
 	// EmbeddingEndpoint overrides the chat endpoint for embedding requests.
 	// Falls back to the resolved agent LLM endpoint when empty.
-	EmbeddingEndpoint string `yaml:"embedding_endpoint" doc:"Override endpoint for embedding requests."`
+	EmbeddingEndpoint string `yaml:"embedding_endpoint" doc:"Override endpoint for embedding requests: the provider's OpenAI-compatible base ending in /v1, the form chat.endpoint takes (Vornik appends /embeddings). A base without /v1 still works (Vornik appends /v1/embeddings)."`
 
 	// EmbeddingAPIKey overrides the chat api_key for embedding requests.
 	// Falls back to the resolved agent LLM API key when empty.

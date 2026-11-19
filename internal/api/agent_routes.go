@@ -37,6 +37,7 @@ var agentRouteExactPaths = map[string]bool{
 var agentRouteProjectSuffixes = [][]string{
 	{"tasks", "*", "messages"},
 	{"tasks", "*", "summarize"},
+	{"tasks", "*", "executions", "*", "diff-part"}, // #814 forge_diff_part
 	{"skills", "fetch"},
 	{"memory", "search"},
 	{"api", "query"},

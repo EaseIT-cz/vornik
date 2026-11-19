@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -36,16 +37,15 @@ import (
 // which is also when a re-run has any chance of a different answer.
 const MaxExtractionAttempts = 3
 
-// MaxTransientRetries bounds how many consecutive transient provider failures
-// of one chunk (isTransientProviderErr: 429/502/503/504, throttling, refused
-// or reset connections) the worker absorbs WITHOUT counting them toward
-// MaxExtractionAttempts. A provider outage is not a defect of the chunk and
-// must not quarantine it (GitHub #419: 24 chunks quarantined by Bedrock 503s);
-// but an uncounted retry must not become an unbounded one, so after this many
-// the next failure counts as any other. The count is on the chunk row
-// (graph_transient_failures), so a restart does not grant it again
-// (knowledge-graph LLD §3.3c, §3.3d, GitHub #493).
-const MaxTransientRetries = 10
+// transientNoCeiling is the AbsorbTransientFailure ceiling, chosen so the
+// store's "below the ceiling" check always passes: in effect, none. A provider
+// availability failure (isTransientProviderErr: 429/502/503/504, throttling,
+// refused or reset connections) is not a defect of the chunk and never
+// counts toward MaxExtractionAttempts, however long the outage (GitHub #369
+// item 1, operator decision 2026-11-18; GitHub #419 first absorbed it, up to
+// 10 in a row). The worker's circuit breaker bounds the spend. The column
+// graph_transient_failures keeps counting consecutive ones (LLD §3.3d).
+const transientNoCeiling = math.MaxInt32
 
 type Worker struct {
 	source   persistence.ChunkGraphExtractionRepository
@@ -70,6 +70,15 @@ type Worker struct {
 	lastTick       time.Time
 	lastProcessed  int
 	lastFailed     int
+
+	// The re-embed step (GitHub #459, reembed_459.go): its last round's time,
+	// and per failed entity when its skip ends.
+	reembedLast time.Time
+	reembedSkip map[string]time.Time
+	// now is the clock; nil uses time.Now (tests set it).
+	now func() time.Time
+	// restrictions screens the re-embed round (Art 18); nil skips it.
+	restrictions persistence.RestrictionScreen
 }
 
 // LeaderGate is the narrow contract Worker uses to skip drain
@@ -285,6 +294,9 @@ func (w *Worker) tick(ctx context.Context) {
 	if w.circuitOpen() {
 		return
 	}
+	// Before the chunk fetch, so an idle queue or a fetch error does not
+	// defer repairing entities stored without a vector (GitHub #459).
+	w.reembedMissing(ctx)
 	chunks, err := w.source.FetchUnextracted(ctx, w.cfg.BatchSize)
 	if err != nil {
 		w.logger.Warn().Err(err).Msg("KG worker: FetchUnextracted failed")
@@ -346,9 +358,9 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 			w.metrics.ChunksExtractedTotal.WithLabelValues("failed").Inc()
 		}
 		// A provider outage is not the chunk's fault: absorb it without
-		// spending an attempt, up to MaxTransientRetries in a row (GitHub
-		// #419, LLD §3.3c). It still returns false, so the circuit breaker
-		// sees the outage exactly as before.
+		// spending an attempt, however many in a row (GitHub #419, #369;
+		// LLD §3.3c). It still returns false, so the circuit breaker sees
+		// the outage exactly as before.
 		transient := isTransientProviderErr(err)
 		if transient && w.absorbTransient(ctx, c.ID) {
 			w.logger.Warn().Err(err).
@@ -357,11 +369,9 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 				Msg("KG worker: transient provider failure; not counted toward quarantine, chunk stays flagged")
 			return false
 		}
-		// A non-transient failure resets the uncounted budget (the chunk
-		// reached the model, so the provider was up); a transient one past
-		// the budget keeps it spent, so from here every further transient
-		// failure counts and the chunk reaches quarantine in
-		// MaxExtractionAttempts more.
+		// A non-transient failure resets the transient count (the chunk
+		// reached the model, so the provider was up). A transient failure
+		// reaches here only when the store could not record it.
 		if !transient {
 			if rErr := w.source.ResetTransientFailures(ctx, c.ID); rErr != nil {
 				w.logger.Debug().Err(rErr).Str("chunk_id", c.ID).
@@ -429,12 +439,11 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 	return true
 }
 
-// absorbTransient spends one of the chunk's uncounted retries and reports
-// true while it had one (MaxTransientRetries, kept on the chunk row so a
-// restart does not refill it; LLD §3.3d). When the store cannot answer, the
-// failure is counted: the bounded direction.
+// absorbTransient records one more consecutive transient failure of the
+// chunk without counting it (no ceiling since GitHub #369). When the store
+// cannot answer, the failure is counted: the bounded direction.
 func (w *Worker) absorbTransient(ctx context.Context, chunkID string) bool {
-	ok, err := w.source.AbsorbTransientFailure(ctx, chunkID, MaxTransientRetries)
+	ok, err := w.source.AbsorbTransientFailure(ctx, chunkID, transientNoCeiling)
 	if err != nil {
 		w.logger.Debug().Err(err).Str("chunk_id", chunkID).
 			Msg("KG worker: could not record a transient failure; counting it")

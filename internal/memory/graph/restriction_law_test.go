@@ -282,6 +282,7 @@ func TestSearcher_RestrictionLiftIsImmediate(t *testing.T) {
 var graphReadMethods = map[string]bool{
 	"Get": true, "GetByCanonical": true, "List": true, "SimilarByEmbedding": true,
 	"EdgesForEntity": true, "ListByEntity": true, "ListByChunk": true,
+	"ListMissingEmbedding": true, // GitHub #459
 }
 
 // graphReadReceivers are the receiver names those repositories are held under.
@@ -300,6 +301,8 @@ var graphReadScreened = map[string]bool{
 	"internal/memory/graph/searcher.go:ChunksMentioning":       true,
 	"internal/memory/graph/searcher.go:Subgraph":               true,
 	"internal/memory/query_expander.go:Expand":                 true,
+	// GitHub #459: the re-embed round screens what it lists before embedding.
+	"internal/memory/graph/reembed_459.go:reembedMissing": true,
 }
 
 // graphReadExempt are deliberate unscreened reads, with the reason.
@@ -443,8 +446,8 @@ func TestLaw_GraphReadsHonourTheRestriction_EveryCallSiteClassified(t *testing.T
 }
 
 const (
-	pinnedGraphReadSites = 28
-	pinnedGraphReadFuncs = 13
+	pinnedGraphReadSites = 29 // + the #459 re-embed round's list, screened
+	pinnedGraphReadFuncs = 14
 )
 
 // The sweep's method list is closed, so a NEW read method on a graph repository

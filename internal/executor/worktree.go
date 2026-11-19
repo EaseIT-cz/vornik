@@ -417,6 +417,11 @@ func EnsureReceiveGuards(ctx context.Context, dir string, logger zerolog.Logger)
 // create the same workspace the daemon would before the first task runs
 // (benchmark LLD §12.28, GitHub #593). One implementation, so the two cannot
 // disagree about what a bootstrapped workspace is.
+// BootstrapMarkerBody is the content of .vornik/bootstrap.md, the commit an
+// empty workspace starts from. The agent bench writes the same file into
+// every repeat's baseline (benchmark LLD §12.33).
+const BootstrapMarkerBody = "# vornik-managed project\n\nThis workspace was initialized by vornik as an empty git repository.\nAll task outputs are committed here automatically.\n"
+
 func EnsureGitRepo(ctx context.Context, dir string, logger zerolog.Logger) error {
 	return ensureGitRepo(ctx, dir, logger)
 }
@@ -488,8 +493,7 @@ func ensureGitRepo(ctx context.Context, dir string, logger zerolog.Logger) error
 			return fmt.Errorf("create .vornik dir: %w", err)
 		}
 		marker := filepath.Join(markerDir, "bootstrap.md")
-		body := "# vornik-managed project\n\nThis workspace was initialized by vornik as an empty git repository.\nAll task outputs are committed here automatically.\n"
-		if err := os.WriteFile(marker, []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(marker, []byte(BootstrapMarkerBody), 0o644); err != nil {
 			return fmt.Errorf("write bootstrap marker: %w", err)
 		}
 	}

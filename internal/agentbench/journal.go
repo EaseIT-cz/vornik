@@ -305,8 +305,11 @@ type RunManifest struct {
 	// WorkspaceReset records whether each task started from a pristine
 	// workspace: WorkspaceResetTargets or WorkspaceResetNoWorkspace
 	// (benchmark LLD §12.23).
-	WorkspaceReset string    `json:"workspaceReset,omitempty"`
-	Arm            ArmFields `json:"arm"`
+	WorkspaceReset string `json:"workspaceReset,omitempty"`
+	// Phase is "warmup" for a learning study's warm-up pass (GitHub #809):
+	// kept, never scored. Empty for every other run.
+	Phase string    `json:"phase,omitempty"`
+	Arm   ArmFields `json:"arm"`
 	// ArmKey and ArmPartial are denormalised so a reader does not have to
 	// recompute the key to know whether the run is comparable.
 	ArmKey     string `json:"armKey"`
@@ -331,6 +334,11 @@ type RunManifest struct {
 	// "unknown" when the binary carries no VCS data; a "+dirty" suffix marks an
 	// uncommitted tree, whose numbers are not reproducible from any commit.
 	HarnessBuild string `json:"harnessBuild,omitempty"`
+
+	// TaskSetPublished marks a release-gate run on a task set outside
+	// tasksets/unreleased/ (GitHub #790): a model trained after the set was
+	// published may have seen it. The gate output says so.
+	TaskSetPublished bool `json:"taskSetPublished,omitempty"`
 
 	// DaemonBuild is the commit the daemon UNDER TEST was built from.
 	//
@@ -685,3 +693,6 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// PhaseWarmup labels a learning study's warm-up journal (GitHub #809).
+const PhaseWarmup = "warmup"

@@ -162,6 +162,9 @@ func (s *Server) pollHostApproval(w http.ResponseWriter, r *http.Request, ns, re
 			writeHostApproval(w, st)
 			return
 		}
+		if s.hostApprovalPolled != nil {
+			s.hostApprovalPolled()
+		}
 		select {
 		case <-r.Context().Done():
 			return

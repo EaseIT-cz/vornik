@@ -667,6 +667,7 @@ func (e *Executor) runLeadPlanning(
 		InputArtifacts: inputArtifacts,
 		StepPrompt:     leadPrompt,
 	}
+	e.attachPreviousAttempt(ctx, task, execution, state, opts) // #604: a plan lead can be the run's first agent step
 	// Forward recovery context to the lead so context.recovery
 	// renders in its prompt. The caller (executePlanStep) is
 	// responsible for clearing state.PendingRecovery on the way in

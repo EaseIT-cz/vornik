@@ -106,8 +106,8 @@ func TestDecide_FirstFailingGate_598(t *testing.T) {
 		InSession: true, StateOK: true,
 		Held:       map[string]bool{"MSFT": true},
 		CooledDown: map[string]bool{"JPM": true},
-		SPY:        &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500},
-		Regimes:    usRegime(),
+		SPY:        &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, SPYReturn3: f64(0.01),
+		Regimes: usRegime(),
 		Candidates: []Candidate{
 			{Symbol: "AAPL", Region: "us", Score: goodScore(), Hourly: &Hourly{Close: 101, SMA20: 100, RSI14: 50}, Quote: &Quote{Bid: 99.95, Ask: 100.05}, Tick: 0.01, EarningsInSessions: &five},
 			{Symbol: "MSFT", Region: "us", Score: goodScore()},
@@ -141,7 +141,7 @@ func TestDecide_FirstFailingGate_598(t *testing.T) {
 
 func TestDecide_MarketAndSessionGates_598(t *testing.T) {
 	caps := Caps{MaxRiskUSD: 75, MaxEntriesPerTick: 2, MaxPositions: 8, MaxGrossExposureUSD: 15000, DailyLossPauseUSD: 150}
-	base := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, Regimes: usRegime(),
+	base := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, SPYReturn3: f64(0.01), Regimes: usRegime(),
 		Candidates: []Candidate{{Symbol: "AAPL", Region: "us", Score: goodScore()}}}
 	cases := map[string]func(*Inputs){
 		"data_quality": func(in *Inputs) { in.StateOK = false },
@@ -172,7 +172,7 @@ func TestDecide_RanksSurvivors_598(t *testing.T) {
 		return Candidate{Symbol: sym, Region: "us", Score: sc, Hourly: &Hourly{Close: 101, SMA20: 100, RSI14: 50},
 			Quote: &Quote{Bid: bid, Ask: ask}, Tick: 0.01, EarningsInSessions: ptr(10)}
 	}
-	in := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, Regimes: usRegime(),
+	in := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, SPYReturn3: f64(0.01), Regimes: usRegime(),
 		Candidates: []Candidate{mk("A", 4, 99.95, 100.05), mk("B", 5, 99.95, 100.05), mk("C", 4, 99.99, 100.01)}}
 	d := Decide(in, DefaultPolicy(), Caps{MaxRiskUSD: 75, MaxEntriesPerTick: 2, MaxPositions: 8, MaxGrossExposureUSD: 15000})
 	if len(d.Entries) != 2 || d.Entries[0].Symbol != "B" || d.Entries[1].Symbol != "C" {

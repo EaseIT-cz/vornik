@@ -164,6 +164,13 @@ type TradingOrderRow struct {
 	// SELL so an operator scanning the table can spot direction
 	// without reading the column.
 	ActionClass string
+	// GitHub #825: the task the order belongs to ("" for reconcile or
+	// manual), how much filled, its key (a bracket child is "<parent>_stop"
+	// or "<parent>_tp") and, after groupOrders, the parent row's ID.
+	TaskID         string
+	FilledQty      float64
+	IdempotencyKey string
+	ChildOf        string
 }
 
 // TradingFillRow flattens a persistence.TradingFill for the
@@ -177,6 +184,15 @@ type TradingFillRow struct {
 	Notional      float64 // Qty × Price, precomputed for the row
 	CommissionUSD float64 // 0 when not reported
 	FilledAt      time.Time
+	// GitHub #825, set by annotateFills from the fill's order and the
+	// closed lots: side and pill, what triggered the fill, its task, and
+	// for an exit the realized P&L of the lots it closed.
+	Side        string
+	SideClass   string
+	Trigger     string
+	TaskID      string
+	RealizedUSD float64
+	HasRealized bool
 }
 
 // SafetyEventRow projects a TradingSafetyEvent for the
@@ -260,7 +276,7 @@ func (s *Server) buildTradingPanel(ctx context.Context, project *registry.Projec
 	// here (not in the shared window-path) so the dashboard, which builds its
 	// own windowed Perf into the page model, doesn't double-compute.
 	now := time.Now().UTC()
-	perf, _, _, _ := s.buildTradingPerformance(ctx, project.ID, now.AddDate(0, 0, -tradingPanelPerfWindowDays), now)
+	perf, _, _, _, _ := s.buildTradingPerformance(ctx, project.ID, now.AddDate(0, 0, -tradingPanelPerfWindowDays), now)
 	panel.Perf = perf
 	panel.PerfWindowDays = tradingPanelPerfWindowDays
 	if perf.ProfitFactor != nil {
@@ -582,6 +598,12 @@ func flattenOrderRow(o *persistence.TradingOrder) TradingOrderRow {
 		SubmittedAt:  o.SubmittedAt,
 		StatusClass:  orderStatusClass(o.Status),
 		ActionClass:  orderActionClass(o.Action),
+		FilledQty:    o.FilledQty,
+
+		IdempotencyKey: o.IdempotencyKey,
+	}
+	if o.TaskID != nil {
+		row.TaskID = *o.TaskID
 	}
 	if o.BrokerOrderID != nil {
 		row.BrokerOrderID = *o.BrokerOrderID

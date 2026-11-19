@@ -145,6 +145,14 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/setup", http.StatusFound)
 		return
 	}
+	// GitHub #807: after setup the instance is no longer fresh, but an owner
+	// with no chat dispatcher still has nothing to use; the model-provider
+	// page is where that is fixed. It stops once a restart wires chat.
+	if r.URL.Path == "/" && s.managedHosting && s.chatDispatcher == nil &&
+		api.SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
+		http.Redirect(w, r, "/ui/model-provider", http.StatusFound)
+		return
+	}
 	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: the owner gets the admin's dashboard.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		// Project-scoped users get the operator dashboard's instance-wide

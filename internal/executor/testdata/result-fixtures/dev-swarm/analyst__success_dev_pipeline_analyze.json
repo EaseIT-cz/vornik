@@ -1,13 +1,17 @@
 {
   "swarm": "dev-swarm",
   "role": "analyst",
-  "reason": "Workflow-step-pinned: dev-pipeline's `analyze` step asks for analysis.{feature, subtask, ready}. Schema is loose at the analysis level so this passes.",
+  "reason": "Workflow-step-pinned: dev-pipeline's `analyze` step asks for analysis.{feature, subtask, ready}; a ready analysis also names the cases it pinned (GitHub #830 rule pinned_cases_named).",
   "expect": "pass",
   "payload": {
     "analysis": {
       "feature": "outputSchema-validator",
       "subtask": "draft the JSON Schema converter",
-      "ready": true
+      "ready": true,
+      "test_case_ids": [
+        "converter_maps_required_keys"
+      ],
+      "test_cases_pinned": 1
     }
   }
 }

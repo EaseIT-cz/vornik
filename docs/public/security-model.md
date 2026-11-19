@@ -1,5 +1,11 @@
 ---
 sources:
+    - path: internal/executor/handlers/forge/publication_838.go
+      sha256: 96f252c61ddaa7561c4c1f5ee6aa8b1dd73b340296458db7cba94afc5467d9a8
+    - path: internal/executor/handlers/forge/post_review.go
+      sha256: b9e2db489741b614b38cb79cb94641bddb483184842139d5e72f99542db72b2e
+    - path: internal/forge/github/github.go
+      sha256: 466960e1c2eaeb34a2f9460c6b215fbae8cf095e5571099f751d78742c9088b8
     - path: internal/api/middleware.go
       sha256: e5340e7e3d069dd2f2d7e1509edb8e7511df7b555dec30e8f7fb0dd54a38fcb8
     - path: internal/api/admin_class_auth.go
@@ -282,7 +288,10 @@ flowchart TB
     listener is the instance owner. The owner may use a closed list of
     operator surfaces and no other:
     - the project wizard and the template gallery;
-    - MCP OAuth connections;
+    - MCP OAuth connections: connecting a server, and on a project's MCP
+      tools page seeing its sign-in and disconnecting it (an instance-wide
+      sign-in is removed for every project that shares it, and the page
+      says so);
     - the operator audit;
     - the Credentials page;
     - creating, rotating and revoking keys on a project's Keys page;
@@ -290,6 +299,9 @@ flowchart TB
       its MCP tools page;
     - reading the operator console's observation pages, never changing
       anything through it;
+    - reading the instance's swarms and workflows (the lists, each
+      definition and a workflow's graph), never changing them, which is
+      valid while the instance hosts one customer;
     - connecting the instance's model provider (`/ui/model-provider`). The
       provider is checked before saving under managed mode's own dial rule
       (public addresses, plus the vouched model gateway names), so the page
@@ -578,6 +590,25 @@ flowchart TB
   authentication is off. The value is read once and never logged, echoed or
   audited; each write records who, from where, and the name.
 
+### Forge review publication
+
+- **What a review publishes is scanned.** Before Vornik posts a pull-request
+  review or comment, it scans the whole text it will post (the review, the
+  quoted request and any CI notice) with the secret detector, plus rules for
+  HTTP Basic credentials: an `Authorization: Basic` header, a base64
+  `user:password` and its decoded form. Each match is replaced by
+  `[REDACTED:<type>]` and the rest is posted. Without a detector, the review
+  is withheld and a notice is posted instead.
+- **A review covers the whole change, or none of it.** An empty diff is
+  refused, and so is any GitHub response over 1 MiB: before, a larger diff
+  was cut and reviewed as if it were whole. A pull request with no new
+  commits since the last review stays a no-op.
+- **A review is pinned to the commit it reviewed.**
+- **What it does not do.** It cannot take back a credential already
+  committed to a public repository; rotate any exposed credential. Detection
+  matches known shapes, so a credential in a shape it does not know can still
+  be published.
+
 ### Outbound connections and SSRF
 
 - Every outbound client has a timeout and a read cap.
@@ -648,6 +679,14 @@ flowchart TB
   and refuses companion keys.
 
   A memory key can be minted without any task tools.
+
+  A key is offered only the tools its scopes allow: memory read and write,
+  skill read, write and approval, and delegation. A call outside them is
+  refused before its handler runs, and each handler checks the scope again.
+  An AWS DevOps Agent investigation is one such client. Its recommended key
+  reads memory and approved skills only, and AWS asks customers to allowlist
+  read-only tools as well. What it remembers, with a wider key, lands as a
+  note under the memory gates, never as a verified fact.
 - **The plugins keep hint state only in the plugin's own data directory**
   (or the user's runtime directory when the user owns it), never in a shared
   temp path, and refuse a state directory that is a symlink or that another
@@ -773,4 +812,4 @@ flowchart TB
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.6 -->
+<!-- summary-reviewed-through: 2026.11.7 -->

@@ -1,0 +1,33 @@
+projectId: "{{.projectId}}"
+displayName: "{{.displayName}}"
+description: "Pull-request review for {{.repo}}, through the instance's GitHub App."
+swarmId: "{{.projectId}}-swarm"
+defaultWorkflowId: "github-app-review"
+
+defaultPriority: 40
+maxConcurrentTasks: 1
+
+autonomy:
+  enabled: false
+
+# Diff-only (GitHub #801 B): no role reads the checkout, which holds the
+# raw lines the diff was masked from.
+permissions:
+  allowedTools:
+    - "current_time"
+    - "file_write"
+
+# Written by Vornik when the App was installed on {{.repo}} (GitHub #800).
+# The App, its key and the installation come from the instance's
+# registration and the App's signed binding, never from this file.
+github_app:
+  use_registration: true
+
+forge:
+  provider: github
+  github:
+    use_registration: true
+    repo: "{{.repo}}"
+
+firewall:
+  mode: ""  # inherit daemon default

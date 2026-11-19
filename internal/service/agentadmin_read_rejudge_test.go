@@ -148,7 +148,7 @@ func TestAgentAdmin_ApprovedReadThatTurnsDestructiveIsSuspended(t *testing.T) {
 	}
 	// The person sees it on the device.
 	lines := f.c.agentWithheldToolLines(ctx)
-	if len(lines) != 1 || !strings.Contains(lines[0], `"search_messages"`) || !strings.Contains(lines[0], "change things") {
+	if len(lines) != 1 || !strings.Contains(lines[0].Text, `"search_messages"`) || !strings.Contains(lines[0].Text, "change things") {
 		t.Fatalf("device lines: %q", lines)
 	}
 	// The doctor's denominator.

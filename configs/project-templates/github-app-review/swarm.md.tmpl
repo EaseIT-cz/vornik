@@ -1,0 +1,49 @@
+---
+swarmId: "{{.projectId}}-swarm"
+displayName: "{{.displayName}} review team"
+
+roles:
+  - name: "hunter_a"
+    description: "Hunts for problems in the masked diff."
+    model: "{{.llmModel}}"
+    runtime:
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
+      envVars:
+        VORNIK_MAX_TOOL_ITERATIONS: "30"
+    permissions:
+      allowedTools: ["current_time", "file_write", "forge_diff_part"]
+  - name: "hunter_b"
+    description: "Hunts independently, on a second model when one is set."
+    model: "{{.llmModelAlt}}"
+    runtime:
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
+      envVars:
+        VORNIK_MAX_TOOL_ITERATIONS: "30"
+    permissions:
+      allowedTools: ["current_time", "file_write", "forge_diff_part"]
+  - name: "triager"
+    description: "Merges and ranks the two hunters' lists."
+    model: "{{.llmModel}}"
+    runtime:
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
+      envVars:
+        VORNIK_MAX_TOOL_ITERATIONS: "20"
+    permissions:
+      allowedTools: ["current_time", "file_write"]
+  - name: "adjudicator"
+    description: "Keeps the findings the diff confirms and writes the verdict."
+    model: "{{.llmModel}}"
+    runtime:
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
+      envVars:
+        VORNIK_MAX_TOOL_ITERATIONS: "30"
+    permissions:
+      allowedTools: ["current_time", "file_write", "forge_diff_part"]
+---
+
+# {{.displayName}} review team
+
+Four diff-only roles (GitHub #801): two hunters, a triager and an
+adjudicator. None can read the repository's checkout. The hunters and the
+adjudicator read a large diff's further parts with forge_diff_part, which
+serves only the masked diff (GitHub #814).

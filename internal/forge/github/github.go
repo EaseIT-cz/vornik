@@ -12,11 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
 	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/forge"
@@ -43,7 +45,7 @@ func init() {
 }
 
 // mintFunc matches ghapp.MintInstallationToken; injectable for tests.
-type mintFunc func(ctx context.Context, c *http.Client, apiBase string, appID, installID int64, key *rsa.PrivateKey) (string, time.Time, error)
+type mintFunc func(ctx context.Context, c *http.Client, apiBase string, appID, installID int64, key *rsa.PrivateKey, repositories []string) (string, time.Time, error)
 
 // pushFunc performs an authenticated branch push from a local clone's origin;
 // injectable so tests don't shell out to git.
@@ -69,8 +71,13 @@ type Provider struct {
 	tokenExpiry time.Time
 
 	mintFn mintFunc
-	pushFn pushFunc
-	now    func() time.Time
+	// #820: the token scope, the key file's hash for the instance-key guard,
+	// and whether the block is App-backed.
+	repositories []string
+	keyHash      string
+	appBacked    bool
+	pushFn       pushFunc
+	now          func() time.Time
 }
 
 // New builds a GitHub provider from its config, reading the App private key from
@@ -99,6 +106,9 @@ func New(cfg forge.GitHubConfig) (*Provider, error) {
 		apiBaseURL:     strings.TrimRight(base, "/"),
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		mintFn:         ghapp.MintInstallationToken,
+		repositories:   append([]string(nil), cfg.Repositories...),
+		keyHash:        ghapp.KeyHash(keyBytes),
+		appBacked:      cfg.AppBacked,
 		pushFn:         gitPushToOrigin,
 		now:            time.Now,
 	}, nil
@@ -114,7 +124,13 @@ func (p *Provider) token(ctx context.Context) (string, error) {
 	if p.cachedToken != "" && time.Until(p.tokenExpiry) > tokenTTLBuffer {
 		return p.cachedToken, nil
 	}
-	tok, exp, err := p.mintFn(ctx, p.httpClient, p.apiBaseURL, p.appID, p.installationID, p.key)
+	if err := ghapp.GuardKey(p.keyHash, p.appBacked); err != nil {
+		return "", err
+	}
+	if len(p.repositories) == 0 {
+		log.Printf("forge/github: installation %d: minting an unscoped token (the block names no repository; #820)", p.installationID)
+	}
+	tok, exp, err := p.mintFn(ctx, p.httpClient, p.apiBaseURL, p.appID, p.installationID, p.key, p.repositories)
 	if err != nil {
 		return "", err
 	}
@@ -386,44 +402,67 @@ func (p *Provider) PostReview(ctx context.Context, repo string, number int, r fo
 	if err != nil {
 		return err
 	}
-	marked := p.withMark(ctx, r.Body) // marked once; the fallback comment reuses it
-	reqBody, _ := json.Marshal(map[string]string{"body": marked, "event": githubReviewEvent(r.Event)})
+	marked := p.withMark(ctx, r.Body) // marked once; every retry reuses it
 	url := fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", p.apiBaseURL, repo, number)
-	req, err := p.newReq(ctx, http.MethodPost, url, reqBody, tok)
-	if err != nil {
-		return err
-	}
-	resp, body, err := p.do(req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		// GitHub forbids a PR's author from APPROVE-ing or REQUEST_CHANGES-ing
-		// their own PR (422 "Can not approve your own pull request"). When
-		// vornik's posting identity IS the PR author (it opened the PR), an
-		// approving review can't land — but a plain COMMENT can. Downgrade and
-		// retry once so the review feedback still posts instead of failing the
-		// whole task. Incident: task_20260621234753_5a30265e08d1f09a.
-		if resp.StatusCode == http.StatusUnprocessableEntity &&
-			r.Event != forge.ReviewComment &&
-			strings.Contains(strings.ToLower(string(body)), "your own pull request") {
-			cReqBody, _ := json.Marshal(map[string]string{"body": marked, "event": "COMMENT"})
-			cReq, cErr := p.newReq(ctx, http.MethodPost, url, cReqBody, tok)
-			if cErr != nil {
-				return cErr
+	post := func(event string, withComments bool) (*http.Response, []byte, error) {
+		payload := map[string]any{"body": marked, "event": event}
+		if withComments && len(r.Comments) > 0 {
+			payload["commit_id"] = r.CommitID
+			var cs []map[string]any
+			for _, c := range r.Comments {
+				cs = append(cs, map[string]any{"path": c.Path, "line": c.Line, "side": "RIGHT", "body": p.withMark(ctx, c.Body)})
 			}
-			cResp, cBody, cErr := p.do(cReq)
-			if cErr != nil {
-				return cErr
-			}
-			if cResp.StatusCode != http.StatusOK && cResp.StatusCode != http.StatusCreated {
-				return forge.NewStatusError("forge/github: post review (COMMENT fallback after self-approve 422)", cResp.StatusCode, cResp.Header, excerpt(cBody))
-			}
-			return nil
+			payload["comments"] = cs
 		}
-		return forge.NewStatusError("forge/github: post review", resp.StatusCode, resp.Header, excerpt(body))
+		reqBody, _ := json.Marshal(payload)
+		req, err := p.newReq(ctx, http.MethodPost, url, reqBody, tok)
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.do(req)
 	}
-	return nil
+	ok := func(resp *http.Response) bool {
+		return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated
+	}
+	event := githubReviewEvent(r.Event)
+	withComments := len(r.Comments) > 0
+	resp, body, err := post(event, withComments)
+	if err != nil {
+		return err
+	}
+	if ok(resp) {
+		return nil
+	}
+	// GitHub forbids a PR's author from APPROVE-ing or REQUEST_CHANGES-ing
+	// their own PR (422 "Can not approve your own pull request"). When
+	// vornik's posting identity IS the PR author (it opened the PR), an
+	// approving review can't land — but a plain COMMENT can. Downgrade and
+	// retry once, comments kept. Incident: task_20260621234753_5a30265e08d1f09a.
+	if resp.StatusCode == http.StatusUnprocessableEntity && r.Event != forge.ReviewComment &&
+		strings.Contains(strings.ToLower(string(body)), "your own pull request") {
+		cResp, cBody, cErr := post("COMMENT", withComments)
+		if cErr != nil {
+			return cErr
+		}
+		if !ok(cResp) {
+			return forge.NewStatusError("forge/github: post review (COMMENT fallback after self-approve 422)", cResp.StatusCode, cResp.Header, excerpt(cBody))
+		}
+		return nil
+	}
+	// GitHub #244: a 422 with inline comments (a line it does not place)
+	// posts again, body only, once; the body still lists every finding.
+	if resp.StatusCode == http.StatusUnprocessableEntity && withComments {
+		forgeInlineComments.WithLabelValues("fallback").Inc()
+		bResp, bBody, bErr := post(event, false)
+		if bErr != nil {
+			return bErr
+		}
+		if !ok(bResp) {
+			return forge.NewStatusError("forge/github: post review (body only, after an inline-comment 422)", bResp.StatusCode, bResp.Header, excerpt(bBody))
+		}
+		return nil
+	}
+	return forge.NewStatusError("forge/github: post review", resp.StatusCode, resp.Header, excerpt(body))
 }
 
 // VerifyPushAccess checks that the App installation grants contents:write — the
@@ -514,12 +553,52 @@ func (p *Provider) newReq(ctx context.Context, method, url string, body []byte, 
 }
 
 func (p *Provider) do(req *http.Request) (*http.Response, []byte, error) {
+	// GitHub #244: the installation's gate holds every call while GitHub
+	// says to wait, and spaces content-creating calls a second apart.
+	gate := gateFor(p.apiBaseURL, p.installationID)
+	write := req.Method != http.MethodGet && req.Method != http.MethodHead
+	wait, err := gate.admit(write, time.Now())
+	if err != nil {
+		forgeRateHeld.WithLabelValues("refused").Inc()
+		return nil, nil, err
+	}
+	if wait > 0 {
+		forgePacedSeconds.Observe(wait.Seconds())
+		t := time.NewTimer(wait)
+		select {
+		case <-req.Context().Done():
+			t.Stop()
+			return nil, nil, req.Context().Err()
+		case <-t.C:
+		}
+		// A hold set by another call during the wait still stops this one.
+		if err := gate.held(time.Now()); err != nil {
+			forgeRateHeld.WithLabelValues("refused").Inc()
+			return nil, nil, err
+		}
+	}
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("forge/github: %s %s: %w", req.Method, req.URL.Path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// #838: read one byte past the cap, so a cut response is an error, not a
+	// diff reviewed as if it were whole; and a read error is returned.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("forge/github: read %s %s response: %w", req.Method, req.URL.Path, err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, nil, fmt.Errorf("forge/github: %s %s response exceeds the %d-byte size cap; not reviewed rather than reviewed in part",
+			req.Method, req.URL.Path, maxResponseBytes)
+	}
+	if forge.IsRateLimited(resp.StatusCode, resp.Header) {
+		now := time.Now()
+		if d, why := forge.RetryAfter(resp.Header, now); d > 0 {
+			gate.hold(now, d)
+			forgeRateHeld.WithLabelValues(why).Inc()
+		}
+	}
 	return resp, body, nil
 }
 

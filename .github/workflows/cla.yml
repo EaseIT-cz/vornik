@@ -21,7 +21,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
 
 # Default-deny: any job gets no token permissions unless it grants them.
 permissions: {}
@@ -29,11 +29,22 @@ permissions: {}
 jobs:
   cla:
     runs-on: ubuntu-latest
-    # Only act on PR events and on the exact sign-off comment — keeps the
-    # broad issue_comment trigger from doing anything on unrelated comments.
+    # Only act on PR events, and on PR comments that start with the sign-off
+    # or with `recheck` (the bot's suggest-recheck text asks for it). This is
+    # a pre-filter: the action trims each comment and decides what counts as
+    # a signature. An exact == here skipped every sign-off that ended in a
+    # newline (EaseIT-cz/vornik#19, #21; export runbook amendment 2026-11-19).
     if: >-
       github.event_name == 'pull_request_target' ||
-      github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
+      (github.event.issue.pull_request &&
+       (startsWith(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA') ||
+        startsWith(github.event.comment.body, 'recheck')))
+    # One run per PR at a time, queued: a burst of comments cannot race on
+    # the cla-signatures branch, and a sign-off run is never cancelled.
+    concurrency:
+      group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    timeout-minutes: 5
     permissions:
       actions: write          # CLA Assistant re-triggers the check run
       contents: write         # write the signature file to the cla-signatures branch

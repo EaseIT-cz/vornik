@@ -769,14 +769,16 @@ type ProjectWebhookSource struct {
 // conversation channel (slice 4D of the ConversationChannel
 // rollout). See https://docs.vornik.io
 //
-// Enabled at the project level when AppID, PrivateKeyPath, and
-// InstallationID are all set AND at least one repo is in
-// RepoAllowlist. Inbound webhook reception remains optional —
-// operators who only want to receive notifications can set
-// WebhookSecretEnv + RepoAllowlist without filling in the
-// outbound (AppID/PrivateKeyPath/InstallationID) fields, and Send
-// will return github.ErrOutboundNotConfigured.
+// Enabled (the channel loads the project) when WebhookSecretEnv is set
+// and RepoAllowlist is non-empty: the inbound pair. The outbound triple
+// (AppID, PrivateKeyPath, InstallationID) is optional and all-or-nothing
+// (validated below); without it the channel receives, and Send returns
+// github.ErrOutboundNotConfigured.
 type ProjectGitHubApp struct {
+	// UseRegistration routes this project's repository through the
+	// instance's App and its signed binding (GitHub #800): no webhook
+	// secret, App fields or repo_allowlist of its own.
+	UseRegistration bool `yaml:"use_registration,omitempty" since:"2026.11.7"`
 	// AppID is the GitHub App's numeric identifier. Required for
 	// outbound replies; can be 0 if only inbound is needed.
 	AppID int64 `yaml:"app_id"`
@@ -897,9 +899,14 @@ func (g ProjectGitHubApp) EffectiveCIWorkflowID(fallback string) string {
 // InstallationID, and PrivateKeyPath are required together (Enabled());
 // validation enforces the all-or-nothing rule.
 type ProjectGitHub struct {
-	AppID          int64  `yaml:"app_id"`
-	InstallationID int64  `yaml:"installation_id"`
-	PrivateKeyPath string `yaml:"private_key_path"`
+	// UseRegistration takes the App from the instance's registration and
+	// the installation id from the App's signed binding (GitHub #800); the
+	// block then names no App fields itself. Resolve through
+	// Project.EffectiveGitHub.
+	UseRegistration bool   `yaml:"use_registration,omitempty" since:"2026.11.7"`
+	AppID           int64  `yaml:"app_id"`
+	InstallationID  int64  `yaml:"installation_id"`
+	PrivateKeyPath  string `yaml:"private_key_path"`
 	// APIBaseURL overrides the GitHub REST base (GitHub Enterprise). Empty →
 	// https://api.github.com.
 	APIBaseURL string `yaml:"api_base_url"`
@@ -940,12 +947,17 @@ func (g ProjectGitHub) ResolvedAPIBaseURL() string {
 // toForge maps the registry's GitHub creds onto the provider-neutral forge
 // config block.
 func (g ProjectGitHub) toForge() forge.GitHubConfig {
-	return forge.GitHubConfig{
+	c := forge.GitHubConfig{
 		AppID:          g.AppID,
 		InstallationID: g.InstallationID,
 		PrivateKeyPath: g.PrivateKeyPath,
 		APIBaseURL:     g.APIBaseURL,
+		AppBacked:      g.UseRegistration,
 	}
+	if r := strings.TrimSpace(g.Repo); r != "" {
+		c.Repositories = []string{r} // #820: the block's repo, or the binding's
+	}
+	return c
 }
 
 // ProjectForge is the provider-discriminated forge configuration. Provider picks
@@ -1197,19 +1209,19 @@ func (p *Project) ResolveForge() (forge.Config, bool) {
 	if prov := strings.TrimSpace(p.Forge.Provider); prov != "" {
 		cfg := forge.Config{Provider: prov, MentionHandle: p.MentionHandle()}
 		if prov == forge.ProviderGitHub {
-			gh := p.Forge.GitHub
-			if !gh.Enabled() && p.GitHub.Enabled() {
-				gh = p.GitHub // back-compat: creds in the top-level block
+			gh := p.resolveGitHub(p.Forge.GitHub)
+			if !gh.Enabled() && p.EffectiveGitHub().Enabled() {
+				gh = p.EffectiveGitHub() // back-compat: creds in the top-level block
 			}
 			cfg.GitHub = gh.toForge()
 		}
 		return cfg, true
 	}
-	if p.GitHub.Enabled() {
+	if g := p.EffectiveGitHub(); g.Enabled() {
 		return forge.Config{
 			Provider:      forge.ProviderGitHub,
 			MentionHandle: p.MentionHandle(),
-			GitHub:        p.GitHub.toForge(),
+			GitHub:        g.toForge(),
 		}, true
 	}
 	return forge.Config{}, false
@@ -1275,6 +1287,9 @@ type ForgeReviewPolicy struct {
 // enough to load. WebhookSecretEnv + RepoAllowlist are the bare
 // minimum; outbound creds are separate and optional at this gate.
 func (g ProjectGitHubApp) Enabled() bool {
+	if g.UseRegistration {
+		return true
+	}
 	return strings.TrimSpace(g.WebhookSecretEnv) != "" && len(g.RepoAllowlist) > 0
 }
 
@@ -2649,7 +2664,13 @@ func (p *Project) Validate(filename string) error {
 	// half-filled block fails fast at boot rather than at first
 	// delivery. WebhookSecretEnv-without-repos and outbound-creds-
 	// without-AppID are the two common misconfig shapes.
-	if g := p.GitHubApp; g.WebhookSecretEnv != "" || g.AppID != 0 || g.PrivateKeyPath != "" || g.InstallationID != 0 || len(g.RepoAllowlist) > 0 {
+	if err := validateUseRegistration(filename, p); err != nil {
+		return err
+	}
+	if err := validateInstanceAppKey(filename, p); err != nil {
+		return err
+	}
+	if g := p.GitHubApp; !g.UseRegistration && (g.WebhookSecretEnv != "" || g.AppID != 0 || g.PrivateKeyPath != "" || g.InstallationID != 0 || len(g.RepoAllowlist) > 0) {
 		if strings.TrimSpace(g.WebhookSecretEnv) == "" {
 			return ProjectValidationError{File: filename, Field: "github_app.webhook_secret_env", Message: "required when any github_app field is set"}
 		}

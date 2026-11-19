@@ -291,7 +291,7 @@ type ProviderSet struct {
 	// behaviour). Returns the neutral featuredoctor interface so internal/service
 	// never names the concrete EE probe type. Called lazily in container_http.go
 	// after the snapshot repo + registry are ready (Phase 2c seam).
-	TradingSeriesProbeFactory func(projects *registry.Registry, snapshots persistence.TradingPositionsSnapshotRepository, record func(projectID, code string, count int), logger zerolog.Logger) featuredoctor.TradingSeriesProbe
+	TradingSeriesProbeFactory func(projects *registry.Registry, snapshots persistence.TradingPositionsSnapshotRepository, fills persistence.TradingFillRepository, orders persistence.TradingOrderRepository, record func(projectID, code string, count int), logger zerolog.Logger) featuredoctor.TradingSeriesProbe
 
 	// TradingSystemHandlers builds the trading system-step handlers
 	// (trading.place_approved, GitHub #739) from a one-shot broker caller and

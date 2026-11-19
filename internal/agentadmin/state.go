@@ -23,6 +23,17 @@ type State struct {
 	PendingAddsUSD float64
 	// AgentImage is the runtime image agent roles run in.
 	AgentImage string
+	// The admin verbs' caps (agent_admin.max_concurrent_tasks,
+	// max_role_tokens, max_role_tool_iterations; part 06 §6.9). Zero
+	// refuses every value, so a State built without them sets nothing.
+	MaxConcurrentTasksCap    int
+	MaxRoleTokensCap         int
+	MaxRoleToolIterationsCap int
+	// AgentMaxTokens is the agent LLM's max_tokens and ModelMaxTokens its
+	// model_limits: a role's tokens in force when it sets none (0 is the
+	// provider's own default, which Vornik cannot see).
+	AgentMaxTokens int
+	ModelMaxTokens map[string]int
 	// WritesOn is the daemon's broker.writes: proposals need it (P4.8).
 	WritesOn bool
 
@@ -73,16 +84,19 @@ type State struct {
 
 // ProjectState is one agent project as loaded.
 type ProjectState struct {
-	ID                string
-	DisplayName       string
-	Purpose           string
-	MonthlyUSD        float64
-	DefaultWorkflowID string
-	Home              bool
-	Swarm             SwarmState
-	Servers           []ServerState
-	APIs              []APIState
-	Secrets           []string
+	ID          string
+	DisplayName string
+	Purpose     string
+	MonthlyUSD  float64
+	// MaxConcurrentTasks is the project's maxConcurrentTasks as loaded; 0
+	// is no per-project limit (part 06 §6.9, GitHub #798).
+	MaxConcurrentTasks int
+	DefaultWorkflowID  string
+	Home               bool
+	Swarm              SwarmState
+	Servers            []ServerState
+	APIs               []APIState
+	Secrets            []string
 	// Loaded and LoadedSwarm are the registry objects, for reach signatures.
 	Loaded      *registry.Project
 	LoadedSwarm *registry.Swarm
@@ -103,6 +117,10 @@ type RoleSpec struct {
 	// Model is the role's model from the catalogue; "" runs the operator's
 	// global agent model (design §18.6 item 2).
 	Model string
+	// MaxTokens and MaxToolIterations are the role's limits; 0 is the
+	// installation default (part 06 §6.9, GitHub #805).
+	MaxTokens         int
+	MaxToolIterations int
 }
 
 // ServerState is one project-scoped MCP server as rendered.

@@ -1,6 +1,7 @@
 package agentadmin
 
 import (
+	"strconv"
 	"strings"
 
 	"vornik.io/vornik/internal/registry"
@@ -13,7 +14,9 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 	ps := &ProjectState{
 		ID: p.ID, DisplayName: p.DisplayName, Purpose: strings.TrimSpace(p.Description),
 		MonthlyUSD: p.Budget.MonthlyHardUSD, DefaultWorkflowID: p.DefaultWorkflowID,
-		Secrets: append([]string(nil), p.Permissions.Secrets...), Loaded: p, LoadedSwarm: sw,
+		// Loaded back so a verb that re-renders the project keeps it (§6.9).
+		MaxConcurrentTasks: p.MaxConcurrentTasks,
+		Secrets:            append([]string(nil), p.Permissions.Secrets...), Loaded: p, LoadedSwarm: sw,
 	}
 	ps.Swarm.ID = p.SwarmID
 	for _, a := range p.APIs {
@@ -45,8 +48,25 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 				// The model too (design §18.6 item 2, Change 8): a re-render
 				// writes the role back on the model it runs on.
 				Model: r.Model,
+				// The limits too (§6.9): a re-render keeps what was approved.
+				MaxTokens: r.MaxTokens, MaxToolIterations: roleToolIterations(r),
 			})
 		}
 	}
 	return ps
 }
+
+// roleToolIterations is the role's VORNIK_MAX_TOOL_ITERATIONS, 0 when unset
+// or not a positive number (the executor's roleToolBudgetBase reads the
+// same env var).
+func roleToolIterations(r registry.SwarmRole) int {
+	n, err := strconv.Atoi(strings.TrimSpace(r.Runtime.EnvVars[toolIterationsEnv]))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// toolIterationsEnv is the agent's tool-iteration limit, read by its
+// entrypoint (default 30).
+const toolIterationsEnv = "VORNIK_MAX_TOOL_ITERATIONS"

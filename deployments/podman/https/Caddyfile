@@ -1,0 +1,17 @@
+# vornik-https-site (written by quickstart.sh, VORNIK_PUBLIC_HOSTNAME; GitHub #839)
+# Caddy terminates TLS and proxies to the Vornik daemon on this host. It adds
+# no credential: people sign in with Vornik's own login, each as themselves.
+# Regenerate with the quickstart rather than editing this file.
+__VORNIK_HOSTNAME__ {
+	# Certificates by TLS-ALPN on 443; port 80 stays closed.
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	reverse_proxy 127.0.0.1:__VORNIK_HTTP_PORT__ {
+		# One address, overwriting any client-sent value: Vornik's real_ip
+		# reads this header as a single IP (server.real_ip.header).
+		header_up X-Real-IP {remote_host}
+	}
+}

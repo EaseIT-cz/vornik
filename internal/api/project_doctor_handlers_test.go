@@ -79,7 +79,9 @@ func TestProjectDoctor_GetReport_RequiresAdmin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/doctor", nil)
 	rec := httptest.NewRecorder()
 	srv.ProjectDoctor(rec, req)
-	assert.Equal(t, http.StatusUnauthorized, rec.Code, "body=%s", rec.Body.String())
+	// 403 since #816 (requireOperatorScopeFor). In the daemon the auth
+	// middleware answers a request with no key 401 before any handler.
+	assert.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 }
 
 func TestProjectDoctor_GetReport_HappyPath(t *testing.T) {

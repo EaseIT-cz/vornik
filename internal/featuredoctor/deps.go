@@ -56,7 +56,21 @@ type TradingSeriesFinding struct {
 // per-project findings. Implemented by an adapter in the api layer that owns
 // the snapshot repo + project registry; nil when trading isn't wired.
 type TradingSeriesProbe interface {
-	ValidateSeries(ctx context.Context) ([]TradingSeriesFinding, error)
+	ValidateSeries(ctx context.Context) (TradingSeriesReport, error)
+}
+
+// TradingSeriesReport is a probe run's findings with what it examined: the
+// fill-ledger comparison's symbols and projects, and the projects it could
+// not compare, each with why (GitHub #822). The counts are published even
+// when nothing is found.
+type TradingSeriesReport struct {
+	Findings       []TradingSeriesFinding
+	LedgerSymbols  int
+	LedgerProjects int
+	LedgerSkipped  []string // "<project>: <why>"
+	// LedgerWired is false when the probe has no fill or order repository,
+	// so "compared 0" is never read as "compared and clean".
+	LedgerWired bool
 }
 
 // DurabilityReport is the outcome of probing the active store's commit

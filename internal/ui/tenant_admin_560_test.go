@@ -29,11 +29,16 @@ func TestTenantAdmin560_SetupRefused(t *testing.T) {
 
 func TestTenantAdmin560_GlobalAuthoringRefusedExceptProjectCreation(t *testing.T) {
 	srv := NewServer(WithOnboardingDetector(onboarding.Detector{Config: &config.Config{}}))
-	for _, p := range []string{"/swarms", "/workflows/x", "/assistant/draft", "/audit", "/mcp"} {
+	// GET /swarms is a read since #764; a write there, and the other roots,
+	// stay refused.
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/swarms"}, {http.MethodGet, "/workflows/x"}, {http.MethodGet, "/assistant/draft"},
+		{http.MethodGet, "/audit"}, {http.MethodGet, "/mcp"},
+	} {
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, setupAuthRequest(http.MethodGet, p, auth.RoleTenantAdmin))
+		srv.Handler().ServeHTTP(rec, setupAuthRequest(c.method, c.path, auth.RoleTenantAdmin))
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("tenant_admin on %s: %d, want 403", p, rec.Code)
+			t.Errorf("tenant_admin %s %s: %d, want 403", c.method, c.path, rec.Code)
 		}
 	}
 	rec := httptest.NewRecorder()

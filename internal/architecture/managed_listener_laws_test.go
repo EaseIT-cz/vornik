@@ -94,6 +94,7 @@ var adminClassResolvers = map[string]int{
 	// so a tenant_admin session is admitted only through the granted surface.
 	"internal/ui/admin_credentials.go":  2,
 	"internal/ui/model_provider_794.go": 1, // IsAdmin for the nav only; the page's gate is SurfaceModelProvider (#794)
+	"internal/ui/github_app_802.go":     1, // IsAdmin for the nav only; the page's gate is SurfaceGitHubApp (#802)
 	// GitHub #754: the keys page's POST gate (OperatorSurfaceAccessFor with
 	// the admin-key checker, surface project_keys). As for credentials, the
 	// listener gate refuses admin keys on the public listener first.
@@ -102,6 +103,11 @@ var adminClassResolvers = map[string]int{
 	// the admin-key checker, surface mcp_tool_grant), the keys page's shape.
 	// The listener gate refuses admin keys on the public listener first.
 	"internal/ui/project_mcp_tools.go": 1,
+	// GitHub #765: the same page's sign-in row and disconnect, gated by
+	// OperatorSurfaceAccessFor with the admin-key checker on surface
+	// mcp_oauth_connect (the API's surface). The listener gate refuses admin
+	// keys on the public listener first.
+	"internal/ui/project_mcp_oauth_765.go": 1,
 	// GitHub #759: the Manage overview shows an admin every card. A view,
 	// not a gate: each card's destination keeps its own server gate.
 	"internal/ui/manage.go":            1,

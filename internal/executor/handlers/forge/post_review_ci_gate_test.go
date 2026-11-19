@@ -62,7 +62,7 @@ func redRun() []*persistence.ForgeCIOutcome {
 }
 
 func gateHandler(prov *fakeProvider, outs *gateOutcomes, blocks bool) *PostReviewHandler {
-	return NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).
+	return newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).
 		WithCIGate(outs, func(string) bool { return blocks })
 }
 
@@ -174,7 +174,7 @@ func TestPostReview_GateDisabledApprovesOverRedCI(t *testing.T) {
 // untouched.
 func TestPostReview_NoCIStoreIsUnchanged(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	if _, err := h.Execute(context.Background(), gateInput("true")); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

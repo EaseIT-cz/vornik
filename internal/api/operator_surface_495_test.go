@@ -192,6 +192,14 @@ var expectedOperatorGated495 = []string{
 	"companionGrantAgentAdmin",
 	// GitHub #669 item 3.
 	"OperatorAccountTransitions",
+	// GitHub #815: the template routes, off the Enterprise admin gate.
+	"ListProjectTemplates",
+	"CreateProjectFromTemplate",
+	// GitHub #816: Community features, off the Enterprise admin gate.
+	"ListMCPServers",
+	"MemoryCacheStats",
+	"MemoryBackfillTitles",
+	"ProjectDoctor",
 }
 
 // Limit (code review review-20261022-5c5f, F2): this is a list of names.

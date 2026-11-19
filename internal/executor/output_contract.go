@@ -30,12 +30,19 @@ const outputContractMtimeSlack = time.Second
 // mistake as a loud step failure instead of silently skipping the
 // guard.
 func outputGlobSatisfied(workspaceDir, effectiveProjectDir, glob string, stepStart time.Time) bool {
-	glob = strings.TrimSpace(glob)
-	if glob == "" {
+	if strings.TrimSpace(glob) == "" {
 		return true
 	}
-	if filepath.IsAbs(glob) || strings.Contains(glob, "..") {
-		return false
+	return outputGlobMatch(workspaceDir, effectiveProjectDir, glob, stepStart) != ""
+}
+
+// outputGlobMatch is the first file matching glob that this step wrote, or ""
+// (GitHub #751: the review-actions check reads the file the contract matched,
+// by the same rule).
+func outputGlobMatch(workspaceDir, effectiveProjectDir, glob string, stepStart time.Time) string {
+	glob = strings.TrimSpace(glob)
+	if glob == "" || filepath.IsAbs(glob) || strings.Contains(glob, "..") {
+		return ""
 	}
 	root := workspaceDir
 	rel := glob
@@ -44,11 +51,11 @@ func outputGlobSatisfied(workspaceDir, effectiveProjectDir, glob string, stepSta
 		rel = strings.TrimPrefix(glob, "project/")
 	}
 	if root == "" {
-		return false
+		return ""
 	}
 	matches, err := filepath.Glob(filepath.Join(root, rel))
 	if err != nil {
-		return false
+		return ""
 	}
 	floor := stepStart.Add(-outputContractMtimeSlack)
 	for _, m := range matches {
@@ -60,8 +67,8 @@ func outputGlobSatisfied(workspaceDir, effectiveProjectDir, glob string, stepSta
 		// a file inherited from an earlier task must not satisfy THIS
 		// step's contract.
 		if stepStart.IsZero() || !info.ModTime().Before(floor) {
-			return true
+			return m
 		}
 	}
-	return false
+	return ""
 }

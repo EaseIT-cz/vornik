@@ -126,10 +126,22 @@ import (
 //	    spec with git show. A task now starts from less, so journals either
 //	    side do not compare.
 //
+//	v12 (2026-11-18) — ONLY THE BASELINE CARRIES OVER (§12.33, #808). The
+//	    reset kept every committed path but the task's targets, so an
+//	    agent-written backlog.md and earlier tasks' solved exercises reached
+//	    every later repeat (the qwen3.8 polyglot arm, stopped). Each repeat
+//	    now starts from the harness's two baseline files plus its seed.
+//
 // v1 was never bumped through any of those, which is the failure this comment
 // exists to prevent: the mechanism refused nothing because nobody moved the
 // number it keys on.
-const HarnessVersion = "11"
+//
+//	v13 (2026-11-18) — THE CONFIG HASH IS CANONICAL, AND LEARNING IS AN AXIS
+//	    (#809). config_sha256 was the raw bytes of the config file; it is now
+//	    its canonical form without the three learning switches, which the new
+//	    learning axis carries. Every key changes, so v12 journals do not
+//	    compare with v13 ones.
+const HarnessVersion = "13"
 
 // ArmFields enumerates every axis that makes two agent-benchmark runs
 // incomparable.
@@ -148,8 +160,11 @@ type ArmFields struct {
 	// BinarySHA256 identifies the daemon under test. Published beside results;
 	// the config hash is not (§7).
 	BinarySHA256 string `json:"binarySha256"`
-	// ConfigSHA256 is the resolved config the daemon actually ran with — not the
-	// file on disk, which may not be the tree the daemon reads.
+	// ConfigSHA256 is the SHA-256 of the daemon config FILE given to the
+	// harness (--daemon-config), in its canonical form without the learning
+	// switches (ArmConfigIdentity, GitHub #809). It is not the resolved
+	// config: until 2026-11-18 this comment said it was, and it never was.
+	// The configs/ tree (swarms, workflows) is not hashed.
 	ConfigSHA256 string `json:"configSha256"`
 
 	// Models is the (role → model) map, flattened deterministically. A model
@@ -220,6 +235,10 @@ type ArmFields struct {
 	// Scaffold is what ran the model: the swarm (every journal before GitHub
 	// #650, which records none) or a bare-model baseline. "" reads as swarm.
 	Scaffold string `json:"scaffold,omitempty"`
+	// Learning is which self-learning features ran (GitHub #809): read from
+	// the daemon config's three learning switches, which ConfigSHA256 leaves
+	// out. The zero value, the model alone, adds no pair to the key.
+	Learning Learning `json:"learning,omitempty"`
 
 	// Probes lists the probes that scored the run, sorted. A run scored by two
 	// probes is not a superset of one scored by three — the third may have
@@ -253,6 +272,9 @@ func (a ArmFields) fieldPairs() [][2]string {
 	if sc := a.scaffold(); sc != ScaffoldSwarm {
 		pairs = append(pairs, [2]string{"scaffold", sc})
 	}
+	if lp := a.learningPair(); lp != nil {
+		pairs = append(pairs, [2]string{lp[0], lp[1]})
+	}
 	return pairs
 }
 
@@ -279,7 +301,7 @@ func ComparabilityAxes() []string {
 	for _, p := range pairs {
 		out = append(out, p[0])
 	}
-	return append(out, "scaffold")
+	return append(out, "scaffold", "learning")
 }
 
 // CheckComparableExcept is CheckComparable with a declared independent variable.
@@ -310,11 +332,16 @@ func CheckComparableExcept(a, b ArmFields, allowed []string) error {
 				axis, strings.Join(ComparabilityAxes(), ", "))
 		}
 	}
+	// By axis name over the union of both arms' pairs, never by index: a
+	// pair left out at its default (scaffold for a swarm arm) makes the two
+	// lists differ in length, and pairing by index skipped the extra pair or
+	// ran past the end (GitHub #818). An absent pair reads as its default.
+	pa, pb := pairMap(a.fieldPairs()), pairMap(b.fieldPairs())
 	var refused []string
-	for i, pa := range a.fieldPairs() {
-		pb := b.fieldPairs()[i]
-		if pa[1] != pb[1] && !permitted[pa[0]] {
-			refused = append(refused, fmt.Sprintf("%s (%q vs %q)", pa[0], pa[1], pb[1]))
+	for _, axis := range unionAxes(pa, pb) {
+		va, vb := axisValue(pa, axis), axisValue(pb, axis)
+		if va != vb && !permitted[axis] {
+			refused = append(refused, fmt.Sprintf("%s (%q vs %q)", axis, va, vb))
 		}
 	}
 	if len(refused) > 0 {
@@ -492,4 +519,40 @@ func TaskSetDigest(taskIDs []string, bodies map[string]string) string {
 		_, _ = fmt.Fprintf(h, "%d:%s%d:%s", len(id), id, len(body), body)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// pairMap indexes fieldPairs by axis name.
+func pairMap(pairs [][2]string) map[string]string {
+	m := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		m[p[0]] = p[1]
+	}
+	return m
+}
+
+// unionAxes is every axis either arm carries, in ComparabilityAxes order so
+// a refusal names them stably.
+func unionAxes(a, b map[string]string) []string {
+	var out []string
+	for _, axis := range ComparabilityAxes() {
+		_, inA := a[axis]
+		_, inB := b[axis]
+		if inA || inB {
+			out = append(out, axis)
+		}
+	}
+	return out
+}
+
+// axisValue is an arm's value on axis, or the default when the arm leaves
+// the pair out: scaffold's default is swarm; learning's is "" (an all-off
+// arm, whose Learning.String() is also ""). No other pair is left out.
+func axisValue(m map[string]string, axis string) string {
+	if v, ok := m[axis]; ok {
+		return v
+	}
+	if axis == "scaffold" {
+		return ScaffoldSwarm
+	}
+	return ""
 }

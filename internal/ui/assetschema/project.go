@@ -204,6 +204,11 @@ func ProjectSchema() AssetSchema {
 // editable via the raw-YAML editor. The drift-guard treats these as
 // consciously-deferred (not missing); shrink this set as forms are added.
 var ProjectDeferredPaths = []string{
+	// GitHub #800: written by Vornik for an installed repository's review
+	// project; an operator never sets them in the form.
+	"github.use_registration",
+	"forge.github.use_registration",
+	"github_app.use_registration",
 	// Permissions — security-sensitive (tool/secret allowlists).
 	"permissions.secrets",
 	"permissions.allowedTools",

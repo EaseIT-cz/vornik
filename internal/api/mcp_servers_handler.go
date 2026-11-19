@@ -56,7 +56,7 @@ type mcpServersResponse struct {
 // what's installed without auto-extending capabilities to every
 // project on the daemon.
 func (s *Server) ListMCPServers(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMCPServers) { // GitHub #816: works in Community
 		return
 	}
 	if s.mcpRegistry == nil {

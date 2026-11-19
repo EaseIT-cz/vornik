@@ -33,6 +33,8 @@ type Inputs struct {
 	CooledDown           map[string]bool // an exit within CooldownSessions
 	RealizedLossTodayUSD float64
 	EntriesToday         int
+	EntriesWindow        int      // entries within Policy.EntryWindowSessions (#826)
+	SPYReturn3           *float64 // SPY's return over its last three completed sessions (#826)
 	Positions            int
 	PositionsByRegion    map[string]int
 	GrossExposureUSD     float64
@@ -108,7 +110,7 @@ func Decide(in Inputs, p Policy, caps Caps) Decision {
 		}
 		return survivors[i].Spread < survivors[j].Spread
 	})
-	slots := min(caps.MaxEntriesPerTick, p.MaxEntriesPerDay-in.EntriesToday)
+	slots := min(caps.MaxEntriesPerTick, p.MaxEntriesPerDay-in.EntriesToday, WindowSlots(in, p))
 	gross := in.GrossExposureUSD
 	for _, e := range survivors {
 		notional := e.Size.Qty * e.Size.Entry
@@ -159,7 +161,7 @@ func accountGate(c Candidate, in Inputs, p Policy, caps Caps) string {
 		return "cooldown"
 	case caps.DailyLossPauseUSD > 0 && in.RealizedLossTodayUSD >= caps.DailyLossPauseUSD:
 		return "loss_pause"
-	case in.EntriesToday >= p.MaxEntriesPerDay,
+	case in.EntriesToday >= p.MaxEntriesPerDay, WindowSlots(in, p) <= 0,
 		caps.MaxPositions > 0 && in.Positions >= caps.MaxPositions,
 		p.MaxPositionsPerRegion > 0 && in.PositionsByRegion[c.Region] >= p.MaxPositionsPerRegion,
 		correlatedHeld(c.Symbol, in, p):
@@ -170,11 +172,8 @@ func accountGate(c Candidate, in Inputs, p Policy, caps Caps) string {
 
 // marketGate: SPY's trend, the region's regime, the scorecard floor.
 func marketGate(c Candidate, in Inputs, p Policy) string {
-	if in.SPY == nil {
-		return "insufficient_inputs"
-	}
-	if !SPYTrendOK(*in.SPY) {
-		return "spy_regime"
+	if g := spyGate(in, p); g != "" {
+		return g
 	}
 	r, ok := in.Regimes[c.Region]
 	switch {
@@ -241,4 +240,37 @@ func correlatedHeld(sym string, in Inputs, p Policy) bool {
 		}
 	}
 	return false
+}
+
+// WindowSlots is how many entries the rolling window still allows (#826).
+func WindowSlots(in Inputs, p Policy) int {
+	return max(0, p.MaxEntriesPerWindow-in.EntriesWindow)
+}
+
+// spyGate is the market brake shared by opens and adds: SPY's trend and its
+// three-session return. A missing return is never guessed.
+func spyGate(in Inputs, p Policy) string {
+	switch {
+	case in.SPY == nil || in.SPYReturn3 == nil:
+		return "insufficient_inputs"
+	case !SPYTrendOK(*in.SPY) || !(*in.SPYReturn3 >= p.MinSPYReturn3):
+		return "spy_regime"
+	}
+	return ""
+}
+
+// AddGate decides a model add (#826): the market brake, the rolling window
+// after opensThisTick, and the hourly confirmation an open needs. The
+// add's daily shape stays with trading.PullbackAdditions and the broker.
+func AddGate(h *Hourly, in Inputs, opensThisTick int, p Policy) string {
+	if g := spyGate(in, p); g != "" {
+		return g
+	}
+	if WindowSlots(in, p)-opensThisTick <= 0 {
+		return "slots"
+	}
+	if h == nil {
+		return "insufficient_inputs"
+	}
+	return HourlyWindow(*h, p)
 }

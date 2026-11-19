@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // Discloser supplies the EU AI Act Art 50(1) notice for authored artifacts.
@@ -40,6 +41,8 @@ type PostReviewHandler struct {
 	// gate cannot engage, i.e. exactly today's behaviour for any project
 	// without CI ingestion.
 	ciOutcomes persistence.ForgeCIOutcomeRepository
+	// detector scans grounded findings before they go out (GitHub #801 C).
+	detector secrets.Detector
 	// blocksApproval resolves the operator's switch FOR A PROJECT. A function
 	// rather than a bool because this handler is registered once for the
 	// daemon while `block_approval_on_failure` is per-project config — baking
@@ -105,6 +108,9 @@ type reviewStructured struct {
 	Feedback  string `json:"feedback"`
 	Summary   string `json:"summary"`
 	Remaining []any  `json:"remaining"`
+	// Findings and NotRead are the adjudicator's (GitHub #801 C, G).
+	Findings []reviewFinding `json:"findings"`
+	NotRead  []string        `json:"not_read"`
 }
 
 // reviewBodyEvent picks the review body + event from the prior step result.
@@ -327,6 +333,7 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 	if failing, blocked := h.approvalBlockedByCI(ctx, in.Task.ProjectID, job, event); blocked {
 		body = ciWithheldNotice(failing) + body
 		body = withRequestQuote(body, job)
+		body = h.forPublication(ctx, "comment", body) // #838: scanned before it is published
 		body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
 		// A COMMENT, not REQUEST_CHANGES. The prose says the change is fine;
 		// posting it under a rejecting state puts approving words in a
@@ -344,10 +351,29 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 		return executor.SystemStepResult{Result: out}, nil
 	}
 
+	var grounded *groundResult
+	if in.Step != nil && in.Step.GroundFindings {
+		gbody, g, gerr := h.groundedBody(ctx, in)
+		if gerr != nil {
+			return executor.SystemStepResult{}, fmt.Errorf("%s: %w", name, gerr)
+		}
+		body, grounded = gbody, &g
+	}
 	body = withRequestQuote(body, job)
+	body = h.forPublication(ctx, "review", body) // #838: the final text, quote included
 	body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
-	if err := provider.PostReview(ctx, job.Repo, job.Number, forgeapi.ReviewSpec{Body: body, Event: event}); err != nil {
+	// #838: both paths are pinned to the head that was fetched.
+	spec := forgeapi.ReviewSpec{Body: body, Event: event, CommitID: reviewedHead(in, job)}
+	if grounded != nil {
+		// GitHub #244: the kept findings, already on added lines and
+		// scanned, become inline comments on the reviewed head.
+		spec.Comments = inlineComments(grounded.Kept)
+	}
+	if err := provider.PostReview(ctx, job.Repo, job.Number, spec); err != nil {
 		return executor.SystemStepResult{}, fmt.Errorf("%s: post review: %w", name, err)
+	}
+	if in.Step != nil && in.Step.CheckRun {
+		h.postCheckRun(ctx, provider, job, in, body, grounded)
 	}
 	// ADVANCE THE BASELINE, AND ONLY NOW (design §6). The review is on the pull
 	// request; the commits it covered are genuinely reviewed. Advancing when a

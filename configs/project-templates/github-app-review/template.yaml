@@ -1,0 +1,40 @@
+displayName: "GitHub App review"
+description: |
+  Reviews pull requests for one GitHub repository through the
+  github-review workflow, using the instance's registered GitHub App.
+  Vornik creates one of these for each repository you install the App
+  on (GitHub #800); you do not create it by hand.
+domain: "code"
+hidden: true
+
+parameters:
+  - name: projectId
+    type: string
+    label: "Project ID"
+    pattern: "[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
+    required: true
+  - name: displayName
+    type: string
+    label: "Display name"
+    required: true
+  - name: repo
+    type: string
+    label: "GitHub repository"
+    pattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    required: true
+  - name: llmModel
+    type: string
+    label: "Role model override"
+    default: ""
+    required: false
+  - name: llmModelAlt
+    type: string
+    label: "Second hunter's model (empty: the same as the first)"
+    default: ""
+    required: false
+
+files:
+  - source: project.yaml.tmpl
+    target: "projects/{{.projectId}}.yaml"
+  - source: swarm.md.tmpl
+    target: "swarms/{{.projectId}}-swarm.md"

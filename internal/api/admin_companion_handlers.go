@@ -377,6 +377,14 @@ type companionKeyEntry struct {
 	ExpiresAt        *time.Time `json:"expiresAt,omitempty"`
 	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
 	CreatedBy        string     `json:"createdBy,omitempty"`
+	// The key's grants (GitHub #846), so a listing shows what each key may
+	// do; a managed instance's owner has no other place to see them.
+	MemoryRead       bool `json:"memoryRead"`
+	MemoryWrite      bool `json:"memoryWrite"`
+	SkillRead        bool `json:"skillRead"`
+	SkillWrite       bool `json:"skillWrite"`
+	SkillAdmin       bool `json:"skillAdmin"`
+	DelegateDisabled bool `json:"delegateDisabled"`
 }
 
 type companionKeyListResponse struct {
@@ -440,6 +448,12 @@ func (s *Server) CompanionKeysList(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt:        k.ExpiresAt,
 			RevokedAt:        k.RevokedAt,
 			CreatedBy:        k.CreatedBy,
+			MemoryRead:       k.MemoryRead,
+			MemoryWrite:      k.MemoryWrite,
+			SkillRead:        k.SkillRead,
+			SkillWrite:       k.SkillWrite,
+			SkillAdmin:       k.SkillAdmin,
+			DelegateDisabled: k.DelegateDisabled,
 		})
 	}
 	respondJSON(w, http.StatusOK, companionKeyListResponse{Keys: out})

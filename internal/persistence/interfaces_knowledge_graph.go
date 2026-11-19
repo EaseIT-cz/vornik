@@ -19,6 +19,15 @@ type KnowledgeEntityRepository interface {
 	// when a match exists.
 	Insert(ctx context.Context, e *KnowledgeEntity) error
 
+	// ListMissingEmbedding returns up to limit entities that are not
+	// superseded and whose embedding is NULL, oldest first, across projects
+	// (GitHub #459). A limit <= 0 lists every one.
+	ListMissingEmbedding(ctx context.Context, limit int) ([]*KnowledgeEntity, error)
+
+	// UpdateEmbedding writes vec on an entity whose embedding is still NULL;
+	// on one that already has a vector it changes nothing (GitHub #459).
+	UpdateEmbedding(ctx context.Context, id string, vec []float32) error
+
 	// Get returns one entity by id, or (nil, ErrNotFound). See internal/persistence/misscontract.
 	//
 	// This method disagreed with itself across backends until 2026-08-19 —

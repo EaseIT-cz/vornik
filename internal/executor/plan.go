@@ -268,6 +268,10 @@ type agentInputOpts struct {
 	// nil for non-recovery steps. See
 	// https://docs.vornik.io
 	RecoveryContext *RecoveryContext
+	// PreviousAttempt, when non-nil, tells the run's first agent step what an
+	// earlier run of the task did (GitHub #604): context.previousAttempt and a
+	// ## PREVIOUS_ATTEMPT prompt block.
+	PreviousAttempt *PreviousAttempt
 
 	// ComplexityTier carries the planner's complexity verdict to a
 	// worker spawn so the executor can scale the role's tool-iteration

@@ -654,10 +654,13 @@ memory:
   # InvokeModel API for embeddings.
   # embedding_provider: "bedrock"
 
-  # OpenAI-compatible embedding endpoint. Any /v1/embeddings server works
-  # here (Ollama, vLLM, hosted OpenAI, etc.). For a local CPU-friendly
+  # OpenAI-compatible embedding endpoint: the provider's base ending in /v1,
+  # the same string chat.endpoint takes (e.g. https://openrouter.ai/api/v1);
+  # Vornik appends /embeddings. A base without /v1 (the older form) still
+  # works: Vornik then appends /v1/embeddings. Any OpenAI-compatible server
+  # works (Ollama, vLLM, hosted OpenAI, etc.). For a local CPU-friendly
   # setup, bge-m3 via Ollama is what the assistant project used first.
-  # embedding_endpoint: "http://127.0.0.1:11434"
+  # embedding_endpoint: "http://127.0.0.1:11434/v1"
   # embedding_model: "bge-m3:latest"
   # embedding_dimension: 1024
   # embedding_api_key: "${VORNIK_EMBEDDING_API_KEY}"

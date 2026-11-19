@@ -106,7 +106,9 @@ func TestCompanionPage587_TheScript(t *testing.T) {
 			t.Errorf("companion.js does not contain %q", want)
 		}
 	}
-	for _, refused := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "skillAdmin", "localStorage", "console.log"} {
+	// "skillAdmin: true": the page never grants approval rights; it may read
+	// k.skillAdmin to show a key's grants (#846).
+	for _, refused := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "skillAdmin: true", "localStorage", "console.log"} {
 		if strings.Contains(js, refused) {
 			t.Errorf("companion.js uses %q", refused)
 		}

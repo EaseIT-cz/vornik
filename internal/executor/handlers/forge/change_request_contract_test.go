@@ -24,7 +24,7 @@ func TestChangeRequestHandlerListMatchesTheHandlers(t *testing.T) {
 	prov := &fakeProvider{}
 	handlers := []executor.SystemHandler{
 		NewFetchDiffHandler(fakeResolver{p: prov}),
-		NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()),
+		newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()),
 		NewOpenChangeRequestHandler(fakeResolver{p: prov}, fakeSource{dir: "/d", sha: "s"}, nil, nil, realDiscloser()),
 		NewFetchCIHandler(stubCIOutcomes{rows: []*persistence.ForgeCIOutcome{{RunID: 1, Conclusion: "success", HeadSHA: "320683a8"}}}),
 	}

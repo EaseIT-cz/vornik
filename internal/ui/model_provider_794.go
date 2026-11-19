@@ -10,14 +10,17 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/onboarding"
@@ -34,6 +37,15 @@ const (
 // dial rule is managed mode's run-time rule for models (design P4/F1).
 type OwnerModelProbe interface {
 	Validate(ctx context.Context, p onboarding.ChatConfigProposal) onboarding.ChatValidationResult
+	// ListModels lists a base's models without the invocation check; the
+	// page's "did you mean" asks it of two nearby bases (GitHub #807).
+	ListModels(ctx context.Context, endpoint, apiKey string) ([]chat.ModelInfo, error)
+}
+
+// WithOwnerMemoryProbe wires the page's embeddings probe (GitHub #807):
+// onboarding.NewManagedMemoryValidator, the managed dial guard.
+func WithOwnerMemoryProbe(p onboarding.MemoryValidatorInterface) ServerOption {
+	return func(s *Server) { s.ownerMemoryProbe = p }
 }
 
 // WithOwnerModelProbe wires the model-provider page's probe.
@@ -54,6 +66,11 @@ type ModelProviderData struct {
 	Notice       string
 	FormEndpoint string
 	FormModel    string
+	// The optional embeddings section (GitHub #807): blank model, no memory.
+	FormEmbeddingEndpoint  string
+	FormEmbeddingModel     string
+	FormEmbeddingDimension string
+	MemoryAvailable        bool
 }
 
 // ModelProvider serves /ui/model-provider: GET shows the configured provider,
@@ -82,7 +99,7 @@ func (s *Server) ModelProvider(w http.ResponseWriter, r *http.Request) {
 		Title:       "Model provider",
 		CurrentPage: "model-provider",
 		IsAdmin:     api.IsAdminClassRequest(r, s.operatorCapability.IsAdminKey),
-	}}
+	}, MemoryAvailable: s.ownerMemoryProbe != nil}
 	if r.Method == http.MethodPost {
 		if code := s.modelProviderPost(w, r, &data); code != 0 {
 			w.WriteHeader(code)
@@ -124,7 +141,14 @@ func (s *Server) modelProviderPost(w http.ResponseWriter, r *http.Request, data 
 	res := s.ownerModelProbe.Validate(r.Context(), onboarding.ChatConfigProposal{Endpoint: endpoint, APIKey: key, Model: model})
 	if !res.PingOK || !res.ModelKnown {
 		data.Error = probeFailureText(res)
+		if !res.ModelsListed {
+			data.Error += s.didYouMean(r.Context(), endpoint, key)
+		}
 		return http.StatusBadRequest
+	}
+	mem, status := s.ownerMemoryFromForm(r, data, endpoint, key)
+	if status != 0 {
+		return status
 	}
 
 	unlock, err := configlock.LockAsWriter(r.Context())
@@ -144,13 +168,23 @@ func (s *Server) modelProviderPost(w http.ResponseWriter, r *http.Request, data 
 		data.Error = "the key could not be stored; nothing was changed"
 		return http.StatusInternalServerError
 	}
+	if mem != nil && mem.ownKey != "" {
+		if err := s.operatorCredentials.Put(r.Context(), api.OwnerEmbeddingAPIKeyName, []byte(mem.ownKey), who); err != nil {
+			s.logger.Warn().Err(err).Msg("model provider: the embedding key could not be stored")
+			data.Error = "the chat key was stored, but the embedding key could not be; the configuration was not changed"
+			return http.StatusInternalServerError
+		}
+	}
 	writer := &featuredoctor.FileConfigWriter{Path: s.cpConfigPath}
-	if msg := writeOwnerModelConfig(writer, endpoint, model); msg != "" {
+	if msg := writeOwnerModelConfig(writer, endpoint, model, mem); msg != "" {
 		s.logger.Warn().Str("step", msg).Msg("model provider: the configuration was not written")
 		data.Error = "the key was stored, but the configuration could not be written (" + msg + "); nothing else changed"
+		if mem != nil && mem.ownKey != "" {
+			data.Error = "the chat and embedding keys were stored, but the configuration could not be written (" + msg + "); nothing else changed"
+		}
 		return http.StatusInternalServerError
 	}
-	audit := s.auditModelProvider(r, host, model)
+	audit := s.auditModelProvider(r, host, model, mem)
 	s.markModelProviderPending()
 	reload := s.applyConfigEdit("model provider")
 	data.Saved = true
@@ -166,7 +200,7 @@ func (s *Server) modelProviderPost(w http.ResponseWriter, r *http.Request, data 
 // writeOwnerModelConfig writes the chat block through the config writer:
 // backup, write, validate, and restore on any failure. It returns "" or the
 // failed step.
-func writeOwnerModelConfig(writer *featuredoctor.FileConfigWriter, endpoint, model string) string {
+func writeOwnerModelConfig(writer *featuredoctor.FileConfigWriter, endpoint, model string, mem *ownerMemory) string {
 	content, err := writer.Read()
 	if err != nil {
 		return "read"
@@ -174,6 +208,11 @@ func writeOwnerModelConfig(writer *featuredoctor.FileConfigWriter, endpoint, mod
 	out, err := api.OwnerModelProviderContent(content, endpoint, model)
 	if err != nil {
 		return "compose"
+	}
+	if mem != nil {
+		if out, err = api.OwnerMemoryContent(out, mem.endpoint, mem.model, mem.dimension, mem.keyName); err != nil {
+			return "compose"
+		}
 	}
 	backup, err := writer.Backup()
 	if err != nil {
@@ -193,8 +232,14 @@ func writeOwnerModelConfig(writer *featuredoctor.FileConfigWriter, endpoint, mod
 // auditModelProvider writes the model_provider.set row: the endpoint's host
 // and the model, never the key (design P5 step 3). It is also the record of
 // the egress decision #794 asks for.
-func (s *Server) auditModelProvider(r *http.Request, host, model string) error {
-	return s.auditKeyAction(r, "model_provider.set", host, map[string]any{"model": model, "restart_pending": true})
+func (s *Server) auditModelProvider(r *http.Request, host, model string, mem *ownerMemory) error {
+	detail := map[string]any{"model": model, "restart_pending": true}
+	if mem != nil {
+		detail["memory"] = "on"
+		detail["embedding_host"] = mem.host
+		detail["embedding_model"] = mem.model
+	}
+	return s.auditKeyAction(r, "model_provider.set", host, detail)
 }
 
 // checkProviderInput validates the form (design P4) and returns the
@@ -279,4 +324,98 @@ func (s *Server) RestartPendingCodes() []string {
 		out = append(out, api.RestartReasonModelProvider)
 	}
 	return out
+}
+
+// ownerMemory is the embeddings section of a save (GitHub #807, security
+// design 18 amendment 2026-11-18 item 1).
+type ownerMemory struct {
+	endpoint, host, model string
+	dimension             int
+	keyName               string // credential-store name memory.embedding_api_key refers to
+	ownKey                string // a key the owner typed for embeddings, or "" (the chat key is used)
+}
+
+// ownerMemoryFromForm reads and probes the embeddings section. A blank model
+// means no memory change. It returns a status to send, or 0. Nothing is
+// written here: the save is one unit (design item 1).
+func (s *Server) ownerMemoryFromForm(r *http.Request, data *ModelProviderData, chatEndpoint, chatKey string) (*ownerMemory, int) {
+	model := strings.TrimSpace(r.PostFormValue("embedding_model"))
+	endpoint := strings.TrimSpace(r.PostFormValue("embedding_endpoint"))
+	dim := strings.TrimSpace(r.PostFormValue("embedding_dimension"))
+	ownKey := r.PostFormValue("embedding_api_key")
+	data.FormEmbeddingEndpoint, data.FormEmbeddingModel, data.FormEmbeddingDimension = endpoint, model, dim
+	if model == "" {
+		return nil, 0
+	}
+	if endpoint == "" {
+		endpoint = chatEndpoint
+	}
+	key := ownKey
+	if key == "" {
+		key = chatKey
+	}
+	host, msg := checkProviderInput(endpoint, model, key)
+	if msg != "" {
+		data.Error = "Embeddings: " + msg
+		return nil, http.StatusBadRequest
+	}
+	typed := 0
+	if dim != "" {
+		n, err := strconv.Atoi(dim)
+		if err != nil || n <= 0 || n > 65536 {
+			data.Error = "Embeddings: the dimension must be a whole number, or blank to take the provider's."
+			return nil, http.StatusBadRequest
+		}
+		typed = n
+	}
+	if ownKey != "" {
+		if _, set := s.envLookup()(api.OwnerEmbeddingAPIKeyName); set {
+			data.Error = "This instance's environment sets " + api.OwnerEmbeddingAPIKeyName + ", which would be used instead of your key. Ask your operator to remove it."
+			return nil, http.StatusConflict
+		}
+	}
+	if s.ownerMemoryProbe == nil {
+		data.Error = "connecting embeddings is not available on this daemon; nothing was changed"
+		return nil, http.StatusServiceUnavailable
+	}
+	res := s.ownerMemoryProbe.Validate(r.Context(), onboarding.MemoryConfigProposal{
+		Enabled: true, EmbeddingEndpoint: endpoint, EmbeddingAPIKey: key, EmbeddingModel: model, EmbeddingDimension: typed})
+	if !res.EmbeddingOK {
+		data.Error = "Embeddings: the provider check failed. Check the base URL, the key and the embedding model; nothing was changed."
+		return nil, http.StatusBadRequest
+	}
+	if typed != 0 && typed != res.ReturnedDimension {
+		data.Error = fmt.Sprintf("Embeddings: the provider returns %d dimensions, not %d. Leave the dimension blank to take the provider's; nothing was changed.", res.ReturnedDimension, typed)
+		return nil, http.StatusBadRequest
+	}
+	m := &ownerMemory{endpoint: endpoint, host: host, model: model, dimension: res.ReturnedDimension, keyName: api.OwnerModelAPIKeyName}
+	if ownKey != "" {
+		m.keyName, m.ownKey = api.OwnerEmbeddingAPIKeyName, ownKey
+	}
+	return m, 0
+}
+
+// didYouMean asks two nearby bases, <base>/v1 and <origin>/api/v1, for their
+// models with the same key and through the same guard, when the typed base
+// lists none. It returns the error's suffix naming the first that answers,
+// or "". Nothing is rewritten: the owner retypes (GitHub #807, item 4).
+func (s *Server) didYouMean(ctx context.Context, endpoint, key string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	base := strings.TrimRight(endpoint, "/")
+	var tries []string
+	if !strings.HasSuffix(strings.ToLower(base), "/v1") {
+		tries = append(tries, base+"/v1")
+	}
+	if alt := u.Scheme + "://" + u.Host + "/api/v1"; alt != base && (len(tries) == 0 || tries[0] != alt) {
+		tries = append(tries, alt)
+	}
+	for _, try := range tries {
+		if models, err := s.ownerModelProbe.ListModels(ctx, try, key); err == nil && len(models) > 0 {
+			return " Did you mean " + try + "?"
+		}
+	}
+	return ""
 }

@@ -75,7 +75,7 @@ func (s *Server) MemoryCacheStats(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "only GET is supported")
 		return
 	}
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMemoryCacheStats) { // GitHub #816: works in Community
 		return
 	}
 	if s.memoryCacheStats == nil {
@@ -115,7 +115,7 @@ func (s *Server) MemoryBackfillTitles(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "only POST is supported")
 		return
 	}
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMemoryBackfillTitles) { // GitHub #816: works in Community
 		return
 	}
 	if s.memoryTitleBackfiller == nil {

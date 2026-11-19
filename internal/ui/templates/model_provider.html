@@ -36,7 +36,8 @@
                 <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Connect a provider</h2>
                 <div>
                     <label for="mp-endpoint" class="block text-xs text-gray-400 mb-1">Base URL (https)</label>
-                    <input id="mp-endpoint" name="endpoint" type="url" required maxlength="2048" value="{{.FormEndpoint}}" placeholder="https://api.example.com/v1" class="w-full bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    <input id="mp-endpoint" name="endpoint" type="url" required maxlength="2048" value="{{.FormEndpoint}}" placeholder="https://openrouter.ai/api/v1" class="w-full bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    <p class="text-xs text-gray-500 mt-1">The provider's OpenAI-compatible base, ending in /v1. Chat and embeddings use the same one.</p>
                 </div>
                 <div>
                     <label for="mp-model" class="block text-xs text-gray-400 mb-1">Default model</label>
@@ -46,6 +47,27 @@
                     <label for="mp-key" class="block text-xs text-gray-400 mb-1">API key</label>
                     <input id="mp-key" name="api_key" type="password" required autocomplete="off" maxlength="4096" class="w-full max-w-md bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
                 </div>
+                {{if .MemoryAvailable}}
+                <fieldset class="border-t border-dark-700 pt-3 space-y-3">
+                    <legend class="text-xs text-gray-400">Memory (optional): leave the embedding model blank to keep memory as it is</legend>
+                    <div>
+                        <label for="mp-emb-model" class="block text-xs text-gray-400 mb-1">Embedding model</label>
+                        <input id="mp-emb-model" name="embedding_model" maxlength="200" value="{{.FormEmbeddingModel}}" placeholder="text-embedding-3-small" class="w-full max-w-md bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    </div>
+                    <div>
+                        <label for="mp-emb-endpoint" class="block text-xs text-gray-400 mb-1">Embedding base URL (blank: the one above)</label>
+                        <input id="mp-emb-endpoint" name="embedding_endpoint" type="url" maxlength="2048" value="{{.FormEmbeddingEndpoint}}" placeholder="https://openrouter.ai/api/v1" class="w-full bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    </div>
+                    <div>
+                        <label for="mp-emb-dim" class="block text-xs text-gray-400 mb-1">Dimension (blank: the provider's)</label>
+                        <input id="mp-emb-dim" name="embedding_dimension" inputmode="numeric" maxlength="6" value="{{.FormEmbeddingDimension}}" class="w-32 bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    </div>
+                    <div>
+                        <label for="mp-emb-key" class="block text-xs text-gray-400 mb-1">Embedding API key (blank: the key above)</label>
+                        <input id="mp-emb-key" name="embedding_api_key" type="password" autocomplete="off" maxlength="4096" class="w-full max-w-md bg-dark-900 border border-control rounded-md px-3 py-1.5 font-mono text-sm">
+                    </div>
+                </fieldset>
+                {{end}}
                 <button class="v-btn v-btn--primary">Check and save</button>
             </form>
         </div>

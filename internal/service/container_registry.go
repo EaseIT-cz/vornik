@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/github"
+	"vornik.io/vornik/internal/integrations"
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
@@ -98,6 +100,12 @@ func (c *Container) initRegistry() error {
 	// wizard's, the UI's), which start from the process default.
 	registry.SetDefaultAgentModelCatalogue(c.Config.AgentAdmin.ModelIDs())
 	publishDaemonMCPURLs(c.daemonMCPServers())
+	// GitHub #812: a hand-made github block may not use the instance's App
+	// key. Its path is fixed whether or not an App is registered; the
+	// registry reads its contents at every load.
+	instanceAppKey := integrations.GitHubAppKeyPath(onboardingSecretsDir(c.ConfigPath))
+	registry.SetInstanceAppKeyPath(instanceAppKey)
+	github.SetInstanceAppKeyPath(instanceAppKey) // #820: the same check at every mint
 	reg := registry.New()
 	if err := reg.Load(configDir); err != nil {
 		var ve *registry.ValidationError
@@ -263,6 +271,8 @@ func (c *Container) initRegistry() error {
 		// anything in the slack block this cannot apply is named by the
 		// restart-only probe that runs after the activator.
 		c.applySlackHotConfig(reloader)
+		// GitHub #800: the registered App's channel and its bound routes.
+		c.applyGitHubHotConfig(reloader)
 		// Rates last, beside the other hot-applied values: the swap is atomic
 		// and in-place, so every holder of the table pointer — executor cost
 		// recorder, judge runner, chat catalogs — bills the new rates from its

@@ -70,6 +70,9 @@ var (
 	e2eWork        string
 	e2eConfigFile  string
 	e2eConfigsTree string
+	// e2eBin is the daemon binary the lane built, for tests that boot a
+	// second daemon with another config (GitHub #815).
+	e2eBin string
 	// spawnShimDir holds logging stand-ins for the host programs the
 	// process-spawn law keeps off the daemon's request path; they are first on
 	// the daemon's PATH and append each call to spawnShimLog (see
@@ -117,6 +120,7 @@ func runE2E(m *testing.M) (int, error) {
 	defer os.RemoveAll(work)
 
 	binPath := filepath.Join(work, "vornik")
+	e2eBin = binPath
 	// When GOCOVERDIR is set (CI's coverage job, or a local
 	// `make test-coverage-e2e` run) build a coverage-instrumented
 	// binary so the daemon's composition root — initHTTPServer and the
@@ -191,7 +195,11 @@ func runE2E(m *testing.M) (int, error) {
 		}
 	}()
 
-	if err := waitHealthy(httpBase, 40*time.Second); err != nil {
+	// 120 s, as the second daemon's wait (55f86d0fc): under the 2026-11-18
+	// release gate the lane's own daemon finished its boot log and was
+	// still not answering healthz at 40 s while lint and test runs shared
+	// the host; alone the lane passes in under 3 minutes.
+	if err := waitHealthy(httpBase, 120*time.Second); err != nil {
 		// Surface the daemon log so a CI failure is debuggable.
 		if b, rerr := os.ReadFile(filepath.Join(work, "daemon.log")); rerr == nil {
 			fmt.Fprintln(os.Stderr, "[e2e] daemon log:\n"+string(b))

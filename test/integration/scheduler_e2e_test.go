@@ -4,8 +4,10 @@
 package integration_test
 
 import (
+	"context"
 	"fmt"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,10 +231,16 @@ func TestScheduler_LongRunningExecutionRenewsLease(t *testing.T) {
 	taskRepo := postgres.NewTaskRepository(db)
 	execRepo := postgres.NewExecutionRepository(db)
 
+	// GitHub #811: the run ends only after the scheduler has renewed the
+	// lease, so the renewal is proven by the event, and the lease is long
+	// enough (3 s, renewed about every second) that a renewal arriving late
+	// on a loaded host cannot expire it. Before, a 1 s lease against a 1.5 s
+	// run lost the lease whenever one renewal came ~0.7 s late.
+	renewed := make(chan struct{})
 	mockRuntime := &mockRuntimeManager{
 		runs:      make(map[string]*mockRun),
 		exitCode:  0,
-		exitDelay: 1500 * time.Millisecond,
+		exitAfter: renewed,
 	}
 
 	artifactDir := t.TempDir()
@@ -242,7 +250,7 @@ func TestScheduler_LongRunningExecutionRenewsLease(t *testing.T) {
 	schedConfig := scheduler.DefaultConfig()
 	schedConfig.PollInterval = 50 * time.Millisecond
 	schedConfig.RecoveryInterval = 100 * time.Millisecond
-	schedConfig.LeaseDurationSeconds = 1
+	schedConfig.LeaseDurationSeconds = 3
 	schedConfig.MaxConcurrency = 2
 
 	execCfg := executor.DefaultConfig()
@@ -258,7 +266,7 @@ func TestScheduler_LongRunningExecutionRenewsLease(t *testing.T) {
 	)
 
 	sched := scheduler.NewWithOptions(
-		taskRepo,
+		&renewSignalRepo{TaskRepository: taskRepo, taskID: taskID, renewed: renewed},
 		schedConfig,
 		scheduler.WithRuntimeManager(mockRuntime),
 		scheduler.WithExecutionRepository(execRepo),
@@ -283,7 +291,7 @@ func TestScheduler_LongRunningExecutionRenewsLease(t *testing.T) {
 			return false
 		}
 		return status == "COMPLETED"
-	}, 8*time.Second, 50*time.Millisecond)
+	}, time.Minute, 50*time.Millisecond)
 
 	// >= 1 rather than == 1: same DB-sharing rationale as
 	// TestScheduler_DrivenTaskCompletion. The intent here is
@@ -297,4 +305,21 @@ func TestScheduler_LongRunningExecutionRenewsLease(t *testing.T) {
 	var completedCount int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM executions WHERE task_id = $1 AND status='COMPLETED'`, taskID).Scan(&completedCount))
 	require.GreaterOrEqual(t, completedCount, 1, "at least one execution should have reached COMPLETED")
+}
+
+// renewSignalRepo closes renewed after the first successful lease renewal of
+// taskID (GitHub #811): the test's run waits on it instead of a sleep.
+type renewSignalRepo struct {
+	scheduler.TaskRepository
+	taskID  string
+	renewed chan struct{}
+	once    sync.Once
+}
+
+func (r *renewSignalRepo) RenewLease(ctx context.Context, taskID, leaseID string, extendBySeconds int) error {
+	err := r.TaskRepository.RenewLease(ctx, taskID, leaseID, extendBySeconds)
+	if err == nil && taskID == r.taskID {
+		r.once.Do(func() { close(r.renewed) })
+	}
+	return err
 }

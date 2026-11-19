@@ -106,6 +106,15 @@ func (s *Server) ListTaskMessages(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
 		return
 	}
+	// GitHub #832: a per-task key reads only its own task's thread, never a
+	// sibling's (task-lifecycle design §17.8). Checked before the task is
+	// looked up, so the refusal does not say whether the task exists.
+	if pathTask := extractTaskID(r); mismatchedTaskScopedKey(r, pathTask) {
+		s.logger.Warn().Str("task_id", pathTask).Str("path", r.URL.Path).
+			Msg("task messages: refused an agent's task key on another task's thread")
+		respondError(w, http.StatusForbidden, "FORBIDDEN", "an agent's task key may read only its own task's messages")
+		return
+	}
 	task, _, taskID := s.taskFromRequest(w, r)
 	if task == nil {
 		return

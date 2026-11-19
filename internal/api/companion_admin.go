@@ -263,7 +263,11 @@ func companionAdminToolDefs() []mcpToolDef {
 				"name": str("Role name: a-z, 0-9, _ or -."), "instructions": str("What the role does. No lines starting with #, --- or ```."),
 				"tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": roleTools},
 				"model": str("Optional: a model id from describe_installation's models; leave it out for the installation's default. " +
-					"A local model applies at once; a remote one sends this role's work to its provider and needs the user's approval on their phone, once per destination.")},
+					"A local model applies at once; a remote one sends this role's work to its provider and needs the user's approval on their phone, once per destination."),
+				"max_tokens": map[string]any{"type": "integer", "description": "Optional: the most tokens one reply of this role may hold, up to describe_installation's limits.max_role_tokens. " +
+					"Leave it out for the default. Raising it above the role's current value needs the user's approval."},
+				"max_tool_iterations": map[string]any{"type": "integer", "description": "Optional: the most tool steps one step of this role may take, up to describe_installation's limits.max_role_tool_iterations. " +
+					"Leave it out for the default (30). Raising it above the role's current value needs the user's approval."}},
 				"name", "instructions", "tools")}}, "slug", "roles")},
 		{Name: agentadmin.VerbDefineWorkflow, Description: "Define a workflow you can delegate: steps run in order; what it returns is exactly the egress schema, which the user approves." + effect,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "slug": str("The workflow's slug."), "purpose": str("One line."),
@@ -297,7 +301,9 @@ func companionAdminToolDefs() []mcpToolDef {
 		{Name: agentadmin.VerbSetBudget, Description: "Set a project's monthly budget. Lowering applies at once; raising needs approval." + effect,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "monthly_usd": map[string]any{"type": "number", "exclusiveMinimum": 0}}, "project", "monthly_usd")},
 		{Name: agentadmin.VerbUpdateProject, Description: "Update a project's purpose or display name. Applies at once; its slug stays unchanged." + effect,
-			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule + " Immutable."), "purpose": str("Optional nonempty purpose, at most 300 characters on one line."), "display_name": str("Optional nonempty display label, at most 300 characters on one line. Supply at least one metadata field.")}, "project")},
+			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule + " Immutable."), "purpose": str("Optional nonempty purpose, at most 300 characters on one line."), "display_name": str("Optional nonempty display label, at most 300 characters on one line."),
+				"max_concurrent_tasks": map[string]any{"type": "integer", "description": "Optional: how many of the project's tasks may run at once, 1 up to describe_installation's limits.max_concurrent_tasks. " +
+					"Raising it needs the user's approval. Supply at least one field."}}, "project")},
 		{Name: agentadmin.VerbRemove, Description: "Remove a project, a workflow or a server." + effect,
 			InputSchema: obj(map[string]any{"kind": str("project, workflow or integration."), "id": str("A project: " + agentadmin.ProjectRefRule + " A workflow: <project>--<workflow>, without the namespace. An integration: the server name."), "project": str("For an integration: " + agentadmin.ProjectRefRule)}, "kind", "id")},
 		{Name: agentadmin.VerbAddAPI, Description: "Connect a project to a REST API (https, or http on this machine). Always needs approval. " +

@@ -60,15 +60,15 @@ func TestManage759_EachAudienceSeesItsCards(t *testing.T) {
 		t.Errorf("project user sees %s", got)
 	}
 	owner := manageAs(t, srv, sessionReq(t, owner754), false)
-	if got := strings.Join(manageKeys759(owner), ","); got != "admin-agents,admin-keys,admin-skills,insights,my-account,projects,reminders" { // #789 adds agents and skills
+	if got := strings.Join(manageKeys759(owner), ","); got != "admin-agents,admin-keys,admin-skills,approvers,insights,my-account,projects,reminders" { // #789 adds agents and skills; #833 approvers
 		t.Errorf("owner sees %s", got)
 	}
 	if owner["admin-keys"] != "/ui/credentials" {
 		t.Errorf("the owner's Keys & access goes to %q, want /ui/credentials", owner["admin-keys"])
 	}
 	adminCards := manageAs(t, srv, withAdminUI(httptest.NewRequest(http.MethodGet, "/manage", nil)), false)
-	if len(adminCards) != 8 || adminCards["admin-keys"] != "/ui/admin/keys" {
-		t.Errorf("admin sees %v (want the eight non-trading cards, Keys at /ui/admin/keys)", manageKeys759(adminCards))
+	if len(adminCards) != 9 || adminCards["admin-keys"] != "/ui/admin/keys" || adminCards["approvers"] != "/ui/settings/approvers" {
+		t.Errorf("admin sees %v (want the nine non-trading cards, Keys at /ui/admin/keys; #833 approvers)", manageKeys759(adminCards))
 	}
 	if _, ok := manageAs(t, srv, withAdminUI(httptest.NewRequest(http.MethodGet, "/manage", nil)), true)["trading"]; !ok {
 		t.Error("with the trading capability on, the admin sees Trading")

@@ -10,6 +10,7 @@ package ui
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"vornik.io/vornik/internal/api"
@@ -27,6 +28,17 @@ type CompanionPageData struct {
 	HasProject bool
 	// VornikURL is the instance's address the companion connects to.
 	VornikURL string
+	// VornikHost is its host name, for the AWS DevOps Agent form (#846).
+	VornikHost string
+}
+
+// hostOf returns the host name of base, without scheme or port.
+func hostOf(base string) string {
+	u, err := url.Parse(strings.TrimRight(base, "/"))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // ownerOnPublicListener reports whether r is the managed instance's owner,
@@ -60,5 +72,6 @@ func (s *Server) CompanionPage(w http.ResponseWriter, r *http.Request) {
 		adminCommonData: adminCommonData{Title: "Connect your companion", CurrentPage: "companion"},
 		HasProject:      s.projectReg != nil && s.projectReg.GetProject(companionProjectID) != nil,
 		VornikURL:       strings.TrimRight(base, "/"),
+		VornikHost:      hostOf(base),
 	})
 }

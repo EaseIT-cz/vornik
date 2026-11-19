@@ -52,6 +52,7 @@ func (e *Executor) recordShadow(ctx context.Context, in *StepOutcome, calls []tr
 	ins := trading.ShadowInputs(calls, p.Trading.EntryPolicy.AllowedSymbols, now, 0.01)
 	pol := enginePolicy(p)
 	e.addOrderState(ctx, &ins, p.ID, now, pol)
+	ins.SPYReturn3 = engineSPYReturn3(ctx, e, p.ID, now)
 	d := rules.Decide(ins, pol, engineCaps(p))
 	e.writeShadow(ctx, in, d.Funnel, in.ResultBytes)
 }
@@ -137,8 +138,16 @@ func (e *Executor) addOrderState(ctx context.Context, in *rules.Inputs, projectI
 		case "BUY":
 			child := strings.HasSuffix(o.IdempotencyKey, "_stop") || strings.HasSuffix(o.IdempotencyKey, "_tp")
 			dead := strings.EqualFold(o.Status, "rejected") || strings.EqualFold(o.Status, "cancelled") || strings.EqualFold(o.Status, "canceled")
-			if !child && trading.SessionDate(o.SubmittedAt).Equal(today) && (o.FilledQty > 0 || !dead) {
+			if child || (o.FilledQty <= 0 && dead) {
+				continue
+			}
+			day := trading.SessionDate(o.SubmittedAt)
+			if day.Equal(today) {
 				in.EntriesToday++
+			}
+			// The rolling window (#826 C5): today and the sessions before it.
+			if completedSessionsAfter(day, today) < pol.EntryWindowSessions {
+				in.EntriesWindow++
 			}
 		}
 	}

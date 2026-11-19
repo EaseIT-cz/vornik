@@ -7,12 +7,12 @@ import (
 )
 
 // ProjectDoctor handles the per-project readiness endpoints under
-// /api/v1/projects/{id}/doctor. Admin-gated like other project
-// mutation surfaces. Dispatch is suffix-based (the mux registers the
+// /api/v1/projects/{id}/doctor. An operator surface in both editions
+// (SurfaceProjectDoctor, GitHub #816). Dispatch is suffix-based (the mux registers the
 // prefix). See https://docs.vornik.io
 // Phase 2.
 func (s *Server) ProjectDoctor(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceProjectDoctor) { // GitHub #816: works in Community
 		return
 	}
 	if s.projectDoctor == nil {

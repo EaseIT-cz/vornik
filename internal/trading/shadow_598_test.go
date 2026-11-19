@@ -67,6 +67,10 @@ func TestShadowInputs_FromToolCalls_598(t *testing.T) {
 	if in.Candidates[2].Score != nil || in.Candidates[2].EarningsInSessions != nil {
 		t.Fatal("GOOGL: no scorecard, and a failed fundamentals call stays unknown")
 	}
+	// SPY's three-session return is the executor's to fill (#826), not the
+	// tool calls'.
+	ret3 := 0.01
+	in.SPYReturn3 = &ret3
 	d := rules.Decide(in, rules.DefaultPolicy(), rules.Caps{MaxRiskUSD: 75, MaxEntriesPerTick: 2, MaxPositions: 8, MaxGrossExposureUSD: 15000, DailyLossPauseUSD: 150})
 	gates := map[string]string{}
 	for _, r := range d.Funnel {

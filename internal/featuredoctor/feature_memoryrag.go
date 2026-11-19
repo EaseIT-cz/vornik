@@ -74,7 +74,14 @@ func memoryRAGFeature() Feature {
 				kv, _ := d.Config.GateValue("memory.embedding_api_key")
 				key, _ := kv.(string)
 				if d.Embeddings.ProbeEmbedding(ctx, memory.Config{EmbeddingEndpoint: endpoint, EmbeddingAPIKey: key, EmbeddingModel: id}) {
-					return PrereqResult{OK: true, Detail: id + " reachable at " + endpoint}
+					detail := id + " reachable at " + endpoint
+					// GitHub #807: the old form still works; name the one form
+					// both clients take, the provider's base ending in /v1.
+					if memory.EmbeddingBaseIsLegacy(endpoint) {
+						detail += "; this is the old form; " + strings.TrimRight(endpoint, "/") +
+							"/v1 is the form chat and embeddings share"
+					}
+					return PrereqResult{OK: true, Detail: detail}
 				}
 				return PrereqResult{OK: false, Fixable: false,
 					Detail: id + " not reachable at " + endpoint,

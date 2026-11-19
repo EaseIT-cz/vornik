@@ -97,6 +97,13 @@ placeholder that is empty. Triage table: `deployments/podman/README.md`.
 Binaries land in `~/.local/bin` (`vornik`, `vornikctl`). If `vornikctl` is
 not found, prefix commands with `~/.local/bin/` or fix `PATH`.
 
+**Serving it over HTTPS (optional).** On a host with a public DNS name and
+Caddy installed, add `VORNIK_PUBLIC_HOSTNAME=<name>` to the quickstart
+command. Caddy terminates TLS and adds no credential; people still sign in
+with their own key. It writes `/etc/caddy/vornik.caddy` with `sudo`, so ask
+your user first (ground rule 1). Steps and checks:
+`deployments/podman/README.md`, "HTTPS with the quickstart".
+
 ### A2. Connect an LLM (the setup API)
 
 The first-run web guide at `http://localhost:8080/ui/setup` and this API

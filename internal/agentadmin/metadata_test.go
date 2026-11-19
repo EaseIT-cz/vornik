@@ -76,7 +76,7 @@ func TestUpdateProjectMetadataRefusals(t *testing.T) {
 }
 
 func TestPatchProjectMetadataAddsMissingNativeFields(t *testing.T) {
-	got, err := patchProjectMetadata([]byte("projectId: hermes--news\n"), map[string]string{"description": "Purpose", "displayName": "Name"})
+	got, err := patchProjectMetadata([]byte("projectId: hermes--news\n"), map[string]string{"description": "Purpose", "displayName": "Name"}, nil)
 	if err != nil || !strings.Contains(got, `description: "Purpose"`) || !strings.Contains(got, `displayName: "Name"`) {
 		t.Fatalf("patched %q: %v", got, err)
 	}
@@ -101,7 +101,7 @@ func TestDefineSwarmGrantsDocumentRendererButRefusesShell(t *testing.T) {
 // writes on its own project.
 func TestPatchProjectMetadata_IgnoresForgeIssueKeys(t *testing.T) {
 	src := []byte("projectId: hermes--news\nforge:\n  issues:\n    close_enabled: true\n    writes_without_approval: false\n")
-	got, err := patchProjectMetadata(src, map[string]string{"description": "Purpose", "forge.issues.writes_without_approval": "true", "forge": "x"})
+	got, err := patchProjectMetadata(src, map[string]string{"description": "Purpose", "forge.issues.writes_without_approval": "true", "forge": "x"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

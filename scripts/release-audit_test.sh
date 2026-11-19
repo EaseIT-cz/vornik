@@ -95,6 +95,29 @@ else
 	echo "skip - no image build in flight; the PENDING path is not exercisable right now"
 fi
 
+# --ce-prs (GitHub #840): community PRs waiting on a maintainer, and PRs a
+# sync shipped but nobody closed. A stub gh answers; "today" is injected.
+cetmp="$(mktemp -d)"
+mkdir -p "$cetmp/bin"
+cat > "$cetmp/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "pr list "*) printf '1\t2026-11-01T10:00:00Z\n2\t2026-11-16T10:00:00Z\n3\t2026-11-09T10:00:00Z\n4\t2026-11-01T10:00:00Z\n' ;;
+  "api repos/EaseIT-cz/vornik/commits"*) printf 'sync: export CE\n\nSource-Commit: abc\nCE-PR-Shipped: EaseIT-cz/vornik#4\n' ;;
+  "api repos/EaseIT-cz/vornik/issues/1/comments"*) echo MEMBER ;;
+  "api repos/EaseIT-cz/vornik/issues/"*) echo NONE ;;
+  "api repos/EaseIT-cz/vornik/pulls/"*"/reviews"*) : ;;
+  *) exit 1 ;;
+esac
+STUB
+chmod +x "$cetmp/bin/gh"
+out="$(PATH="$cetmp/bin:$PATH" RELEASE_AUDIT_TODAY=2026-11-19 "$AUDIT" --ce-prs 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && grep -q '#3 has waited 10 days' <<<"$out" && ! grep -q '#1 has waited\|#2 has waited' <<<"$out" \
+	&& grep -q '#4 was shipped by a CE sync but is still open' <<<"$out" && grep -q 'examined 4 open' <<<"$out"; then
+	pass "--ce-prs lists the unanswered PR over 7 days and the shipped-but-open one, and fails nothing"
+else fail "--ce-prs: rc=$rc $out"; fi
+rm -rf "$cetmp"
+
 echo ""
 if [ "$fails" -eq 0 ]; then echo "release-audit_test: ALL PASS"; exit 0; fi
 echo "release-audit_test: $fails case(s) failed"; exit 1

@@ -88,7 +88,8 @@ func (s *EmailChannelsSubsystem) Start(ctx context.Context) error {
 	for i, ch := range s.channels {
 		project := s.projects[i]
 		store := newEmailSessionStore(c.Registry, project.ID, ch)
-		store.disclosure = c.AIDisclosure // Art 50 notice on file mails (GitHub #342)
+		store.disclosure = c.AIDisclosure  // Art 50 notice on file mails (GitHub #342)
+		ch.SetAIDisclosure(c.AIDisclosure) // and on the failure notice (#369)
 		store.SetPersister(c.channelSessionPersister("email"))
 		receiver := &dispatcher.ChannelReceiver{
 			Channel:                  ch,

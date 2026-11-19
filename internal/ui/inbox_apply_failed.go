@@ -9,13 +9,16 @@ import (
 // Approved requests whose change could not be applied, shown in /inbox for
 // an operator-wide viewer (GitHub #669 item 5, design 22 §22.2.16b). The
 // approver-device service reads, masks and cuts them (one implementation,
-// the phone's); the console only renders. Read-only: nothing to decide.
+// the phone's); the console renders them, with a Dismiss (GitHub #806,
+// §22.2.16d). Retry is the phone's: the device holds the approval.
 
 // ApplyFailedCard is one approved request that could not be applied.
 type ApplyFailedCard struct {
+	ID         string
 	Sentence   string
 	ApprovedAt time.Time
 	Reason     string
+	Retryable  bool
 }
 
 // WithAgentApplyFailed wires the failed list; more says rows were left out.
@@ -25,7 +28,8 @@ func WithAgentApplyFailed(list func(context.Context) (rows []ApplyFailedCard, mo
 }
 
 type applyFailedView struct {
-	Sentence, Approved, Reason string
+	ID, Sentence, Approved, Reason string
+	Retryable                      bool
 }
 
 // loadAgentApplyFailed lists the failed requests for the operator. A
@@ -45,7 +49,7 @@ func (s *Server) loadAgentApplyFailed(r *http.Request) (rows []applyFailedView, 
 	}
 	out := make([]applyFailedView, 0, len(cards))
 	for _, c := range cards {
-		v := applyFailedView{Sentence: c.Sentence, Reason: c.Reason}
+		v := applyFailedView{ID: c.ID, Sentence: c.Sentence, Reason: c.Reason, Retryable: c.Retryable}
 		if !c.ApprovedAt.IsZero() {
 			v.Approved = humanizeSince(time.Since(c.ApprovedAt)) + " ago"
 		}

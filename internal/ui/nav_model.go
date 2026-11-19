@@ -113,6 +113,9 @@ func navModel() []navAreaDef {
 			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey", AdminOnly: true, OwnerHref: "/ui/credentials"},
 			{Key: "admin-agents", Label: "Coding agents", Href: "/ui/admin/agents", Icon: "navIconRobot", AdminOnly: true, OwnerHref: "/ui/admin/agents"},
 			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill", AdminOnly: true, OwnerHref: "/ui/admin/skills"},
+			// The approver-devices page (#763), for the audience its own gate
+			// admits: an admin or owner browser session (#833, design §21).
+			{Key: "approvers", Label: "Approver phones", Href: "/ui/settings/approvers", Icon: "navIconPhone", AdminOnly: true, OwnerHref: "/ui/settings/approvers"},
 			{Key: "reminders", Label: "Reminders", Href: "/ui/reminders", Icon: "navIconReminders"},
 			{Key: "insights", Label: "Tool budget", Href: "/ui/insights/tool-budget", Icon: "navIconGauge"},
 			{Key: "trading", Label: "Trading", Href: "/ui/trading", Icon: "navIconTrading", Cap: "trading"},

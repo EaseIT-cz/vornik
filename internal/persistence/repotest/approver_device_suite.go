@@ -37,6 +37,10 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("Decide_is_hash_bound_and_once", func(t *testing.T) { approverDecide(t, newApproverHarness(t, fresh)) })
 	t.Run("Applied_and_expiry", func(t *testing.T) { approverAppliedAndExpiry(t, newApproverHarness(t, fresh)) })
 	t.Run("ListApplyFailedSince_window_and_limit", func(t *testing.T) { approverApplyFailedList(t, newApproverHarness(t, fresh)) })
+	// GitHub #806.
+	t.Run("DismissApplyFailed_hides_once", func(t *testing.T) { approverDismiss806(t, newApproverHarness(t, fresh)) })
+	t.Run("ResetForRetry_only_a_given_up_row", func(t *testing.T) { approverRetryReset806(t, newApproverHarness(t, fresh)) })
+	t.Run("Notice_acks_store_and_prune", func(t *testing.T) { approverNoticeAcks806(t, newApproverHarness(t, fresh)) })
 	t.Run("ClaimApply_is_one_holder_at_a_time", func(t *testing.T) { approverClaimApply(t, newApproverHarness(t, fresh)) })
 	t.Run("Broker_action_requests_store", func(t *testing.T) { approverBrokerActionKind(t, newApproverHarness(t, fresh)) })
 	// Hermes approval transport design §4.1, §4.2, §4.4.

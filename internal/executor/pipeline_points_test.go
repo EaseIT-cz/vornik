@@ -13,6 +13,7 @@ func TestStepOutcomePoint_ParticipantsArePinned(t *testing.T) {
 	e, _, _, _, _ := setup()
 	want := []string{
 		"output_file_contract",
+		"review_actions", // GitHub #751, reviewable-output design §6.12
 		"broker_egress",
 		"tool_contract",
 		"plausibility",

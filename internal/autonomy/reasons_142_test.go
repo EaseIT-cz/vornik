@@ -41,20 +41,21 @@ func TestEvaluate_ActiveTasksReasonNamesAnApprovalWait(t *testing.T) {
 
 // TestAutonomyCircuitOpen_ReasonSeparatesFailedFromCancelled — §S7 #15: the
 // trip reason said "%d failed/cancelled", so it could not say whether the
-// tasks failed or an operator cancelled them. The trip rule is unchanged
-// (open question Q15b).
+// tasks failed or an operator cancelled them. Since #369 Q15b only a cancel
+// with a recorded cause counts.
 func TestAutonomyCircuitOpen_ReasonSeparatesFailedFromCancelled(t *testing.T) {
 	var tasks []*persistence.Task
 	for i := 0; i < 5; i++ {
 		tasks = append(tasks, mkTerminal(fmt.Sprintf("f%d", i), persistence.TaskStatusFailed, time.Duration(i)*time.Minute))
 	}
 	for i := 0; i < 2; i++ {
-		tasks = append(tasks, mkTerminal(fmt.Sprintf("x%d", i), persistence.TaskStatusCancelled, time.Duration(i)*time.Minute))
+		// Cancels with a recorded cause: only those count since #369 Q15b.
+		tasks = append(tasks, caused369(mkTerminal(fmt.Sprintf("x%d", i), persistence.TaskStatusCancelled, time.Duration(i)*time.Minute)))
 	}
 	tasks = append(tasks, mkTerminal("c0", persistence.TaskStatusCompleted, 30*time.Minute))
 	reason, open := autonomyCircuitOpen(tasks)
-	require.True(t, open, "7 failed-or-cancelled of 8 still trips: the rule is unchanged")
-	assert.Contains(t, reason, "5 failed, 2 cancelled, 1 completed")
+	require.True(t, open, "7 failed-or-cancelled of 8 still trips")
+	assert.Contains(t, reason, "5 failed, 2 cancelled with a cause, 1 completed")
 }
 
 // TestCreateAutonomousTask_FenceIsRecordedAsLeaderFenced — §S7 #15: a write

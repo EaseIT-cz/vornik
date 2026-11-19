@@ -40,6 +40,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/forgereview"
 )
@@ -89,6 +90,9 @@ type Config struct {
 	// Single-installation mode only. Multi-installation mode reads
 	// PrivateKey from each InstallationConfig.
 	PrivateKey *rsa.PrivateKey
+	// PrivateKeyHash is KeyHash of the key file's bytes, for the mint-time
+	// instance-key guard (GitHub #820); "" when the caller did not read one.
+	PrivateKeyHash string
 
 	// InstallationID is the GitHub App installation ID for the
 	// target organisation / user account. Discoverable via
@@ -199,6 +203,19 @@ type Config struct {
 	// configured at the boot layer the channel produces identical
 	// behaviour to the pre-multi-install code path.
 	Installations []InstallationConfig
+
+	// Registered serves the instance's registered App (GitHub #800). Zero
+	// installations is allowed, installation events reach
+	// OnInstallationEvent, and bound repositories route through
+	// SetRegisteredRoutes. An unknown installation id is never routed to a
+	// sole installation.
+	Registered bool
+	// OnInstallationEvent stores a signed installation or
+	// installation_repositories delivery; an error answers 500 so the
+	// failure shows in the App's delivery log.
+	OnInstallationEvent func(ctx context.Context, ev InstallationEvent) error
+	// OnDrop counts a registered-mode delivery that is not routed, by why.
+	OnDrop func(reason string)
 }
 
 // InstallationConfig describes one GitHub App installation served
@@ -228,6 +245,9 @@ type InstallationConfig struct {
 	// PrivateKey is the GitHub App's RSA private key for this
 	// installation's outbound replies. Nil disables outbound.
 	PrivateKey *rsa.PrivateKey
+	// PrivateKeyHash is KeyHash of the key file's bytes, for the mint-time
+	// instance-key guard (GitHub #820); "" when the caller did not read one.
+	PrivateKeyHash string
 
 	// RepoAllowlist is the set of "owner/repo" full names this
 	// installation accepts events from. Required (defensive
@@ -383,6 +403,16 @@ type TaskCreationEvent struct {
 // Constructed once at boot; the HTTP handler (HandleWebhook) is
 // mounted on the daemon's API server by the service container.
 type Channel struct {
+	// failureNotices allows one failure notice per thread per hour (GitHub
+	// #369; failure_notice_369.go).
+	failureNotices conversation.NoticeWindow
+	// aiDisclosure applies the Art 50 notice to the failure notice (#369);
+	// nil discloses with the compiled defaults.
+	aiDisclosure *aidisclosure.Service
+
+	// registered holds the bound repositories' routes (GitHub #800,
+	// registered_800.go), swapped whole on each reload.
+	registered registeredRoutes
 	// aiMark is the Art 50(2) marker for replies (aimark.go).
 	aiMark      aiMarkHolder
 	cfg         Config
@@ -468,10 +498,15 @@ const maxSeenDeliveries = 4096
 // different installations don't serialise behind a single mutex —
 // each installation mints / refreshes its own access token.
 type installation struct {
+	// registered marks an App-backed route (GitHub #800); dropReason marks
+	// a bound repository whose deliveries are not routed.
+	registered     bool
+	dropReason     string
 	projectID      string
 	installationID int64
 	appID          int64
 	privateKey     *rsa.PrivateKey
+	keyHash        string // KeyHash of the key file (#820 guard)
 
 	allowedRepos map[string]struct{}
 	taskLabels   map[string]struct{}
@@ -544,9 +579,12 @@ func New(cfg Config) (*Channel, error) {
 		httpClient = http.DefaultClient
 	}
 
-	installs, err := resolveInstallations(cfg)
-	if err != nil {
-		return nil, err
+	var installs []*installation
+	if !cfg.Registered || len(cfg.Installations) > 0 || len(cfg.RepoAllowlist) > 0 {
+		var err error
+		if installs, err = resolveInstallations(cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	c := &Channel{
@@ -580,6 +618,7 @@ func resolveInstallations(cfg Config) ([]*installation, error) {
 			InstallationID:  cfg.InstallationID,
 			AppID:           cfg.AppID,
 			PrivateKey:      cfg.PrivateKey,
+			PrivateKeyHash:  cfg.PrivateKeyHash,
 			RepoAllowlist:   cfg.RepoAllowlist,
 			TaskLabels:      cfg.TaskLabels,
 			PRReviewLabels:  cfg.PRReviewLabels,
@@ -617,6 +656,7 @@ func buildInstallation(ic InstallationConfig) *installation {
 		installationID:   ic.InstallationID,
 		appID:            ic.AppID,
 		privateKey:       ic.PrivateKey,
+		keyHash:          ic.PrivateKeyHash,
 		allowedRepos:     indexSet(ic.RepoAllowlist),
 		taskLabels:       indexSet(ic.TaskLabels),
 		prLabels:         indexSet(ic.PRReviewLabels),
@@ -678,7 +718,7 @@ func (c *Channel) resolveInstallationForPayload(installationID int64) (*installa
 	// This preserves the pre-multi-installation behaviour where a
 	// single-tenant deployment didn't care about the payload's
 	// installation_id.
-	if len(c.installations) == 1 && len(c.cfg.Installations) == 0 {
+	if !c.cfg.Registered && len(c.installations) == 1 && len(c.cfg.Installations) == 0 {
 		return c.installations[0], true
 	}
 	return nil, false
@@ -1086,10 +1126,23 @@ func (c *Channel) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	// GitHub #800: a registered App's installation events write bindings.
+	if c.cfg.Registered && (event == "installation" || event == "installation_repositories") {
+		c.handleInstallationEvent(w, r, event, delivery, body)
+		return
+	}
 	if payload.Repository.FullName == "" {
 		// Some event types (e.g. installation, ping) don't carry a
 		// repository — ack without further processing.
 		c.logger.Debug().Str("event", event).Msg("github-app: event without repository, acking")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// GitHub #800: a bound repository routes through its binding.
+	if inst, decided := c.routeRegistered(payload); decided {
+		if inst != nil {
+			c.dispatchRegistered(r.Context(), event, delivery, payload, inst)
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1444,6 +1497,11 @@ func (c *Channel) handleIssueComment(ctx context.Context, event, delivery string
 			// comment (review-20261013-b982 #2).
 			if !replied.Load() {
 				c.forgetDelivery(delivery)
+				// Not when the turn was cancelled (the daemon stopping): the
+				// request did not fail, it was stopped (review-20261118-6a96 F1).
+				if !errors.Is(err, context.Canceled) && turnCtx.Err() == nil {
+					c.sendFailureNotice(msg)
+				}
 			}
 			ev := c.logger.Warn().Err(err).Str("delivery", delivery)
 			if cause := context.Cause(turnCtx); cause != nil {

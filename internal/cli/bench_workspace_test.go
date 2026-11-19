@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/agentbench"
+	"vornik.io/vornik/internal/executor"
 )
 
 // The benchmark workspace is cleared of a task's targets before each repeat
@@ -60,8 +61,10 @@ func TestGitWorkspace_ClearsExistingTargetsAndCommits(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "scratch/registry")); !os.IsNotExist(err) {
 		t.Fatal("the target must be gone from the working tree")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "scratch/other/other.go")); err != nil {
-		t.Fatal("anything that is not a target must be left alone")
+	// §12.33 (#808): only the baseline carries over, so a file that is not a
+	// target is removed too; before, it was "left alone", which was the leak.
+	if _, err := os.Stat(filepath.Join(dir, "scratch/other/other.go")); !os.IsNotExist(err) {
+		t.Fatal("an earlier task's file must be gone (§12.33)")
 	}
 	msg, _ := exec.Command("git", "-C", dir, "log", "-1", "--format=%s").Output()
 	if !strings.Contains(string(msg), "dp-01") || !strings.Contains(string(msg), "§12.23") {
@@ -80,8 +83,15 @@ func TestGitWorkspace_ClearsExistingTargetsAndCommits(t *testing.T) {
 func TestGitWorkspace_AbsentTargetsMakeNoCommit(t *testing.T) {
 	dir := gitRepo(t)
 	commitFile(t, dir, "README", "x\n")
+	ws := gitWorkspace{dir: dir}
+	spec := agentbench.TaskSpec{ID: "a", Targets: []string{"scratch/new"}}
+	// The first repeat brings the workspace to its baseline (§12.33)...
+	if _, err := ws.Prepare(context.Background(), spec, 1); err != nil {
+		t.Fatal(err)
+	}
+	// ...after which a repeat with nothing to clear is a no-op.
 	before, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
-	commit, err := gitWorkspace{dir: dir}.Prepare(context.Background(), agentbench.TaskSpec{ID: "a", Targets: []string{"scratch/new"}}, 1)
+	commit, err := ws.Prepare(context.Background(), spec, 2)
 	after, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil || commit != "" || string(before) != string(after) {
 		t.Fatalf("nothing to clear is a no-op without an empty commit: %q %v", commit, err)
@@ -122,8 +132,10 @@ func TestGitWorkspace_ArchivesAFailedTasksLeftovers_600(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "stray")); !os.IsNotExist(err) {
 		t.Error("an untracked leftover must be gone from the tree")
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "scratch/old/old.go")); string(b) != "package old\n" {
-		t.Errorf("a modified tracked file must be back to HEAD, got %q", b)
+	// §12.33: the tracked file is an earlier task's, so it is removed; its
+	// half-done edit is in the archived stash (checked below).
+	if _, err := os.Stat(filepath.Join(dir, "scratch/old/old.go")); !os.IsNotExist(err) {
+		t.Errorf("an earlier task's tracked file must be gone (§12.33)")
 	}
 	if _, err := os.Stat(ignored); err != nil {
 		t.Error("an ignored path must be left alone")
@@ -231,8 +243,14 @@ func TestWorkspaceLine(t *testing.T) {
 		!strings.Contains(got, "git history") {
 		t.Fatalf("got %q", got)
 	}
-	// §12.30: targets, state and history (harness 11): no caveat.
+	// §12.30: targets, state and history (harness 11): earlier tasks'
+	// committed files still carried over (§12.33, #808).
 	j.Manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsStateAndHistory
+	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || !strings.Contains(got, "committed files carried over") {
+		t.Fatalf("got %q", got)
+	}
+	// §12.33: the baseline reset (harness 12): no caveat.
+	j.Manifest.WorkspaceReset = agentbench.WorkspaceResetBaseline
 	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || strings.Contains(got, "carried over") ||
 		strings.Contains(got, "git history") {
 		t.Fatalf("got %q", got)
@@ -250,7 +268,12 @@ func TestGitWorkspace_PrepareBootstrapsAMissingWorkspace(t *testing.T) {
 	if _, err := (gitWorkspace{dir: dir}).Prepare(context.Background(), spec, 1); err != nil {
 		t.Fatalf("Prepare on a missing workspace: %v", err)
 	}
-	out, err := exec.Command("git", "-C", dir, "log", "--format=%s").CombinedOutput()
+	// Bootstrapped as the daemon would; §12.33's baseline then replaces that
+	// history with one root commit, so the bootstrap commit is in the archive.
+	if b, err := os.ReadFile(filepath.Join(dir, ".vornik", "bootstrap.md")); err != nil || string(b) != executor.BootstrapMarkerBody {
+		t.Fatalf("the bootstrap marker is missing or not the daemon's: %v %q", err, b)
+	}
+	out, err := exec.Command("git", "--git-dir="+dir+".history.git", "log", "--all", "--format=%s").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "bootstrap: vornik-managed project") {
 		t.Fatalf("the workspace was not bootstrapped as the daemon would: %v %s", err, out)
 	}

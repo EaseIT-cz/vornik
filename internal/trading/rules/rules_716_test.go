@@ -14,7 +14,7 @@ func TestDefaultPolicy_BlockLongAtScoreIsMinusOne_716(t *testing.T) {
 func TestMarketGate_BlockLongAtScore_716(t *testing.T) {
 	spy := Scorecard{LastClose: 110, SMA50: 105, SMA200: 100}
 	in := func(s int) Inputs {
-		return Inputs{SPY: &spy, Regimes: map[string]Regime{"us": {Label: "RISK_OFF", Score: s, Components: 6}}}
+		return Inputs{SPY: &spy, SPYReturn3: f64(0.01), Regimes: map[string]Regime{"us": {Label: "RISK_OFF", Score: s, Components: 6}}}
 	}
 	c := Candidate{Symbol: "AAPL", Region: "us", Score: &Scorecard{Total: 4}}
 	p := DefaultPolicy()
@@ -34,7 +34,7 @@ func TestMarketGate_BlockLongAtScore_716(t *testing.T) {
 // RISK_OFF row with a zero score still blocks, as before #716.
 func TestMarketGate_DefaultIsTheLabelCheck_716(t *testing.T) {
 	spy := Scorecard{LastClose: 110, SMA50: 105, SMA200: 100}
-	in := Inputs{SPY: &spy, Regimes: map[string]Regime{"us": {Label: "RISK_OFF", Score: 0, Components: 6}}}
+	in := Inputs{SPY: &spy, SPYReturn3: f64(0.01), Regimes: map[string]Regime{"us": {Label: "RISK_OFF", Score: 0, Components: 6}}}
 	c := Candidate{Symbol: "AAPL", Region: "us", Score: &Scorecard{Total: 4}}
 	if g := marketGate(c, in, DefaultPolicy()); g != "regime" {
 		t.Fatalf("RISK_OFF with score 0 at -1: want regime, got %q", g)

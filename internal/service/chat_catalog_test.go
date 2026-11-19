@@ -176,10 +176,10 @@ func TestShippedPricing_CurrentCodexModelsAreInTheCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][2]float64{
-		"gpt-6-luna":    {0.10, 0.50},
-		"gpt-5.6-terra": {2.00, 12.00},
-		"gpt-5.6-luna":  {0.20, 1.20},
+	want := map[string][3]float64{
+		"gpt-6-luna":    {0.10, 0.50, 0.01},
+		"gpt-5.6-terra": {2.00, 12.00, 0.20},
+		"gpt-5.6-luna":  {0.20, 1.20, 0.02},
 	}
 	inCatalog := map[string]bool{}
 	for _, m := range chatModelCatalogFromPricing(table, isOpenAIModelID, "openai") {
@@ -191,8 +191,8 @@ func TestShippedPricing_CurrentCodexModelsAreInTheCatalog(t *testing.T) {
 			t.Errorf("pricing.yaml has no row for %s", id)
 			continue
 		}
-		if e.InputUSDPerMillion != rates[0] || e.OutputUSDPerMillion != rates[1] {
-			t.Errorf("%s = %v/%v, want %v/%v", id, e.InputUSDPerMillion, e.OutputUSDPerMillion, rates[0], rates[1])
+		if e.InputUSDPerMillion != rates[0] || e.OutputUSDPerMillion != rates[1] || e.CacheReadPerMillion != rates[2] {
+			t.Errorf("%s = %v/%v cache_read %v, want %v/%v cache_read %v", id, e.InputUSDPerMillion, e.OutputUSDPerMillion, e.CacheReadPerMillion, rates[0], rates[1], rates[2])
 		}
 		if !inCatalog[id] {
 			t.Errorf("%s missing from the OpenAI catalog", id)

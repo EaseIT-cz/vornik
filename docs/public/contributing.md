@@ -22,6 +22,19 @@ for either) is on the [Licensing](licensing.md) page.
 - If you contribute on behalf of an employer, you may need your employer's
   consent (corporate CLA) — contact `cla@vornik.io`.
 
+## What happens to your pull request
+
+This repository is published from Vornik's main repository, so a pull request
+here is not merged. When we accept it, we port it into the main repository,
+keeping you as the author or crediting you as co-author.
+
+- The next public sync commit lists you as a co-author, so the credit shows
+  on this repository's history.
+- When that sync is published, your pull request is closed with a comment
+  linking the commit that carries your change. If we take only part of it, we
+  say which part and leave the pull request open.
+- We aim to answer every pull request within a week.
+
 ## Development setup
 
 ```sh

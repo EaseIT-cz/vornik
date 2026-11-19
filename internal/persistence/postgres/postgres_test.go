@@ -11,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -191,6 +192,14 @@ type mockDBTX struct {
 	execQuery   string
 	execArgs    []interface{}
 	execError   error
+	// execHistory holds every ExecContext call, for a method that runs more
+	// than one statement (TradingFillRepository.Record, #823).
+	execHistory []mockExec
+}
+
+type mockExec struct {
+	query string
+	args  []interface{}
 }
 
 func (m *mockDBTX) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
@@ -208,6 +217,7 @@ func (m *mockDBTX) ExecContext(ctx context.Context, query string, args ...interf
 	m.execCalled = true
 	m.execQuery = query
 	m.execArgs = args
+	m.execHistory = append(m.execHistory, mockExec{query: query, args: args})
 	return nil, m.execError
 }
 
@@ -350,6 +360,12 @@ func TestTradingFillRepository_Record(t *testing.T) {
 	err := repo.Record(context.Background(), fill)
 
 	assert.NoError(t, err)
+	// Two statements: the insert, then the order's filled_qty recompute
+	// (GitHub #823).
+	require.Len(t, db.execHistory, 2)
+	assert.Contains(t, db.execHistory[1].query, "UPDATE trading_orders")
+	assert.Equal(t, []interface{}{"ord-1", "proj-1"}, db.execHistory[1].args)
+	db.execQuery, db.execArgs = db.execHistory[0].query, db.execHistory[0].args
 	assert.Contains(t, db.execQuery, "INSERT INTO trading_fills")
 	assert.Contains(t, db.execQuery, "ON CONFLICT (id) DO NOTHING")
 	assert.Len(t, db.execArgs, 12)

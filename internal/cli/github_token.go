@@ -21,11 +21,13 @@ import (
 //
 // Tokens are valid ~1h; mint one per publish step.
 var (
-	ghTokenAppID   int64
-	ghTokenInstall int64
-	ghTokenKeyPath string
-	ghTokenAPIBase string
-	ghTokenWithExp bool
+	ghTokenAppID    int64
+	ghTokenInstall  int64
+	ghTokenKeyPath  string
+	ghTokenAPIBase  string
+	ghTokenWithExp  bool
+	ghTokenRepos    []string
+	ghTokenUnscoped bool
 )
 
 var githubTokenCmd = &cobra.Command{
@@ -46,12 +48,20 @@ func init() {
 	f.StringVar(&ghTokenKeyPath, "key", "", "path to the App private key PEM (required)")
 	f.StringVar(&ghTokenAPIBase, "api-base", "https://api.github.com", "GitHub REST API base URL")
 	f.BoolVar(&ghTokenWithExp, "with-expiry", false, "also print the RFC3339 expiry on a second line")
+	f.StringArrayVar(&ghTokenRepos, "repo", nil, "scope the token to this owner/name repository (repeatable; #820)")
+	f.BoolVar(&ghTokenUnscoped, "unscoped", false, "mint a token for every repository the installation covers")
 	rootCmd.AddCommand(githubTokenCmd)
 }
 
 func runGitHubToken(cmd *cobra.Command, _ []string) error {
 	if ghTokenAppID == 0 || ghTokenInstall == 0 || ghTokenKeyPath == "" {
 		return fmt.Errorf("--app-id, --installation-id, and --key are all required")
+	}
+	switch {
+	case len(ghTokenRepos) == 0 && !ghTokenUnscoped:
+		return fmt.Errorf("name the token's repositories with --repo owner/name (repeatable), or pass --unscoped for every repository the installation covers")
+	case len(ghTokenRepos) > 0 && ghTokenUnscoped:
+		return fmt.Errorf("--repo and --unscoped are exclusive")
 	}
 	keyBytes, err := os.ReadFile(ghTokenKeyPath)
 	if err != nil {
@@ -63,7 +73,7 @@ func runGitHubToken(cmd *cobra.Command, _ []string) error {
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	token, expires, err := github.MintInstallationToken(
-		cmd.Context(), client, ghTokenAPIBase, ghTokenAppID, ghTokenInstall, key)
+		cmd.Context(), client, ghTokenAPIBase, ghTokenAppID, ghTokenInstall, key, ghTokenRepos)
 	if err != nil {
 		return err
 	}

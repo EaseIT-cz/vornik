@@ -88,6 +88,10 @@ type executionState struct {
 	// by the recovery step's normal completion. nil = no recovery
 	// context pending for the next step.
 	PendingRecovery *RecoveryContext `json:"pendingRecovery,omitempty"`
+	// previousAttemptChecked: this run has decided whether its first agent
+	// step gets context.previousAttempt (GitHub #604, executor design §6.2).
+	// Not persisted: each run decides again, for its own first agent step.
+	previousAttemptChecked bool
 	// InFlightStepID / InFlightContainerID / InFlightTempRoot record the
 	// container running the CURRENT step, persisted right after it starts and
 	// before the executor blocks on its exit. If the daemon crashes UNCLEANLY

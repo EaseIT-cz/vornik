@@ -3042,6 +3042,71 @@ func RunTradingFillSuite(t *testing.T, repo persistence.TradingFillRepository, o
 			t.Errorf("SumVolume = %v, want %v", volume, want)
 		}
 	})
+	// GitHub #823 (trading-fill-reconciliation design, Amendment
+	// 2026-11-18): an order's filled_qty follows the fills the daemon
+	// stores, so a TRAIL stop-out whose broker row carried no count still
+	// starts the rule engine's re-entry cooldown. Found at: production
+	// (13 filled rows at 0, 2026-11-18); tested here at integration on both
+	// drivers (the pgvector lane runs this suite on Postgres).
+	t.Run("FilledQty_follows_the_stored_fills_823", func(t *testing.T) {
+		orderQty := func(id string) float64 {
+			t.Helper()
+			rows, err := orderRepo.List(ctx, persistence.TradingOrderFilter{ProjectID: &project, PageSize: 500})
+			if err != nil {
+				t.Fatalf("list orders: %v", err)
+			}
+			for _, o := range rows {
+				if o.ID == id {
+					return o.FilledQty
+				}
+			}
+			t.Fatalf("order %s not found", id)
+			return 0
+		}
+		record := func(id string, qty float64, status string, filled float64) {
+			t.Helper()
+			if err := orderRepo.Record(ctx, &persistence.TradingOrder{
+				ID: id, ProjectID: project, IdempotencyKey: id, Mode: "paper", Symbol: "SAP",
+				Action: "SELL", OrderType: "TRAIL", Qty: qty, TimeInForce: "GTC", Status: status, FilledQty: filled,
+			}); err != nil {
+				t.Fatalf("record %s: %v", id, err)
+			}
+		}
+		fill := func(id, orderID string, qty float64) {
+			t.Helper()
+			if err := repo.Record(ctx, &persistence.TradingFill{
+				ID: id, OrderID: orderID, ProjectID: project, Symbol: "SAP", Qty: qty, Price: 224, Source: "broker_reconcile",
+			}); err != nil {
+				t.Fatalf("insert fill %s: %v", id, err)
+			}
+		}
+
+		stop := uniqueID("ord")
+		record(stop, 4, "filled", 0) // the broker's filled row, with no count
+		fill(uniqueID("fill"), stop, 4)
+		if got := orderQty(stop); got != 4 {
+			t.Fatalf("filled_qty after the stop's fill = %v, want 4", got)
+		}
+		record(stop, 4, "filled", 0) // a later count-less row does not lower it
+		if got := orderQty(stop); got != 4 {
+			t.Fatalf("filled_qty after a count-less re-send = %v, want 4", got)
+		}
+
+		partial := uniqueID("ord")
+		record(partial, 10, "partial", 0)
+		fill(uniqueID("fill"), partial, 3)
+		fill(uniqueID("fill"), partial, 2)
+		if got := orderQty(partial); got != 5 {
+			t.Fatalf("filled_qty after two partial fills = %v, want 5", got)
+		}
+
+		over := uniqueID("ord")
+		record(over, 2, "filled", 0)
+		fill(uniqueID("fill"), over, 3) // a sum above qty is a mismatch, never stored
+		if got := orderQty(over); got != 0 {
+			t.Fatalf("filled_qty after a fill above qty = %v, want 0 (left as the broker sent it)", got)
+		}
+	})
 }
 
 // RunTradingSafetyEventSuite — append-only safety event log,
@@ -3484,6 +3549,8 @@ func RunKnowledgeEntitySuite(t *testing.T, repo persistence.KnowledgeEntityRepos
 
 	// GitHub #449: NameLike is one rule on both drivers.
 	runKnowledgeEntityNameLikeCases(t, repo)
+	// GitHub #459: vectorless entities are found and filled.
+	runKnowledgeEntityReembedCases(t, repo)
 
 	t.Run("UpdateLifecycle_flips_state", func(t *testing.T) {
 		if err := repo.UpdateLifecycle(ctx, ent.ID, "quarantined"); err != nil {

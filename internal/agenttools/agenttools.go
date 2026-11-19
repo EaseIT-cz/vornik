@@ -190,6 +190,9 @@ var Tools = []Tool{
 	{Name: "memory_search", AlwaysGranted: true, Advertise: AdvertiseWhenMemoryURL},
 	{Name: "get_conversation_window", Advertise: AdvertiseWhenTaskBound},
 	{Name: "summarize_thread", Advertise: AdvertiseWhenTaskBound},
+	// forge_diff_part reads the masked diff's further parts for a review role
+	// (GitHub #814, github-app-channel design "Reading a large diff in parts").
+	{Name: "forge_diff_part", Advertise: AdvertiseWhenTaskBound},
 	// skill_fetch reads the skill index. Universal since 2026-08-14, gated in
 	// advertisement since 2026-08-22 — it used to ride the unfiltered
 	// extras_ungated append and was advertised-then-refused in the fallback

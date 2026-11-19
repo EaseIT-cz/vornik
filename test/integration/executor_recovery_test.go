@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence/postgres"
@@ -78,15 +79,20 @@ func TestExecutor_RecoverRunningExecution(t *testing.T) {
 
 	require.NoError(t, exec.Recover(context.Background()))
 
-	require.Eventually(t, func() bool {
-		var taskStatus string
+	// GitHub #834: recovery runs asynchronously, and under host load (a gate
+	// beside the agent bench) 5 s was not enough; the failure also said
+	// nothing about where recovery stood. 30 s, and the last statuses seen.
+	var taskStatus, execStatus string
+	finished := assert.Eventually(t, func() bool {
 		if err := db.QueryRow(`SELECT status FROM tasks WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
 			return false
 		}
-		var execStatus string
 		if err := db.QueryRow(`SELECT status FROM executions WHERE id = $1`, execID).Scan(&execStatus); err != nil {
 			return false
 		}
 		return taskStatus == "COMPLETED" && execStatus == "COMPLETED"
-	}, 5*time.Second, 25*time.Millisecond)
+	}, 30*time.Second, 25*time.Millisecond)
+	if !finished {
+		t.Fatalf("recovery did not finish: last task status %q, execution status %q", taskStatus, execStatus)
+	}
 }

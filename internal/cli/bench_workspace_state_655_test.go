@@ -45,10 +45,14 @@ func TestGitWorkspace_PrepareResetsWorkflowStateWithTheTargets_655(t *testing.T)
 			t.Errorf("%s must be gone before the task runs", gone)
 		}
 	}
-	for _, kept := range []string{".vornik/bootstrap.md", "scratch/lhworker/backoff.go"} {
-		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
-			t.Errorf("%s is neither a target nor workflow state and must be left alone", kept)
-		}
+	// Since §12.33 (#808) an earlier task's file is removed too: only the
+	// baseline carries over. This assertion used to say it "must be left
+	// alone", which was the leak.
+	if _, err := os.Stat(filepath.Join(dir, ".vornik/bootstrap.md")); err != nil {
+		t.Error("the baseline marker must stay")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scratch/lhworker/backoff.go")); !os.IsNotExist(err) {
+		t.Error("an earlier task's file must be gone before the task runs (§12.33)")
 	}
 	msg, _ := exec.Command("git", "-C", dir, "log", "-1", "--format=%s").Output()
 	if !strings.Contains(string(msg), "lh-06 r2") || !strings.Contains(string(msg), "§12.29") {
@@ -65,14 +69,11 @@ func TestGitWorkspace_PrepareResetsWorkflowStateWithTheTargets_655(t *testing.T)
 	}
 }
 
-func TestWorkflowStatePathsAreTheDevPipelineState_655(t *testing.T) {
-	want := map[string]bool{".autonomy": true, "BACKLOG.md": true}
-	if len(agentbench.WorkflowStatePaths) != len(want) {
-		t.Fatalf("WorkflowStatePaths = %v", agentbench.WorkflowStatePaths)
-	}
-	for _, p := range agentbench.WorkflowStatePaths {
-		if !want[p] {
-			t.Fatalf("unexpected workflow state path %q", p)
-		}
+// The baseline is the two files the harness writes (§12.33, #808); it
+// replaced WorkflowStatePaths, which only named what to remove.
+func TestBaselineIsTheHarnessFiles_808(t *testing.T) {
+	got := baselineFiles()
+	if len(got) != 2 || got["go.mod"] != agentbench.BaselineGoMod || got[".vornik/bootstrap.md"] == "" {
+		t.Fatalf("baseline = %v", got)
 	}
 }

@@ -20,8 +20,8 @@ import (
 )
 
 func TestProvenanceAppTokenFor508(t *testing.T) {
-	src := &github.InstallationTokenSource{Mint: func(_ context.Context, api string, _, _ int64, _ string) (string, time.Time, error) {
-		return "tok-" + api, time.Now().Add(time.Hour), nil
+	src := &github.InstallationTokenSource{Mint: func(_ context.Context, m github.KeyFileMint) (string, time.Time, error) {
+		return "tok-" + m.APIBase, time.Now().Add(time.Hour), nil
 	}}
 	p := &registry.Project{ID: "a"}
 	p.GitHub = registry.ProjectGitHub{AppID: 1, InstallationID: 77, PrivateKeyPath: "/k", Repo: "Acme/widgets"}

@@ -3,6 +3,7 @@ package featuredoctor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -12,8 +13,8 @@ type stubTradingProbe struct {
 	err      error
 }
 
-func (s stubTradingProbe) ValidateSeries(_ context.Context) ([]TradingSeriesFinding, error) {
-	return s.findings, s.err
+func (s stubTradingProbe) ValidateSeries(_ context.Context) (TradingSeriesReport, error) {
+	return TradingSeriesReport{Findings: s.findings, LedgerSymbols: 4, LedgerProjects: 1, LedgerWired: true}, s.err
 }
 
 func TestTradingFeature_VerifyClean_OK(t *testing.T) {
@@ -77,4 +78,27 @@ func TestTradingFeature_Diagnose(t *testing.T) {
 	if dirty.Status != StatusDegraded {
 		t.Errorf("findings should diagnose StatusDegraded, got %s", dirty.Status)
 	}
+}
+
+// GitHub #822: the clean result states what the ledger comparison examined,
+// so "no anomalies" is never read as "never looked".
+func TestVerifyTradingSeries_CleanStatesTheLedgerCount_822(t *testing.T) {
+	res := verifyTradingSeries(context.Background(), Deps{Trading: stubTradingProbe{}})
+	if !res.OK || !strings.Contains(res.Detail, "ledger compared 4 symbols in 1 projects") {
+		t.Fatalf("clean verify = %+v, want OK with the ledger count", res)
+	}
+}
+
+// Review e95c F2: a probe without the ledger's repositories says so.
+func TestVerifyTradingSeries_UnwiredLedgerSaysSo_822(t *testing.T) {
+	res := verifyTradingSeries(context.Background(), Deps{Trading: unwiredLedgerProbe{}})
+	if !strings.Contains(res.Detail, "ledger not compared") {
+		t.Fatalf("detail = %q", res.Detail)
+	}
+}
+
+type unwiredLedgerProbe struct{}
+
+func (unwiredLedgerProbe) ValidateSeries(context.Context) (TradingSeriesReport, error) {
+	return TradingSeriesReport{}, nil
 }

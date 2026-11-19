@@ -465,6 +465,11 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// hourly detector writes triggers when a workflow's last-24h
 		// roll-up regresses against the 7-day baseline. Operators
 		// list + dismiss + feed evidence to the memetic architect.
+		// The learning study's bench routes (GitHub #809; bench_learning_809.go):
+		// admin-gated, and 404 on a daemon that is not a learning-study bench.
+		mux.HandleFunc("/api/v1/admin/bench/freeze", server.AdminBenchFreeze)
+		mux.HandleFunc("/api/v1/admin/bench/learned-state", server.AdminBenchLearnedState)
+		mux.HandleFunc("/api/v1/admin/bench/triggers", server.AdminBenchCreateTrigger)
 		mux.HandleFunc("/api/v1/admin/workflow-healing/triggers", server.AdminHealingTriggersList)
 		mux.HandleFunc("/api/v1/admin/workflow-healing/triggers/", server.adminHealingTriggersItem)
 		// Override surface (Phase B operator-tuning, migration 81) —
@@ -960,6 +965,11 @@ func (s *Server) apiV1ProjectsHandler(w http.ResponseWriter, r *http.Request) {
 			// /messages and /messages/{id}/answer first; they share
 			// the /tasks/{id}/messages prefix that the suffix
 			// matchers below would otherwise miss.
+			// GitHub #814: a review role reads its masked diff's parts.
+			if r.Method == http.MethodGet && strings.Contains(taskPart, "/executions/") && strings.HasSuffix(taskPart, "/diff-part") {
+				s.ForgeDiffPart(w, r)
+				return
+			}
 			if strings.HasSuffix(taskPart, "/messages") {
 				switch r.Method {
 				case http.MethodGet:

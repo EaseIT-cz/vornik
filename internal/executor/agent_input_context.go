@@ -138,6 +138,9 @@ func assembleAgentPrompt(task *persistence.Task, stepPromptArg string, opts *age
 	// Recovery context: render the structured failure signal into the prompt
 	// the model reads (the structured copy still lands under context.recovery
 	// for programmatic consumers). See https://docs.vornik.io §2.
+	if opts.PreviousAttempt != nil {
+		prompt += "\n\n" + buildPreviousAttemptBlock(opts.PreviousAttempt)
+	}
 	if opts.RecoveryContext != nil {
 		prompt += "\n\n" + buildRecoveryContextBlock(opts.RecoveryContext)
 	}
@@ -272,6 +275,9 @@ func buildAgentContextMap(taskType, prompt string, timeContext currentDateTimeCo
 	}
 	// Recovery shape: a prior step failed and the workflow routed here to
 	// propose alternatives via a decision checkpoint.
+	if opts.PreviousAttempt != nil {
+		contextMap["previousAttempt"] = opts.PreviousAttempt
+	}
 	if opts.RecoveryContext != nil {
 		contextMap["recovery"] = opts.RecoveryContext
 	}

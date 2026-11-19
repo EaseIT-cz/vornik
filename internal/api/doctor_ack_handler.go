@@ -55,7 +55,7 @@ func (h *DoctorHandlers) AckDoctorFinding(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "server not wired; cannot authenticate")
 		return
 	}
-	if !h.server.requireAdminGate(w, r) {
+	if !h.requireAdminClass(w, r) { // GitHub #816: the doctor's own gate, both editions
 		return
 	}
 	var req ackRequest

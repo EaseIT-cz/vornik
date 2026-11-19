@@ -122,6 +122,12 @@ type InboxData struct {
 	AgentApplyFailed       []applyFailedView
 	AgentApplyFailedMore   bool
 	AgentApplyFailedFailed bool
+	// ApproverNotices are the withheld-tools notices nobody acknowledged
+	// (GitHub #806); the same viewer as AgentApplyFailed.
+	ApproverNotices []NoticeCard
+	// CanClearApproverCards: the viewer may Dismiss and Acknowledge (the
+	// SurfaceApproverNotices gate); otherwise the cards render read-only.
+	CanClearApproverCards bool
 }
 
 // NavAttentionCount implements navAttentionCounter (nav_model.go) so the
@@ -370,6 +376,9 @@ func (s *Server) inboxData(r *http.Request, withRequests bool) InboxData {
 	data.StandingGrants = s.loadStandingGrants(r)
 	data.AgentApprovals, data.AgentApprovalsFailed = s.loadAgentApprovals(r)
 	data.AgentApplyFailed, data.AgentApplyFailedMore, data.AgentApplyFailedFailed = s.loadAgentApplyFailed(r)
+	data.ApproverNotices = s.loadApproverNotices(r)
+	data.CanClearApproverCards = s.approverNotices != nil &&
+		api.OperatorSurfaceAccessFor(r, s.isAdminKeyForSurface, api.SurfaceApproverNotices) == api.OperatorSurfaceAllowed
 	if v := strings.TrimSpace(r.URL.Query().Get("refused")); v != "" {
 		data.BrokerRefused = strings.Split(v, ",")
 	}

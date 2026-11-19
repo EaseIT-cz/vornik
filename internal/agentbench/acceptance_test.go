@@ -104,13 +104,34 @@ func TestShippedAcceptanceSuites(t *testing.T) {
 	if err := json.Unmarshal(raw, &tasks); err != nil {
 		t.Fatal(err)
 	}
+	n := checkSuitesOf(t, "tasksets", tasks)
+	if n < 4 {
+		t.Fatalf("found %d shipped suites, want at least the 4 slow-hardware tasks", n)
+	}
+	// The unreleased set (#260, #790): absent in a Community checkout, where
+	// the export removes tasksets/unreleased/.
+	if raw, err := os.ReadFile("tasksets/unreleased/dev-swarm-rework-2026.json"); err == nil {
+		var rework []TaskSpec
+		if err := json.Unmarshal(raw, &rework); err != nil {
+			t.Fatal(err)
+		}
+		if got := checkSuitesOf(t, "tasksets/unreleased", rework); got != len(rework) || got < 6 {
+			t.Fatalf("unreleased set: %d of %d tasks have a suite, want every one (at least 6)", got, len(rework))
+		}
+	}
+}
+
+// checkSuitesOf runs each task's suite against its reference (must pass)
+// and its broken variant (must fail), and counts the suites.
+func checkSuitesOf(t *testing.T, base string, tasks []TaskSpec) int {
+	t.Helper()
 	n := 0
 	for _, task := range tasks {
 		if task.Acceptance == "" {
 			continue
 		}
 		n++
-		suite := filepath.Join("tasksets", task.Acceptance)
+		suite := filepath.Join(base, task.Acceptance)
 		pkg := filepath.Base(task.Targets[0])
 		for variant, wantPass := range map[string]bool{"reference": true, "broken": false} {
 			dir := t.TempDir()
@@ -131,9 +152,7 @@ func TestShippedAcceptanceSuites(t *testing.T) {
 			}
 		}
 	}
-	if n < 4 {
-		t.Fatalf("found %d shipped suites, want at least the 4 slow-hardware tasks", n)
-	}
+	return n
 }
 
 // Changing a suite changes what "passed" means: the arms are incomparable.

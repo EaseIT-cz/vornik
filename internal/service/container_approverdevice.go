@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/ui"
 	"vornik.io/vornik/internal/webpush"
 )
 
@@ -170,4 +172,31 @@ func (c *Container) approverPushSender() *webpush.Sender {
 		return nil
 	}
 	return webpush.NewSender(webpush.NewVAPID(key, strings.TrimRight(origin, "/")))
+}
+
+// approverNoticeActions adapts the approver-device service to the console
+// inbox's #806 writes. A card that no longer applies maps to
+// ui.ErrNotChangeable (409).
+func (c *Container) approverNoticeActions() *ui.ApproverNoticeActions {
+	notChangeable := func(err error) error {
+		if errors.Is(err, persistence.ErrApprovalNoTransition) || errors.Is(err, persistence.ErrNotFound) || errors.Is(err, approverdevice.ErrUnknownNotice) {
+			return ui.ErrNotChangeable
+		}
+		return err
+	}
+	return &ui.ApproverNoticeActions{
+		Notices: func(ctx context.Context) []ui.NoticeCard {
+			var out []ui.NoticeCard
+			for _, n := range c.approverDeviceService().Notices(ctx) {
+				out = append(out, ui.NoticeCard{Key: n.Key, Text: n.Text})
+			}
+			return out
+		},
+		Acknowledge: func(ctx context.Context, key, actor string) error {
+			return notChangeable(c.approverDeviceService().AcknowledgeNotice(ctx, key, actor))
+		},
+		Dismiss: func(ctx context.Context, id, actor string) error {
+			return notChangeable(c.approverDeviceService().DismissApplyFailed(ctx, id, actor))
+		},
+	}
 }

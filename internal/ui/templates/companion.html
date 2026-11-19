@@ -44,11 +44,32 @@ claude plugin install vornik-companion@vornik</pre>
                 </li>
             </ol>
 
+            <h2 class="text-base font-semibold text-gray-100 pt-2">Connect AWS DevOps Agent</h2>
+            <p class="text-sm text-gray-300">
+                Let an AWS DevOps Agent investigation recall what your engineers' assistants recorded here.
+                This key can read memory and approved skills only: it cannot write to memory or start work.
+            </p>
+            <ol class="list-decimal ml-5 space-y-3 text-sm text-gray-300">
+                <li>
+                    Create the key. It is shown once, in the box above.
+                    <div class="mt-2">
+                        <button id="companion-create-aws" type="button" class="v-btn">Create a read-only key for AWS DevOps Agent</button>
+                    </div>
+                </li>
+                <li>
+                    In the AWS DevOps Agent console, connect Vornik with host
+                    <span class="font-mono text-gray-100">{{.VornikHost}}</span>, port
+                    <span class="font-mono text-gray-100">443</span>, and the key.
+                    Allow only the tools the key lists. Steps:
+                    <a class="underline" href="https://docs.vornik.io/guides/aws-devops-agent/">AWS DevOps Agent guide</a>.
+                </li>
+            </ol>
+
             <noscript><div class="text-sm text-red-700 dark:text-red-400">Creating and listing keys needs JavaScript.</div></noscript>
 
             <h2 class="text-base font-semibold text-gray-100 pt-2">Your companion keys</h2>
             <table class="w-full text-sm">
-                <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Name</th><th>Client</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+                <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Name</th><th>Client</th><th>Can</th><th>Created</th><th>Last used</th><th></th></tr></thead>
                 <tbody id="companion-keys"></tbody>
             </table>
             <div id="companion-root" class="hidden" data-vornik-url="{{.VornikURL}}"></div>

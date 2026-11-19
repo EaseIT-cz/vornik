@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/approverdevice"
 )
 
 // The surfaces of the agent read re-judge (agent-administered design §6.5,
@@ -64,29 +66,41 @@ func joinNotes(notes ...string) string {
 	return strings.Join(out, "; ")
 }
 
-// agentWithheldToolLines are the device's lines for every agent read entry
-// with suspended tools (§6.5 item 6), in the manager's order.
-func (c *Container) agentWithheldToolLines(_ context.Context) []string {
+// agentWithheldToolLines are the device's notices for every agent read entry
+// with suspended tools (§6.5 item 6), in the manager's order. Each notice's
+// key covers its kind, project, server and sorted tool names, so a notice
+// for a different set of tools is shown again after an acknowledgement
+// (GitHub #806, part 06 §6.5 amendment 2026-11-17).
+func (c *Container) agentWithheldToolLines(_ context.Context) []approverdevice.Notice {
 	if c == nil || c.mcpManager == nil {
 		return nil
 	}
 	connected, _ := c.mcpManager.AgentReadVerdicts()
-	var out []string
+	var out []approverdevice.Notice
 	for _, v := range connected {
 		ns, _ := agentns.FromID(v.ProjectID)
 		where := "Withheld: " + ns + "'s server " + v.Server + " in " + agentadmin.ProjectSlug(ns, v.ProjectID) + ". "
 		if tools := append(append([]string(nil), v.Suspended...), v.Unlisted...); len(tools) > 0 {
-			out = append(out, where+"Vornik stopped "+quoteNames(tools)+
-				": the server now says they change things (or no longer lists them), so they no longer run as reads. "+
-				"Your assistant can ask for them again only as changes you approve one by one.")
+			out = append(out, approverdevice.Notice{Key: withheldNoticeKey("suspended", v.ProjectID, v.Server, tools),
+				Text: where + "Vornik stopped " + quoteNames(tools) +
+					": the server now says they change things (or no longer lists them), so they no longer run as reads. " +
+					"Your assistant can ask for them again only as changes you approve one by one."})
 		}
 		if len(v.Held) > 0 {
-			out = append(out, where+"Vornik stopped "+quoteNames(v.Held)+" when the server said they change things. "+
-				"They stay stopped, even if the server says otherwise now, until you approve them again: "+
-				"your assistant can add the server again, and you approve that here.")
+			out = append(out, approverdevice.Notice{Key: withheldNoticeKey("held", v.ProjectID, v.Server, v.Held),
+				Text: where + "Vornik stopped " + quoteNames(v.Held) + " when the server said they change things. " +
+					"They stay stopped, even if the server says otherwise now, until you approve them again: " +
+					"your assistant can add the server again, and you approve that here."})
 		}
 	}
 	return out
+}
+
+// withheldNoticeKey keys a withheld-tools notice by what it says.
+func withheldNoticeKey(kind, project, server string, tools []string) string {
+	sorted := append([]string(nil), tools...)
+	sort.Strings(sorted)
+	return approverdevice.NoticeKey(append([]string{"withheld", kind, project, server}, sorted...)...)
 }
 
 // quoteNames quotes each name: it comes from the server's listing, and a

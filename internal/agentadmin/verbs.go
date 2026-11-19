@@ -100,7 +100,8 @@ func (r *Renderer) createProject(st *State, raw json.RawMessage) (Change, error)
 	}
 	p := &ProjectState{
 		ID: id, DisplayName: in.Slug, Purpose: in.Purpose, MonthlyUSD: st.DefaultBudgetUSD,
-		DefaultWorkflowID: wfID, Swarm: SwarmState{ID: id, Roles: []RoleSpec{defaultRole()}},
+		MaxConcurrentTasks: 1, // as the template's fixed line was (§6.9)
+		DefaultWorkflowID:  wfID, Swarm: SwarmState{ID: id, Roles: []RoleSpec{defaultRole()}},
 	}
 	projectYAML, err := r.renderProject(ns, p)
 	if err != nil {
@@ -235,15 +236,19 @@ func (r *Renderer) defineSwarm(st *State, raw json.RawMessage) (Change, error) {
 		return Change{}, err
 	}
 	modelClauses := modelReach(st, roles, &c)
-	if len(changed) > 0 || len(modelClauses) > 0 {
+	raises, returns := roleLimitClauses(st, p.Swarm.Roles, roles)
+	if len(changed) > 0 || len(modelClauses) > 0 || len(raises) > 0 {
 		c.Class = Widening
 		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to change the roles of %q.", ns, id)
-		for _, m := range modelClauses {
+		for _, m := range append(modelClauses, raises...) {
 			c.Sentence += " " + m
 		}
 		if len(changed) > 0 {
 			c.Sentence += fmt.Sprintf(" The workflow %s.", strings.Join(changed, "; the workflow "))
 		}
+	}
+	for _, r := range returns {
+		c.Sentence += " " + r
 	}
 	return c, nil
 }
@@ -329,7 +334,11 @@ func buildRoles(st *State, p *ProjectState, in []RoleInput) ([]RoleSpec, string)
 		if why != "" {
 			return nil, "role " + ri.Name + ": " + why
 		}
-		roles = append(roles, RoleSpec{Name: ri.Name, Description: firstLine(ri.Instructions), Instructions: ri.Instructions, Tools: tools, Model: model})
+		if why := roleLimitsWhy(st, ri); why != "" {
+			return nil, "role " + ri.Name + ": " + why
+		}
+		roles = append(roles, RoleSpec{Name: ri.Name, Description: firstLine(ri.Instructions), Instructions: ri.Instructions, Tools: tools, Model: model,
+			MaxTokens: ri.MaxTokens, MaxToolIterations: ri.MaxToolIterations})
 	}
 	if !seen[defaultRole().Name] {
 		roles = append(roles, defaultRole())

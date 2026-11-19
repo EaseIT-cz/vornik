@@ -647,3 +647,10 @@ func TestSubgraph_RequiresProject(t *testing.T) {
 		t.Fatal("expected error for empty projectID")
 	}
 }
+
+// ListMissingEmbedding and UpdateEmbedding satisfy the #459 methods; this fake
+// stores no vectors.
+func (r *searcherEntityRepo) ListMissingEmbedding(context.Context, int) ([]*persistence.KnowledgeEntity, error) {
+	return nil, nil
+}
+func (r *searcherEntityRepo) UpdateEmbedding(context.Context, string, []float32) error { return nil }

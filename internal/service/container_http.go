@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+
 	"vornik.io/vornik/internal/egressscan"
 
 	"vornik.io/vornik/internal/approverdevice"
@@ -252,6 +253,9 @@ func (c *Container) initHTTPServer() error {
 		api.WithMemoryPolicyEvaluations(c.repos.MemoryPolicyEvaluations),
 		api.WithMemoryFirewallMode(c.memoryFirewallMode()),
 		api.WithMemoryFirewallEditor(c.memoryFirewallEditor()),
+		// The learning study's bench routes (GitHub #809): nil gate, and so
+		// 404, on every daemon that is not a learning-study bench.
+		api.WithBenchLearning(c.benchLearningForAPI()),
 		// Workflow-healing trigger admin endpoints (Phase B).
 		api.WithHealingTriggerRepository(c.repos.HealingTriggers),
 		api.WithHealingOverrideRepository(c.repos.HealingOverrides),
@@ -1310,7 +1314,7 @@ func (c *Container) initHTTPServer() error {
 		if c.tradingSeriesMetrics != nil {
 			record = c.tradingSeriesMetrics.Set
 		}
-		tradingProbe := c.providers.TradingSeriesProbeFactory(c.Registry, c.repos.TradingSnapshots, record, c.Logger)
+		tradingProbe := c.providers.TradingSeriesProbeFactory(c.Registry, c.repos.TradingSnapshots, c.repos.TradingFills, c.repos.TradingOrders, record, c.Logger)
 		apiOpts = append(apiOpts, api.WithFeatureTradingProbe(tradingProbe))
 	}
 	// HMAC request-authentication on the /internal/trading-* endpoints
@@ -1485,18 +1489,32 @@ func (c *Container) initHTTPServer() error {
 	ghReview := c.forgeReviewCoordinator()
 	// The channel's REST client dials through the shared guard with the
 	// operator's integrations.allowed_hosts (GitHub #494).
-	ghChannel, ghEnabledProjects, err := buildGitHubChannelWithAllowedHosts(
+	ghTaskCreatorFor := taskCreatorFromRepo(ghTaskRepo, ghReview, nil,
+		c.Logger.With().Str("component", "github_task_creator").Logger(),
+		c.ciIngestForProject)
+	c.githubTaskCreatorFor = ghTaskCreatorFor
+	// GitHub #800: the registered App's bindings and their one resolver.
+	ghReg := c.setupGitHubAppBindings()
+	ghChannel, ghEnabledProjects, err := buildGitHubChannelRegistered(
 		ghProjects,
-		taskCreatorFromRepo(ghTaskRepo, ghReview, nil,
-			c.Logger.With().Str("component", "github_task_creator").Logger(),
-			c.ciIngestForProject),
+		ghTaskCreatorFor,
 		c.Config.Integrations.AllowedHosts,
 		c.Logger,
+		ghReg,
 	)
 	if err != nil {
 		return fmt.Errorf("github-app channel: %w", err)
 	}
+	if c.githubApps != nil {
+		// The route is always mounted while the bindings exist, so an App
+		// registered after boot is served from the next reload.
+		apiOpts = append(apiOpts, api.WithGitHubAppWebhookHandler(c.serveGitHubWebhook))
+	}
+	if ghChannel != nil && ghReg != nil {
+		ghChannel.SetRegisteredRoutes(c.githubApps.routes(ghTaskCreatorFor))
+	}
 	if ghChannel != nil {
+		c.githubChannel.Store(ghChannel)
 		c.GitHubChannel = ghChannel
 		ghChannel.SetAIMarker(c.aiMarker()) // EU AI Act Art 50(2): channel replies (#117)
 		c.GitHubProjects = ghEnabledProjects
@@ -1523,8 +1541,10 @@ func (c *Container) initHTTPServer() error {
 			}
 			logEvt = logEvt.Strs("project_ids", ids)
 		}
-		logEvt.Msg("github-app channel constructed")
-		apiOpts = append(apiOpts, api.WithGitHubAppWebhookHandler(ghChannel.HandleWebhook))
+		logEvt.Bool("registered_app", ghReg != nil).Msg("github-app channel constructed")
+		if c.githubApps == nil {
+			apiOpts = append(apiOpts, api.WithGitHubAppWebhookHandler(ghChannel.HandleWebhook))
+		}
 	}
 
 	// Slice 1 of the email ConversationChannel rollout: construct
@@ -2160,6 +2180,10 @@ func (c *Container) initHTTPServer() error {
 	// Requests waiting on the approver device, listed (never decided) in
 	// /inbox (agent-administered design §9.2a item 3). Read at call time.
 	if c.repos != nil && c.repos.ApproverDevices != nil {
+		// The console's Approvers page: list, pair, revoke, remove (#763).
+		if svc := c.approverDeviceService(); svc != nil {
+			uiOpts = append(uiOpts, ui.WithApproverDevices(svc))
+		}
 		uiOpts = append(uiOpts, ui.WithAgentApprovals(func(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
 			return c.approverDeviceService().ListPending(ctx)
 		}))
@@ -2169,10 +2193,13 @@ func (c *Container) initHTTPServer() error {
 			rows, more, err := c.approverDeviceService().ListApplyFailed(ctx)
 			cards := make([]ui.ApplyFailedCard, 0, len(rows))
 			for _, r := range rows {
-				cards = append(cards, ui.ApplyFailedCard{Sentence: r.Sentence, ApprovedAt: r.ApprovedAt, Reason: r.Reason})
+				cards = append(cards, ui.ApplyFailedCard{ID: r.ID, Sentence: r.Sentence, ApprovedAt: r.ApprovedAt, Reason: r.Reason, Retryable: r.Retryable})
 			}
 			return cards, more, err
 		}))
+		// The console's Dismiss and Acknowledge (GitHub #806) write through
+		// the same service as the phone, so clearing one clears the other.
+		uiOpts = append(uiOpts, ui.WithApproverNoticeActions(c.approverNoticeActions()))
 	}
 	// The overview's doctor line: the last report's error checks (GitHub #603).
 	if c.doctorHandlers != nil {
@@ -2647,6 +2674,7 @@ func (c *Container) initHTTPServer() error {
 	// model-provider probe dials under managed mode's rule for models.
 	if c.Config.Hosting.Managed() {
 		uiOpts = append(uiOpts, ui.WithOwnerModelProbe(onboarding.NewManagedChatValidator(c.Config.Hosting.ModelHosts)))
+		uiOpts = append(uiOpts, ui.WithOwnerMemoryProbe(onboarding.NewManagedMemoryValidator(c.Config.Hosting.ModelHosts))) // #807
 	}
 	if c.capabilities().ServeUI {
 		uiServer := ui.NewServer(uiOpts...)
@@ -2963,6 +2991,9 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 	// The console's credentials page (GitHub #623). Always wired: the store is
 	// created on the first write when no key exists yet.
 	opts = append(opts, ui.WithOperatorCredentials(c.newOperatorCredentials()))
+	if gh := c.newGitHubAppActions(); gh != nil { // GitHub #802
+		opts = append(opts, ui.WithGitHubApp(gh))
+	}
 	opts = append(opts, ui.WithMCPRefusals(c.mcpRefusals)) // GitHub #625 item 5
 	return opts
 }

@@ -87,7 +87,9 @@ out=$(exec_tool file_edit '{"path":"sample.txt","old_string":"line two","new_str
 assert_contains "file_edit: replace_all succeeds" "$out" "OK: replaced 2"
 
 out=$(exec_tool file_edit '{"path":"sample.txt","old_string":"nonexistent","new_string":"x"}')
-assert_contains "file_edit: not-found errors" "$out" "not found in file"
+assert_contains "file_edit: not-found errors" "$out" "ERROR: old_string not found in "
+# GitHub #831: the miss says what to do next.
+assert_contains "file_edit: not-found says how to recover" "$out" "file_read it again and copy old_string exactly"
 
 out=$(exec_tool file_edit '{"path":"missing.txt","old_string":"x","new_string":"y"}')
 assert_contains "file_edit: missing file errors" "$out" "file not found"

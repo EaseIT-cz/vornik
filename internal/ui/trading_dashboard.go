@@ -250,7 +250,13 @@ func (s *Server) Trading(w http.ResponseWriter, r *http.Request) {
 	// Trading Performance — compute realized round-trip P&L and equity
 	// curve for the window. Best-effort; nil repos silently skip each step.
 	var equityPts []tradingpnl.DailyPoint
-	data.Perf, data.PerfChart, data.PerfR, equityPts = s.buildTradingPerformance(r.Context(), project.ID, since, now)
+	var trades []tradingpnl.ClosedTrade
+	data.Perf, data.PerfChart, data.PerfR, equityPts, trades = s.buildTradingPerformance(r.Context(), project.ID, since, now)
+	// GitHub #825: fills say side, trigger, task and P&L, from the same
+	// pairing as the Performance section; orders are grouped by bracket.
+	triggerOrders, ordersLoaded := s.triggerOrders(r.Context(), project.ID)
+	data.Panel.RecentFills = annotateFills(data.Panel.RecentFills, triggerOrders, ordersLoaded, trades, project.Trading.EntryPolicy.LongOnly)
+	data.Panel.RecentOrders = groupOrders(data.Panel.RecentOrders)
 	data.VsBenchmarkSymbol, data.VsBenchmark = s.buildVsBenchmark(r.Context(), project, equityPts, since, now)
 	data.EntrySignal, data.HasEntrySignal = s.buildEntrySignal(r.Context(), project.ID, since)
 	data.EntrySignalRows = entrySignalRows(data.EntrySignal)
@@ -284,7 +290,7 @@ func (s *Server) buildTradingPerformance(
 	ctx context.Context,
 	projectID string,
 	windowStart, now time.Time,
-) (tradingpnl.Performance, perfChartData, tradingpnl.RSummary, []tradingpnl.DailyPoint) {
+) (tradingpnl.Performance, perfChartData, tradingpnl.RSummary, []tradingpnl.DailyPoint, []tradingpnl.ClosedTrade) {
 	fillsSince := windowStart.Add(-30 * 24 * time.Hour) // open-position grace
 
 	// Step 1: load fills with extended lookback.
@@ -348,7 +354,7 @@ func (s *Server) buildTradingPerformance(
 	merged := mergePerfDaily(perf.Daily, equityPts)
 	chart := layoutPerfChart(merged)
 
-	return perf, chart, rsum, equityPts
+	return perf, chart, rsum, equityPts, trades
 }
 
 // tradingSnapshotStaleAfter — the SOFT bound. A position snapshot older than
@@ -478,6 +484,7 @@ func (s *Server) buildEntrySignal(ctx context.Context, projectID string, since t
 // return per horizon, or "pending" while no outcome is known yet.
 type entrySignalRow struct {
 	Name    string
+	Title   string // plain words (#825, funnelGroupTitle)
 	N       int
 	Cells   [3]string
 	Touched string
@@ -486,7 +493,7 @@ type entrySignalRow struct {
 func entrySignalRows(sum tradingpnl.FunnelSummary) []entrySignalRow {
 	rows := make([]entrySignalRow, 0, len(sum.Groups))
 	for _, g := range sum.Groups {
-		r := entrySignalRow{Name: g.Name, N: g.N, Touched: "pending"}
+		r := entrySignalRow{Name: g.Name, Title: funnelGroupTitle(g.Name), N: g.N, Touched: "pending"}
 		for i := range g.Known {
 			r.Cells[i] = "pending"
 			if g.Known[i] > 0 {

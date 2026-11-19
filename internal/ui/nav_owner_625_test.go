@@ -34,6 +34,8 @@ var ownerEntries = map[string]string{
 	"admin-control-plane": "/ui/admin/control-plane",
 	"admin-skills":        "/ui/admin/skills",
 	"admin-agents":        "/ui/admin/agents",
+	// GitHub #833 (design §21): the approver-devices page (#763).
+	"approvers": "/ui/settings/approvers",
 }
 
 func TestNavOwner625_OwnerHrefExactlyOnTheDesignedEntries(t *testing.T) {
@@ -64,6 +66,7 @@ func TestNavOwner625_OwnerHrefExactlyOnTheDesignedEntries(t *testing.T) {
 func TestNavOwner625_NavAgreesWithTheGates(t *testing.T) {
 	srv, _, _, _ := hubRig623(t, nil) // a server with the credentials page wired
 	WithSessionUserResolver(func(*http.Request) string { return "user_owner" })(srv)
+	WithApproverDevices(&fakeApprovers763{push: true})(srv) // #833: the approvers page
 	// The production admin gate in front (wrapUIAdminGate's owner-read hook,
 	// GitHub #787), so a console entry is judged by the real decision (#789).
 	gate := func(next http.Handler) http.Handler {

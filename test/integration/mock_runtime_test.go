@@ -21,6 +21,9 @@ type mockRuntimeManager struct {
 	runs      map[string]*mockRun
 	exitCode  int
 	exitDelay time.Duration
+	// exitAfter, when set, ends each run when the channel closes instead of
+	// after exitDelay: a test waits on an event, not the clock (#811).
+	exitAfter <-chan struct{}
 }
 
 type mockRun struct {
@@ -42,7 +45,16 @@ func (m *mockRuntimeManager) StartContainer(ctx context.Context, cfg *runtime.Co
 	m.runs[containerID] = run
 	m.mu.Unlock()
 
-	if m.exitDelay > 0 {
+	if m.exitAfter != nil {
+		go func() {
+			<-m.exitAfter
+			select {
+			case <-run.done:
+			default:
+				close(run.done)
+			}
+		}()
+	} else if m.exitDelay > 0 {
 		go func() {
 			time.Sleep(m.exitDelay)
 			select {

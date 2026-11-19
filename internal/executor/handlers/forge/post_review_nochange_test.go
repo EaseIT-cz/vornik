@@ -57,7 +57,7 @@ func TestPostReview_RefusesWhenTheHeadWasAlreadyReviewed(t *testing.T) {
 		LastReviewedHeadSHA: "sha-a",
 	}}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	res, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-a"}))
@@ -93,7 +93,7 @@ func TestPostReview_PostsWhenTheHeadMoved(t *testing.T) {
 		LastReviewedHeadSHA: "sha-a",
 	}}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-b"})); err != nil {
@@ -155,7 +155,7 @@ func TestPostReview_MustNotRefuse(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(tc.state)
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(tc.state)
 			if _, err := h.Execute(context.Background(), nochangeInput(tc.job)); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
@@ -171,7 +171,7 @@ func TestPostReview_MustNotRefuse(t *testing.T) {
 // before the incremental machinery existed.
 func TestPostReview_NoReviewStateStillPosts(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-a"})); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -191,7 +191,7 @@ func TestPostReview_ReviewingHeadWinsOverTheJobHead(t *testing.T) {
 		ReviewingHeadSHA:    "sha-b",
 	}}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-a"})); err != nil {
@@ -214,7 +214,7 @@ func TestPostReview_RefusesOnTheFetchedHeadNotTheClaimedOne(t *testing.T) {
 		ReviewingHeadSHA:    "sha-a",
 	}}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-b"})); err != nil {
@@ -236,7 +236,7 @@ func TestPostReview_RefusesAfterAForcePushOnAnAlreadyReviewedHead(t *testing.T) 
 		PendingHeadSHA:      "sha-b", // the branch moved on
 	}}
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-a"})); err != nil {
@@ -255,7 +255,7 @@ func TestPostReview_MarksOnlyAfterPosting(t *testing.T) {
 	order := []string{}
 	st := &orderRecordingState{onMark: func() { order = append(order, "mark") }}
 	prov := &orderRecordingProvider{onPost: func() { order = append(order, "post") }}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser()).WithReviewState(st)
 
 	if _, err := h.Execute(context.Background(), nochangeInput(
 		forgeapi.ForgeJob{Repo: "o/r", Number: 4, HeadSHA: "sha-b"})); err != nil {

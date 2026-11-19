@@ -156,6 +156,35 @@ Three probes, reported as vectors and never blended into one score:
 schema-following and tool-use need no gold set — their ground truth is
 configuration, not a recording — so they can gate before any gold pass.
 
+| Flag | Default | Description |
+|---|---|---|
+| `--include-warmup` | `false` | read a learning study's warm-up journal (refused by default: a warm-up pass is not scored; GitHub #809) |
+
+## vornikctl bench agent autopilot
+
+Run the blackbox arm's auto mode once: trigger, generate, replay-trial, promote (GitHub #809)
+
+Reads the warm-up journals in --run-dir, finds each workflow whose failure
+rate since its last trigger is at or above bench.learning.trigger.threshold
+(with at least min_samples runs), and runs an operator's three steps for it
+through the bench daemon's admin routes: create a bench trigger, generate a
+candidate, replay-trial it on the failed executions, and promote it when the
+trial passed. Needs VORNIK_API_URL (the bench daemon) and VORNIK_API_KEY (its
+admin key). Stops when learning is frozen. Journals every step to
+<run-dir>/autopilot.json.
+
+```
+vornikctl bench agent autopilot [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--daemon-config` |  | the bench daemon's config, for bench.learning.trigger |
+| `--project` | `agentbench` | the benchmark project |
+| `--run-dir` |  | the arm's run directory (warm-up journals, autopilot.json) |
+| `--tasks` |  | the warm-up task set, for each task's workflow |
+| `--trial-wait` | `45m0s` | how long to wait for one replay trial's verdict |
+
 ## vornikctl bench agent bare
 
 Run the bare-model baseline on a task set's seeded items
@@ -221,6 +250,18 @@ vornikctl bench agent compare <journal-a> <journal-b> [flags]
 |---|---|---|
 | `--json` | `false` | emit JSON instead of a table |
 
+## vornikctl bench agent freeze
+
+Freeze learning before the measured pass and record the learned state (GitHub #809)
+
+```
+vornikctl bench agent freeze [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--run-dir` |  | the arm's run directory |
+
 ## vornikctl bench agent gate
 
 Evaluate the pre-registered agent benchmark release gate
@@ -285,6 +326,19 @@ vornikctl bench agent gold-merge <batch.json>... [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--out` | `gold.json` | where to write the merged manifest |
+
+## vornikctl bench agent learned-state
+
+Record the learned state; with --verify, fail if it moved since the freeze (GitHub #809)
+
+```
+vornikctl bench agent learned-state [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--run-dir` |  | the arm's run directory |
+| `--verify` | `false` | fail if the learned state moved since the freeze |
 
 ## vornikctl bench agent noise-floor
 
@@ -396,8 +450,10 @@ vornikctl bench agent run [flags]
 | `--i-know-this-wipes` |  | must equal --database; this run bulk-writes and clears it |
 | `--journal` | `journal.json` | where to write the run journal |
 | `--noise-floor` |  | release noise-floor artifact pinned by the pre-registration |
+| `--phase` |  | "warmup" for a learning study's warm-up pass: journaled, and refused by every scoring reader unless --include-warmup (GitHub #809) |
 | `--preregistration` |  | REQUIRED: committed manifest stating the run kind, arms, metric, intended delta and computed n. A comparison (the default) names two or more arms; a calibration or noise_floor pass names one and declares no sigma. --arm must be a declared arm |
 | `--project` |  | project to run in |
+| `--published-task-set` | `false` | run a release gate on a published task set (outside tasksets/unreleased/); the journal records it (#790) |
 | `--repeat-offset` | `0` | shift the repeat index this invocation stamps, so a run split across several invocations produces globally unique (task, repeat) pairs. Pass chunk_index * repeat_batch. Without it every chunk numbers its repeats from 1, and calibration refuses the collision rather than counting one repeat many times |
 | `--repeats` | `1` | runs per task; repeats shrink a task's contribution to sigma_d but add no pairs |
 | `--run-id` |  | identifier for this run |

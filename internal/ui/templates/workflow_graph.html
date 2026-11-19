@@ -8,7 +8,7 @@
     <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
         <div class="space-y-6">
             <div class="text-xs text-gray-500">
-                <a href="/ui/workflows/{{.WorkflowID}}/schema" class="text-brand-300 hover:text-brand-200">← edit form</a>
+                {{if .ReadOnly}}<a href="/ui/workflows/{{.WorkflowID}}/edit" class="text-brand-300 hover:text-brand-200">← definition</a>{{else}}<a href="/ui/workflows/{{.WorkflowID}}/schema" class="text-brand-300 hover:text-brand-200">← edit form</a>{{end}}
                 <span class="mx-1">·</span>
                 <span class="font-mono">{{.WorkflowID}}</span>
             </div>
@@ -33,7 +33,7 @@
                     {{if .Label}}<text x="{{.MidX}}" y="{{.MidY}}" class="c-text" text-anchor="middle">{{.Label}}</text>{{end}}
                     {{end}}
                     {{range .Graph.Nodes}}
-                    <a href="/ui/workflows/{{$.WorkflowID}}/schema" data-node-id="{{.ID}}" data-node-kind="{{.Kind}}">
+                    <a href="/ui/workflows/{{$.WorkflowID}}/{{if $.ReadOnly}}edit{{else}}schema{{end}}" data-node-id="{{.ID}}" data-node-kind="{{.Kind}}">
                         <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"
                               class="g-node{{if eq .Kind "terminal"}}{{if .Recovery}} g-node--recovery{{else}} g-node--terminal{{end}}{{end}}{{if .IsEntry}} g-node--entry{{else if .Unreachable}} g-node--unreachable{{end}}"
                                                             stroke-width="{{if .IsEntry}}2{{else}}1{{end}}" />
@@ -50,6 +50,7 @@
                 </p>
             </div>
 
+            {{if not .ReadOnly}}
             <!-- Topology controls (admin mutations gated server-side). No-JS
                  baseline: use the selects directly. Progressive enhancement:
                  clicking two nodes pre-fills the Connect form. -->
@@ -163,6 +164,8 @@
                     <button type="submit" class="w-full bg-amber-700/70 hover:bg-amber-600/70 text-amber-600 dark:text-amber-100 text-sm rounded px-3 py-1.5">Add gate</button>
                 </form>
             </div>
+
+            {{end}}
 
             <script>
             // Progressive enhancement: click a source node, then a target node,

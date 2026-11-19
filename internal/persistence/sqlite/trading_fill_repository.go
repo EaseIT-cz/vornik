@@ -51,6 +51,19 @@ func (r *TradingFillRepository) Record(ctx context.Context, fill *persistence.Tr
 		fill.ID, fill.OrderID, fill.ProjectID, fill.Symbol,
 		fill.Qty, fill.Price, fill.CommissionUSD, sqliteTime(filledAt),
 	)
+	if err != nil {
+		return err
+	}
+	// GitHub #823: the order's filled_qty follows its stored fills, never
+	// past its qty and never down; re-run on a retried (ignored) insert.
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE trading_orders
+		   SET filled_qty = max(trading_orders.filled_qty, s.total)
+		  FROM (SELECT COALESCE(SUM(qty), 0) AS total FROM trading_fills
+		         WHERE order_id = ?1 AND project_id = ?2) AS s
+		 WHERE trading_orders.id = ?1 AND trading_orders.project_id = ?2
+		   AND s.total <= trading_orders.qty`,
+		fill.OrderID, fill.ProjectID)
 	return err
 }
 

@@ -44,6 +44,14 @@ type GitHubConfig struct {
 	InstallationID int64
 	PrivateKeyPath string
 	APIBaseURL     string // GitHub Enterprise override; empty → api.github.com
+	// Repositories scopes every token the provider mints (GitHub #820): the
+	// block's repo, or for an App-backed block the binding's. Empty mints an
+	// installation-wide token (a hand-made block taking the repo from each
+	// event), logged at each mint.
+	Repositories []string
+	// AppBacked (use_registration) exempts the block from the instance-key
+	// guard: its key is the instance key by design.
+	AppBacked bool
 }
 
 // Constructor builds one provider's ForgeProvider from a Config. Impl packages

@@ -51,14 +51,15 @@ func (w gitWorkspace) gitStdout(ctx context.Context, args ...string) (string, er
 }
 
 // Prepare resets the workspace for one task repeat and returns the commit the
-// task starts from, or "" when nothing needed resetting. It removes every
-// declared target and the workflow's own state (agentbench.WorkflowStatePaths,
-// benchmark LLD §12.23, §12.29). It then replaces the history with one root
-// commit, after archiving every ref to a sibling bare repository (§12.30).
-// The agent containers mount the project's .git, so any commit left there is
-// readable from inside a step. A failed task's uncommitted leftovers are
-// stashed first, so the reset archives them with the history and names them
-// in the root commit (§12.31); the task starts from a pristine tree.
+// task starts from, or "" when nothing needed resetting. Every repeat starts
+// from the harness's baseline files plus the task's seed (benchmark LLD
+// §12.33): every other tracked path is removed, whatever its name, and the
+// baseline files are written with the harness's content. It then replaces
+// the history with one root commit, after archiving every ref to a sibling
+// bare repository (§12.30). The agent containers mount the project's .git,
+// so any commit left there is readable from inside a step. A failed task's
+// uncommitted leftovers are stashed first, so the reset archives them with
+// the history and names them in the root commit (§12.31).
 func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, repeat int) (string, error) {
 	// A fresh bench instance has no workspace until its first task runs, and
 	// this runs before that: bootstrap it exactly as the daemon would (#593).
@@ -100,11 +101,13 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 				w.dir, spec.ID, rest)
 		}
 	}
-	var present []string
-	for _, tg := range append(append([]string(nil), spec.Targets...), agentbench.WorkflowStatePaths...) {
-		if out, err := w.git(ctx, "ls-files", "--", tg); err == nil && out != "" {
-			present = append(present, tg)
-		}
+	removed, err := w.removeAllButBaseline(ctx)
+	if err != nil {
+		return "", err
+	}
+	rewrote, err := w.writeBaseline(ctx)
+	if err != nil {
+		return "", err
 	}
 	single, err := w.historyIsOneCommit(ctx, gitDir)
 	if err != nil {
@@ -115,21 +118,11 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 		return "", err
 	}
 	// A seeded task always resets, so each repeat starts from a root commit
-	// holding exactly its seed (GitHub #650).
-	if len(present) == 0 && single && seed == "" {
+	// holding exactly its seed (GitHub #650). Stashed leftovers force a reset
+	// too: the stash must reach the archive and leave the workspace, where a
+	// step could read it (review-20261118-a85d F6, §12.31).
+	if len(removed) == 0 && !rewrote && single && seed == "" && leftovers == "" {
 		return "", nil
-	}
-	if len(present) > 0 {
-		if _, err := w.git(ctx, append([]string{"rm", "-r", "-q", "--"}, present...)...); err != nil {
-			return "", err
-		}
-	}
-	// The removed paths are checked BEFORE the seed goes back in, so a seeded
-	// file is never mistaken for a leftover (round 4, review-20261116-0c7d H2).
-	for _, tg := range present {
-		if _, err := os.Stat(filepath.Join(w.dir, tg)); !os.IsNotExist(err) {
-			return "", fmt.Errorf("%s still present after the reset", tg)
-		}
 	}
 	if seed != "" {
 		if err := w.applySeed(ctx, spec, seed); err != nil {
@@ -137,6 +130,72 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 		}
 	}
 	return w.replaceHistory(ctx, gitDir, spec, repeat, leftovers)
+}
+
+// baselineFiles are the files every repeat starts from and their content,
+// which the harness owns (§12.33).
+func baselineFiles() map[string]string {
+	return map[string]string{
+		agentbench.BaselineGoModPath:  agentbench.BaselineGoMod,
+		agentbench.BaselineMarkerPath: executor.BootstrapMarkerBody,
+	}
+}
+
+// removeAllButBaseline removes every tracked path that is not a baseline
+// file and checks each is gone. The removed content stays reachable from the
+// refs archiveRefs keeps (§12.30). The check runs BEFORE any seed goes back
+// in, so a seeded file is never mistaken for a leftover (review-20261116-0c7d
+// H2).
+func (w gitWorkspace) removeAllButBaseline(ctx context.Context) ([]string, error) {
+	out, err := w.gitStdout(ctx, "ls-files", "-z")
+	if err != nil {
+		return nil, err
+	}
+	keep := baselineFiles()
+	var removed []string
+	for _, f := range strings.Split(out, "\x00") {
+		if f != "" && keep[f] == "" {
+			removed = append(removed, f)
+		}
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	// git rm removes the files and the directories it leaves empty.
+	if _, err := w.git(ctx, append([]string{"rm", "-r", "-q", "--"}, removed...)...); err != nil {
+		return nil, err
+	}
+	for _, f := range removed {
+		if _, err := os.Lstat(filepath.Join(w.dir, f)); !os.IsNotExist(err) {
+			return nil, fmt.Errorf("%s still present after the reset", f)
+		}
+	}
+	return removed, nil
+}
+
+// writeBaseline writes each baseline file with the harness's content and
+// stages it; it reports whether any file differed from what was tracked.
+func (w gitWorkspace) writeBaseline(ctx context.Context) (bool, error) {
+	changed := false
+	for rel, content := range baselineFiles() {
+		full := filepath.Join(w.dir, rel)
+		if cur, err := os.ReadFile(full); err == nil && string(cur) == content {
+			if tracked, err := w.git(ctx, "ls-files", "--", rel); err == nil && tracked != "" {
+				continue
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			return false, err
+		}
+		if _, err := w.git(ctx, "add", "--", rel); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
 }
 
 // applySeed copies the seed's files into the task's single target and stages
@@ -258,7 +317,7 @@ func (w gitWorkspace) replaceHistory(ctx context.Context, gitDir string, spec ag
 	if err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("bench: reset workspace for %s r%d (§12.23, §12.29, §12.30)", spec.ID, repeat)
+	msg := fmt.Sprintf("bench: reset workspace for %s r%d (§12.23, §12.29, §12.30, §12.33)", spec.ID, repeat)
 	if leftovers != "" {
 		msg += "\n\nLeftovers archived as refs/stash (§12.31):\n" + leftovers
 	}

@@ -747,6 +747,48 @@ CREATE TABLE IF NOT EXISTS approver_devices (
 );
 CREATE INDEX IF NOT EXISTS idx_approver_devices_prev_token ON approver_devices (prev_token_hash);
 CREATE INDEX IF NOT EXISTS idx_approver_devices_dead_token ON approver_devices (dead_token_hash);
+-- Postgres migration 255: acknowledged approver notices (GitHub #806,
+-- agent-administered design part 06 §6.5 amendment 2026-11-17).
+CREATE TABLE IF NOT EXISTS approver_notice_acks (
+    notice_key TEXT PRIMARY KEY,
+    acked_at   TEXT NOT NULL,
+    acked_by   TEXT NOT NULL
+);
+
+-- Postgres migration 256: GitHub App-manifest states (GitHub #802,
+-- github-app-channel design, "One-click App creation", Data).
+CREATE TABLE IF NOT EXISTS github_app_manifest_states (
+    state_hash   TEXT PRIMARY KEY,
+    session_hash TEXT NOT NULL,
+    api_base     TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_manifest_states_session ON github_app_manifest_states (session_hash);
+
+-- Postgres migration 257: GitHub App bindings (GitHub #800,
+-- github-app-channel design, "Install-to-onboard").
+CREATE TABLE IF NOT EXISTS github_app_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_deliveries_received ON github_app_deliveries (received_at);
+CREATE TABLE IF NOT EXISTS github_app_repositories (
+    repo            TEXT PRIMARY KEY,
+    installation_id INTEGER NOT NULL,
+    project_id      TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_github_app_repositories_installation ON github_app_repositories (installation_id);
+CREATE TABLE IF NOT EXISTS github_app_installations (
+    installation_id INTEGER PRIMARY KEY,
+    suspended       INTEGER NOT NULL DEFAULT 0,
+    updated_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS approver_pairings (
     code_hash    TEXT PRIMARY KEY,
     label        TEXT NOT NULL,
@@ -2633,7 +2675,12 @@ const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval
     decided_choice     TEXT,
     -- migration 228: who withdrew a pending request, and why (design §9.2d)
     withdrawn_by       TEXT,
-    withdraw_reason    TEXT
+    withdraw_reason    TEXT,
+    -- migration 255: a dismissed or retried failed apply (GitHub #806)
+    dismissed_at       TEXT,
+    dismissed_by       TEXT,
+    retried_at         TEXT,
+    retried_by         TEXT
 )`
 
 // mcpOAuthTokensTableSQL and agentIntegrationApprovalsTableSQL are shared by

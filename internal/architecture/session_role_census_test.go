@@ -26,12 +26,12 @@ var sessionRoleReaders = map[string]int{
 	"internal/ui/task_conversation.go":   2,
 	"internal/service/container_http.go": 1,
 	"internal/ui/setup.go":               1,
-	"internal/ui/server.go":              1,
+	"internal/ui/server.go":              2, // #764 ownerReadOnly
 	"internal/ui/projects_new.go":        2,
 	"internal/ui/projects_new_wizard.go": 1,
 	"internal/ui/story.go":               1,
 	"internal/ui/composer_preview.go":    1,
-	"internal/ui/dashboard.go":           3, // + the owner's fresh-install redirect, == tenant_admin (#779)
+	"internal/ui/dashboard.go":           4, // + the owner's fresh-install redirect (#779) and the no-chat redirect (#807), both == tenant_admin
 	"internal/ui/inbox.go":               1,
 	"internal/api/surface.go":            1, // logTenantAdminDecision (M1b)
 	"internal/api/owner_export_581.go":   1, // the owner export: tenant_admin only (#581 D5)
@@ -39,6 +39,7 @@ var sessionRoleReaders = map[string]int{
 	"internal/ui/companion_page_587.go":  1, // the companion page: tenant_admin only (#587)
 	"internal/ui/project_keys.go":        1, // logs the owner's keys-page decision (#754); decides nothing
 	"internal/ui/manage.go":              1, // the Manage overview shows the owner its cards (#759); a view, not a gate
+	"internal/ui/approvers_763.go":       1, // approverRole: an owner-class session manages approver devices (#763)
 }
 
 // sessionRoleWriters write auth.ExtraSessionRole into an identity.

@@ -48,8 +48,8 @@ type enableResultDTO struct {
 //     ConfigReloader). Returns the verify result.
 //
 // Security: this endpoint MUTATES the daemon config and triggers a reload.
-// It is admin-gated via requireAdminGate — the same gate that guards every
-// /api/v1/admin/* route (audit, workflow-architect, CPC, etc.). A regular
+// It is gated by the doctor's requireAdminClass, in both editions (GitHub
+// #816; it was on the Enterprise-only requireAdminGate). A regular
 // project API key is insufficient; the caller must supply an admin key (or
 // hold a browser session with role=admin). When auth is disabled every caller
 // is implicitly trusted, matching the daemon's other admin endpoints.
@@ -67,7 +67,7 @@ func (h *DoctorHandlers) EnableFeature(w http.ResponseWriter, r *http.Request) {
 	//   3. server is nil AND enableApplierFunc is non-nil (unit-test injection):
 	//      gate intentionally bypassed so tests can run without a wired Server.
 	if h.server != nil {
-		if !h.server.requireAdminGate(w, r) {
+		if !h.requireAdminClass(w, r) { // GitHub #816: the doctor's own gate, both editions
 			return
 		}
 	} else if h.enableApplierFunc == nil {

@@ -1,0 +1,1 @@
+ERROR: new_string is the same as old_string, so this edit changes nothing and $WS/notes.txt was not written. Put the text you want in new_string; if the file is already right, stop editing it and go on with your next step.

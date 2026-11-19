@@ -401,6 +401,9 @@ type Bot struct {
 	conversations  map[convKey]*chat.Conversation
 	activeProjects map[int64]string
 	receiverLocks  map[int64]*sync.Mutex
+	// receiverWaiting counts, per chat, the turns waiting for the chat's
+	// receiver lock; guarded by mu (GitHub #369, at most maxWaitingTurns).
+	receiverWaiting map[int64]int
 	// stops holds each chat's running turn and its last /stop (stop.go,
 	// GitHub #644).
 	stops      stopRegistry
@@ -3411,9 +3414,39 @@ func (b *Bot) resolveLeadSystemPrompt(userID int64, projectID string) string {
 // Channel.Send / StreamingSend and persists the post-turn state via
 // SessionStore.Append.
 func (b *Bot) handleReceiverTurn(r conversation.Receiver, msg *Message) {
+	b.runReceiverTurn(r, msg, false)
+}
+
+// runReceiverTurn runs one turn under the chat's lock. admitted says the
+// caller took a waiting slot (admitReceiverTurn), which is given back once
+// the lock is held; the other callers took none (GitHub #369).
+func (b *Bot) runReceiverTurn(r conversation.Receiver, msg *Message, admitted bool) {
+	if admitted {
+		// The slot is given back once: when the lock is held, or on the way
+		// out if the turn never reached the lock, so a chat cannot leak one.
+		released := false
+		release := func() {
+			if !released {
+				released = true
+				b.receiverTurnStarted(msg.ChatID)
+			}
+		}
+		defer release()
+		lock := b.receiverLock(msg.ChatID)
+		lock.Lock()
+		defer lock.Unlock()
+		release()
+		b.runLockedTurn(r, msg)
+		return
+	}
 	lock := b.receiverLock(msg.ChatID)
 	lock.Lock()
 	defer lock.Unlock()
+	b.runLockedTurn(r, msg)
+}
+
+// runLockedTurn is one turn, with the chat's receiver lock held.
+func (b *Bot) runLockedTurn(r conversation.Receiver, msg *Message) {
 
 	// #644: the turn can be ended with /stop.
 	ctx, done := b.beginTurn(msg.ChatID, false, msg.UserID)
@@ -3449,6 +3482,42 @@ func (b *Bot) handleReceiverTurn(r conversation.Receiver, msg *Message) {
 		Int64("chat_id", msg.ChatID).
 		Dur("duration", dur).
 		Msg("telegram receiver-path: Receive completed")
+}
+
+// maxWaitingTurns is how many turns may wait for one chat's receiver lock;
+// a message past it is answered "still working" instead of queued (GitHub
+// #369 §S3 #11, outcome-quality design Amendment 2026-11-18, item 3).
+const maxWaitingTurns = 3
+
+// admitReceiverTurn takes a waiting slot for chatID, or reports false (and
+// counts the refusal) when the chat already has maxWaitingTurns waiting. The
+// check and the increment are one step under mu.
+func (b *Bot) admitReceiverTurn(chatID int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.receiverWaiting == nil {
+		b.receiverWaiting = make(map[int64]int)
+	}
+	if b.receiverWaiting[chatID] >= maxWaitingTurns {
+		if b.metrics != nil {
+			b.metrics.TurnsRefused.Inc()
+		}
+		return false
+	}
+	b.receiverWaiting[chatID]++
+	return true
+}
+
+// receiverTurnStarted gives the slot back once a turn holds the chat's lock.
+func (b *Bot) receiverTurnStarted(chatID int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.receiverWaiting[chatID] > 0 {
+		b.receiverWaiting[chatID]--
+	}
+	if b.receiverWaiting[chatID] == 0 {
+		delete(b.receiverWaiting, chatID)
+	}
 }
 
 func (b *Bot) receiverLock(chatID int64) *sync.Mutex {

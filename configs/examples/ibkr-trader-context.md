@@ -29,6 +29,8 @@ gets none. An add is an entry: it counts toward one entry per tick and two per
 day, and cooldowns apply. It carries add_evidence {avg_cost, last_close, sma20,
 sma50, sma200, rsi14, atr14} copied VERBATIM from get_account_summary and
 mcp__ta__scorecard; the daemon and the broker enforce every condition in code.
+An add also needs the open's hourly confirmation and SPY's market brake, and it
+may not leave the whole position below break-even at the add's own stop.
 Do not add correlated semiconductor exposure while a semiconductor is held.
 After ANY exit, wait five completed US trading sessions before re-entry; also
 obey the broker's 120-hour stop-out cooldown. Use dated order/fill evidence.

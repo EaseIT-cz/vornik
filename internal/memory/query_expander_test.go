@@ -377,3 +377,10 @@ func TestKGQueryExpander_HonoursTheRestriction(t *testing.T) {
 		t.Errorf("a failing screen must mean no expansion, got %v", got)
 	}
 }
+
+// ListMissingEmbedding and UpdateEmbedding satisfy the #459 methods; this fake
+// stores no vectors.
+func (f *fakeEntityRepo) ListMissingEmbedding(context.Context, int) ([]*persistence.KnowledgeEntity, error) {
+	return nil, nil
+}
+func (f *fakeEntityRepo) UpdateEmbedding(context.Context, string, []float32) error { return nil }

@@ -134,12 +134,26 @@
                 {{if .HasEntrySignal}}
                 <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-signal>
                     <p class="text-gray-500 uppercase tracking-wider">Entry signal: forward outcome per candidate</p>
+                    <p class="mt-1 text-gray-400">Good: proposed candidates move up more than the rejected ones, and the rejected groups move down or stay flat.</p>
                     {{if .EntrySignal.Groups}}
-                    <table class="mt-1 tabular-nums">
-                        <tr class="text-gray-500"><th class="pr-4 text-left font-normal">group</th><th class="pr-4 text-right font-normal">n</th><th class="pr-4 text-right font-normal">1 session</th><th class="pr-4 text-right font-normal">3 sessions</th><th class="pr-4 text-right font-normal">5 sessions</th><th class="text-right font-normal">touched +1 ATR (5)</th></tr>
-                        {{range .EntrySignalRows}}<tr><td class="pr-4">{{.Name}}</td><td class="pr-4 text-right">{{.N}}</td>{{range .Cells}}<td class="pr-4 text-right">{{.}}</td>{{end}}<td class="text-right">{{.Touched}}</td></tr>
-                        {{end}}
+                    <div class="hidden sm:block overflow-x-auto mt-2">
+                    <table class="tabular-nums" data-signal-table>
+                        <thead><tr class="text-gray-500"><th class="pr-4 text-left font-normal">Group</th><th class="pr-4 text-right font-normal">Candidates</th><th class="pr-4 text-right font-normal">Mean move after 1 session (%)</th><th class="pr-4 text-right font-normal">after 3 sessions (%)</th><th class="pr-4 text-right font-normal">after 5 sessions (%)</th><th class="text-right font-normal">Reached +1 ATR in 5 sessions (%)</th></tr></thead>
+                        <tbody>{{range .EntrySignalRows}}<tr><td class="pr-4 text-gray-200">{{.Title}}</td><td class="pr-4 text-right">{{.N}}</td>{{range .Cells}}<td class="pr-4 text-right">{{.}}</td>{{end}}<td class="text-right">{{.Touched}}</td></tr>
+                        {{end}}</tbody>
                     </table>
+                    </div>
+                    <div class="sm:hidden mt-2 space-y-2" data-signal-cards>
+                        {{range .EntrySignalRows}}<div class="rounded-lg border border-dark-700/60 px-3 py-2">
+                            <p class="text-gray-200 font-medium">{{.Title}}</p>
+                            <dl class="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
+                                <dt class="text-gray-500">Candidates</dt><dd class="text-right">{{.N}}</dd>
+                                {{range $i, $c := .Cells}}<dt class="text-gray-500">{{if eq $i 0}}After 1 session (%){{else if eq $i 1}}After 3 sessions (%){{else}}After 5 sessions (%){{end}}</dt><dd class="text-right">{{$c}}</dd>
+                                {{end}}
+                                <dt class="text-gray-500">Reached +1 ATR in 5 (%)</dt><dd class="text-right">{{.Touched}}</dd>
+                            </dl>
+                        </div>{{end}}
+                    </div>
                     {{else}}<p class="mt-1">No funnel recorded in this window.</p>{{end}}
                     <p class="mt-1 text-gray-500">{{.EntrySignal.Candidates}} candidates · {{.EntrySignal.Sessions}} sessions · {{.EntrySignal.Pending}} with outcomes pending. Means are over the candidates whose outcome is known.</p>
                     {{if lt .EntrySignal.Sessions 20}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few sessions to judge (under 20).</p>{{end}}
@@ -153,9 +167,17 @@
                     <p class="text-gray-500 uppercase tracking-wider">Rule engine shadow: deterministic rules vs the strategist{{template "hintOpen" "About the shadow"}}The engine decides only from the tools the strategist called; "insufficient inputs" means it would have needed data the strategist did not fetch.{{template "hintClose"}}</p>
                     {{if .Shadow.Rows}}
                     <p class="mt-1 tabular-nums text-gray-200">{{.Shadow.Agree}} of {{.Shadow.Rows}} agree on the decision ({{.Shadow.SameGate}} of those name the same gate) · {{.Shadow.InsufficientInputs}} insufficient inputs · {{.Shadow.Sessions}} sessions</p>
-                    {{if .Shadow.Pairs}}<table class="mt-1 tabular-nums"><tr class="text-gray-500"><th class="pr-4 text-left font-normal">engine</th><th class="pr-4 text-left font-normal">strategist</th><th class="text-right font-normal">n</th></tr>
-                        {{range .Shadow.Pairs}}<tr><td class="pr-4">{{.Engine}}</td><td class="pr-4">{{.Model}}</td><td class="text-right">{{.Count}}</td></tr>{{end}}
-                    </table>{{end}}
+                    <p class="mt-1 text-gray-400">Good: the two agree, and where they disagree the rules are right more often.</p>
+                    {{if .Shadow.Pairs}}
+                    <div class="hidden sm:block overflow-x-auto mt-2">
+                    <table class="tabular-nums" data-shadow-table><thead><tr class="text-gray-500"><th class="pr-4 text-left font-normal">The rules said</th><th class="pr-4 text-left font-normal">The strategist said</th><th class="text-right font-normal">Times</th></tr></thead>
+                        <tbody>{{range .Shadow.Pairs}}<tr><td class="pr-4">{{.Engine}}</td><td class="pr-4">{{.Model}}</td><td class="text-right">{{.Count}}</td></tr>{{end}}</tbody>
+                    </table>
+                    </div>
+                    <div class="sm:hidden mt-2 space-y-2" data-shadow-cards>
+                        {{range .Shadow.Pairs}}<p class="rounded-lg border border-dark-700/60 px-3 py-2">The rules said <span class="text-gray-200">{{.Engine}}</span>; the strategist said <span class="text-gray-200">{{.Model}}</span>; <span class="tabular-nums">{{.Count}}</span> times.</p>{{end}}
+                    </div>
+                    {{end}}
                     {{if .Shadow.Disagreements}}<p class="mt-1 text-gray-500">Latest disagreements: {{range $i, $d := .Shadow.Disagreements}}{{if $i}}, {{end}}{{$d.Symbol}} ({{$d.ExecutionID}}){{end}}</p>{{end}}
                     {{else}}<p class="mt-1">No shadow decisions recorded in this window.</p>{{end}}
                     {{if lt .Shadow.Sessions 10}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few sessions to judge (under 10). The issue asks for two weeks before any takeover.</p>{{end}}
@@ -167,11 +189,13 @@
                 <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-vs>
                     <p class="text-gray-500 uppercase tracking-wider">Book vs {{.VsBenchmarkSymbol}}{{template "hintOpen" "About this comparison"}}The book is marked to market (realized and unrealized) on the strategy capital (max gross exposure); {{.VsBenchmarkSymbol}} is price return without dividends. A trend line, not an attribution.{{template "hintClose"}}</p>
                     {{if .VsBenchmark}}
-                    <table class="mt-1 tabular-nums">
+                    <div class="overflow-x-auto mt-1">
+                    <table class="tabular-nums">
                         <tr class="text-gray-500"><th class="pr-4 text-left font-normal">session</th><th class="pr-4 text-right font-normal">book</th><th class="pr-4 text-right font-normal">{{.VsBenchmarkSymbol}}</th><th class="text-right font-normal">cumulative difference</th></tr>
                         {{range .VsBenchmark}}<tr><td class="pr-4">{{.Day.Format "2006-01-02"}}</td><td class="pr-4 text-right">{{printf "%+.2f%%" .BookPct}}</td><td class="pr-4 text-right">{{printf "%+.2f%%" .BenchPct}}</td><td class="text-right">{{printf "%+.2f%%" .CumDiffPct}}</td></tr>
                         {{end}}
                     </table>
+                    </div>
                     {{else}}<p class="mt-1">No sessions with both a book value and a {{.VsBenchmarkSymbol}} close yet.</p>{{end}}
                 </div>
                 {{end}}
@@ -386,18 +410,20 @@
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead class="text-xs text-gray-500 uppercase tracking-wider border-b border-dark-700/60">
-                            <tr><th class="px-5 py-2 text-left">Submitted</th><th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">Side</th><th class="px-3 py-2 text-left">Type</th><th class="px-3 py-2 text-right">Qty</th><th class="px-3 py-2 text-right">Limit</th><th class="px-3 py-2 text-left">Status</th></tr>
+                            <tr><th class="px-5 py-2 text-left">Submitted</th><th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">Side</th><th class="px-3 py-2 text-left">Type</th><th class="px-3 py-2 text-right">Qty</th><th class="px-3 py-2 text-right">Filled</th><th class="px-3 py-2 text-right">Limit</th><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Task</th></tr>
                         </thead>
                         <tbody class="divide-y divide-dark-700/30">
                             {{range .Panel.RecentOrders}}
-                            <tr>
+                            <tr id="order-{{.ID}}" data-order{{if .ChildOf}} data-child-of="{{.ChildOf}}"{{end}}>
                                 <td class="px-5 py-2 text-gray-400 font-mono whitespace-nowrap">{{.SubmittedAt.Format "Jan 2 15:04"}}</td>
-                                <td class="px-3 py-2 text-gray-200 font-mono">{{.Symbol}}</td>
+                                <td class="px-3 py-2 text-gray-200 font-mono whitespace-nowrap">{{if .ChildOf}}<span class="pl-4 text-gray-500" title="part of the bracket above">↳ </span>{{end}}{{.Symbol}}</td>
                                 <td class="px-3 py-2 font-mono {{.ActionClass}}">{{.Action}}</td>
                                 <td class="px-3 py-2 text-gray-400 font-mono">{{.OrderType}}</td>
                                 <td class="px-3 py-2 text-gray-200 font-mono tabular-nums text-right">{{printf "%.0f" .Qty}}</td>
+                                <td class="px-3 py-2 text-gray-300 font-mono tabular-nums text-right">{{printf "%.0f" .FilledQty}}</td>
                                 <td class="px-3 py-2 text-gray-300 font-mono tabular-nums text-right">{{if gt .LimitPrice 0.0}}{{fmtUSD .LimitPrice}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
-                                <td class="px-3 py-2"><span class="{{.StatusClass}} font-mono text-xs" title="{{.StatusReason}}">{{.Status}}</span></td>
+                                <td class="px-3 py-2"><span class="{{.StatusClass}} font-mono text-xs">{{.Status}}</span>{{if .StatusReason}}<p class="text-xs text-gray-500 max-w-xs" data-status-reason>{{.StatusReason}}</p>{{end}}</td>
+                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .TaskID}}<a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{else}}<span class="text-gray-500">none: reconcile or manual</span>{{end}}</td>
                             </tr>
                             {{end}}
                         </tbody>
@@ -417,17 +443,21 @@
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-sm">
                         <thead class="text-xs text-gray-500 uppercase tracking-wider border-b border-dark-700/60">
-                            <tr><th class="px-5 py-2 text-left">Filled</th><th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-right">Qty</th><th class="px-3 py-2 text-right">Price</th><th class="px-3 py-2 text-right">Notional</th><th class="px-3 py-2 text-right">Commission</th></tr>
+                            <tr><th class="px-5 py-2 text-left">Filled</th><th class="px-3 py-2 text-left">Symbol</th><th class="px-3 py-2 text-left">Side</th><th class="px-3 py-2 text-left">Trigger</th><th class="px-3 py-2 text-right">Qty</th><th class="px-3 py-2 text-right">Price</th><th class="px-3 py-2 text-right">Notional</th><th class="px-3 py-2 text-right">Realized P&amp;L</th><th class="px-3 py-2 text-right">Commission</th><th class="px-3 py-2 text-left">Order · task</th></tr>
                         </thead>
                         <tbody class="divide-y divide-dark-700/30">
                             {{range .Panel.RecentFills}}
-                            <tr>
+                            <tr data-fill>
                                 <td class="px-5 py-2 text-gray-400 font-mono whitespace-nowrap">{{.FilledAt.Format "Jan 2 15:04"}}</td>
                                 <td class="px-3 py-2 text-gray-200 font-mono">{{.Symbol}}</td>
+                                <td class="px-3 py-2 font-mono {{.SideClass}}">{{if .Side}}{{.Side}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
+                                <td class="px-3 py-2 text-gray-300 text-xs whitespace-nowrap">{{.Trigger}}</td>
                                 <td class="px-3 py-2 text-gray-200 font-mono tabular-nums text-right">{{printf "%.0f" .Qty}}</td>
                                 <td class="px-3 py-2 text-gray-300 font-mono tabular-nums text-right">{{fmtUSD .Price}}</td>
                                 <td class="px-3 py-2 text-gray-200 font-mono tabular-nums text-right">{{fmtUSD .Notional}}</td>
+                                <td class="px-3 py-2 font-mono tabular-nums text-right {{if not .HasRealized}}text-gray-600{{else if lt .RealizedUSD 0.0}}text-rose-800 dark:text-rose-400{{else if gt .RealizedUSD 0.0}}text-emerald-800 dark:text-emerald-400{{else}}text-gray-300{{end}}">{{if .HasRealized}}{{fmtUSD .RealizedUSD}}{{else}}—{{end}}</td>
                                 <td class="px-3 py-2 text-gray-400 font-mono tabular-nums text-right">{{if gt .CommissionUSD 0.0}}{{fmtUSD .CommissionUSD}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
+                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .Side}}<a class="text-gray-400 hover:underline" href="#order-{{.OrderID}}">order</a>{{end}}{{if .TaskID}} · <a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{end}}</td>
                             </tr>
                             {{end}}
                         </tbody>

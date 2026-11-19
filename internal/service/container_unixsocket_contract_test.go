@@ -211,7 +211,7 @@ func TestAgentSocketAllowlist_CoversEveryAgentImageCall(t *testing.T) {
 	// Floors guard the extractor itself: a regex that silently stopped
 	// matching would otherwise report "all allowed" over zero sites. Raise
 	// them when a call site is added; never lower them to pass.
-	const entrypointFloor, bridgeFloor = 11, 2
+	const entrypointFloor, bridgeFloor = 12, 2
 	if len(entry) < entrypointFloor {
 		t.Errorf("entrypoint: examined %d call sites, want at least %d; the extractor lost some", len(entry), entrypointFloor)
 	}

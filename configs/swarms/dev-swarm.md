@@ -200,6 +200,16 @@ roles:
               type: integer
               description: >-
                 How many cases you pinned. Must equal the length of test_case_ids.
+      plausibility:
+        # GitHub #830: the implement step's prompt references
+        # analysis.test_case_ids, and an unresolved reference fails the
+        # run by design. On the analyze step's result (the only shape with
+        # ready: true) the list must be present and non-empty, so an
+        # omission is a shape violation the executor retries. The report
+        # steps never emit ready, so the rule does not fire there.
+        - name: pinned_cases_named
+          when: {"analysis.ready": true}
+          require: ["analysis.test_case_ids", "analysis.test_cases_pinned"]
     runtime:
       image: "ghcr.io/easeit-cz/vornik-agent:latest"
       # dev-swarm runs real builds/tests via run_shell (pip install,

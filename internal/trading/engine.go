@@ -133,23 +133,67 @@ func DropOpenProposals(original []byte) ([]byte, error) {
 // their funnel rows daily_trend. b is returned unchanged when nothing is
 // dropped.
 func DropOpensBelowSMA50(b []byte, sma50 map[string]float64) ([]byte, []string) {
+	return dropProposals(b, "open", func(sym string, r map[string]json.RawMessage) (string, string) {
+		var limit float64
+		_ = json.Unmarshal(r["limit_price"], &limit)
+		if s, ok := sma50[sym]; !ok || s <= 0 || limit < s {
+			return "daily_trend", "limit below the daily SMA50"
+		}
+		return "", ""
+	})
+}
+
+// AddSymbols lists the symbols of the result's intent=add proposals.
+func AddSymbols(b []byte) []string {
+	var obj struct {
+		Proposals []map[string]json.RawMessage `json:"proposals"`
+	}
+	if json.Unmarshal(b, &obj) != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range obj.Proposals {
+		if sym := strings.ToUpper(rawJSONString(r["symbol"])); intentOf(r) == "add" && sym != "" && !contains(out, sym) {
+			out = append(out, sym)
+		}
+	}
+	return out
+}
+
+// DropAdds removes the add proposals of the symbols in gates and marks their
+// add funnel rows rejected with that gate (GitHub #826: the engine's market
+// brake, rolling window and hourly confirmation for adds).
+func DropAdds(b []byte, gates map[string]string) ([]byte, []string) {
+	return dropProposals(b, "add", func(sym string, _ map[string]json.RawMessage) (string, string) {
+		if g, ok := gates[sym]; ok {
+			return g, "rule engine: add " + g
+		}
+		return "", ""
+	})
+}
+
+// dropProposals removes the proposals of one intent that gate refuses, and
+// marks the funnel rows of the same symbol and intent rejected with the gate
+// and reason. b is returned unchanged when nothing is dropped.
+func dropProposals(b []byte, intent string, gate func(sym string, r map[string]json.RawMessage) (string, string)) ([]byte, []string) {
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(b, &obj) != nil || obj == nil {
 		return b, nil
 	}
 	var dropped []string
+	why := map[string][2]string{}
 	props, err := keepRows(obj["proposals"], func(r map[string]json.RawMessage) bool {
-		if intentOf(r) != "open" {
+		if intentOf(r) != intent {
 			return true
 		}
 		sym := strings.ToUpper(rawJSONString(r["symbol"]))
-		var limit float64
-		_ = json.Unmarshal(r["limit_price"], &limit)
-		if s, ok := sma50[sym]; !ok || s <= 0 || limit < s {
-			dropped = append(dropped, sym)
-			return false
+		g, reason := gate(sym, r)
+		if g == "" {
+			return true
 		}
-		return true
+		dropped = append(dropped, sym)
+		why[sym] = [2]string{g, reason}
+		return false
 	})
 	if err != nil || len(dropped) == 0 {
 		return b, nil
@@ -158,8 +202,9 @@ func DropOpensBelowSMA50(b []byte, sma50 map[string]float64) ([]byte, []string) 
 	_ = json.Unmarshal(obj["entry_funnel"], &rows)
 	funnel := make([]json.RawMessage, 0, len(rows))
 	for _, r := range rows {
-		if sym, _ := r["symbol"].(string); r["intent"] == "open" && contains(dropped, strings.ToUpper(sym)) {
-			r["status"], r["gate"], r["reason"] = "rejected", "daily_trend", "limit below the daily SMA50"
+		sym, _ := r["symbol"].(string)
+		if w, ok := why[strings.ToUpper(sym)]; ok && r["intent"] == intent {
+			r["status"], r["gate"], r["reason"] = "rejected", w[0], w[1]
 		}
 		rb, _ := json.Marshal(r)
 		funnel = append(funnel, rb)

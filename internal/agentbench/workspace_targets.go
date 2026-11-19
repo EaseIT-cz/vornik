@@ -22,18 +22,39 @@ const (
 	// WorkspaceResetTargetsStateAndHistory: as WorkspaceResetTargetsAndState,
 	// and the history was replaced by one root commit after archiving it, so
 	// no task could read an earlier task's work with git (§12.30, harness 11).
+	// Earlier tasks' committed files still carried over (§12.33).
 	WorkspaceResetTargetsStateAndHistory = "targets+workflow-state+history"
+	// WorkspaceResetBaseline: each repeat started from the harness's
+	// baseline files plus its seed, with one root commit (§12.33, harness 12).
+	WorkspaceResetBaseline = "baseline+seed+history"
 	// WorkspaceResetNoWorkspace: no workspace was given, so nothing was
 	// cleared and the run is not fresh-workspace evidence.
 	WorkspaceResetNoWorkspace = "none-no-workspace"
 )
 
-// WorkflowStatePaths are the workspace paths where dev-pipeline keeps its own
-// state: the backlog it picks features from and marks in progress, and
-// .autonomy/ (CURRENT_TASK.md, review and testing notes). Prepare removes them
-// before every repeat, so a task cannot resume an earlier task's feature
-// (benchmark LLD §12.29).
-var WorkflowStatePaths = []string{".autonomy", "BACKLOG.md"}
+// BaselineGoMod is the workspace's root module. The dev-swarm tasks with a
+// scratch/ target build their packages under it; no harness code wrote it
+// before harness 12, so they depended on one an early agent left (§12.33).
+const BaselineGoMod = "module scratch\n\ngo 1.21\n"
+
+// BaselineGoModPath and BaselineMarkerPath are the two files every repeat
+// starts from, besides its seed (benchmark LLD §12.33). The harness writes
+// both on every reset; every other tracked path is removed.
+const (
+	BaselineGoModPath  = "go.mod"
+	BaselineMarkerPath = ".vornik/bootstrap.md"
+)
+
+// underBaseline reports whether a target is, or lies under, a baseline path.
+func underBaseline(target string) bool {
+	clean := path.Clean(target)
+	for _, b := range []string{BaselineGoModPath, path.Dir(BaselineMarkerPath)} {
+		if clean == b || strings.HasPrefix(clean, b+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // WorkspacePreparer clears a task's targets before it runs and reports which
 // it produced afterwards. The git implementation lives in internal/cli:
@@ -85,6 +106,12 @@ func ValidateTaskTargets(tasks []TaskSpec, requireKey bool) error {
 			clean := path.Clean(tg)
 			if tg == "" || path.IsAbs(tg) || clean == ".." || strings.HasPrefix(clean, "../") {
 				return fmt.Errorf("task %q target %q must be a relative path inside the workspace", task.ID, tg)
+			}
+			// A target under a baseline path would be overwritten by every
+			// reset (§12.33).
+			if underBaseline(clean) {
+				return fmt.Errorf("task %q target %q lies under the workspace baseline (%s, %s), which every reset rewrites",
+					task.ID, tg, BaselineGoModPath, path.Dir(BaselineMarkerPath))
 			}
 			if !strings.Contains(task.Prompt, tg) {
 				return fmt.Errorf("task %q target %q does not appear in its prompt; targets must be what the prompt asks for", task.ID, tg)

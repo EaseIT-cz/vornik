@@ -43,6 +43,8 @@ type tree struct {
 	// credentialSet is the namespace's stored credential names (design
 	// §22.2.3 C5), as the service reads them from the store.
 	credentialSet map[string]bool
+	// agentTokens is State.AgentMaxTokens (§6.9).
+	agentTokens int
 }
 
 func newTree(t *testing.T, ns string) *tree {
@@ -86,6 +88,8 @@ func (tr *tree) state() *State {
 		Projects: map[string]*ProjectState{}, Workflows: map[string]*WorkflowState{},
 		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert, AdvertisedReads: tr.advertisedReads(), ListFailed: tr.listFailed,
 		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations, CredentialSet: tr.credentialSet,
+		// The config defaults (§6.9); tr.agentTokens is the agent LLM's max_tokens.
+		MaxConcurrentTasksCap: 2, MaxRoleTokensCap: 32768, MaxRoleToolIterationsCap: 120, AgentMaxTokens: tr.agentTokens,
 	}
 	for _, c := range tr.pending {
 		for _, l := range c.Locks {

@@ -250,12 +250,30 @@ for dir in "${CONFIG_DEPLOYABLE_DIRS[@]}"; do
 	done < <(cd "$src" && find . -type f)
 done
 
-# --- copy deployable top-level files (preserve-existing) ---
+# --- copy deployable top-level files ---
+# Every top-level file is canonical (.templates/.classes says so), so an
+# unedited one follows the template like a canonical directory's files (slice
+# H). Before #776 they were preserve-existing, so even an unedited
+# pricing.yaml kept the version that first wrote it.
+# shellcheck source=scripts/config-deploy-pricing.sh
+. "$SCRIPT_DIR/config-deploy-pricing.sh"
 for file in "${CONFIG_DEPLOYABLE_FILES[@]}"; do
 	src="$REPO_CONFIGS/$file"
 	[ -f "$src" ] || continue
 	refuse_unsafe_dest_path "$DEST/$file"
-	deploy_one "$file" "$src" "$DEST/$file"
+	deploy_one "$file" "$src" "$DEST/$file" 1
+	# A pricing.yaml that still differs from the template after deploy_one
+	# (edited, or of unknown origin) gains the shipped rows it lacks (#776).
+	# The merge only appends, so it needs no origin record. It skips an
+	# acknowledged file, a symlink and a second hard link, as slice H does.
+	dest="$DEST/$file"
+	if [ "$file" = pricing.yaml ] && [ -f "$dest" ] && [ ! -L "$dest" ] && [ "$(link_count "$dest")" = 1 ] \
+		&& ! acked "$file"; then
+		dh="$(norm_hash "$dest")"; sh="$(norm_hash "$src")"
+		if [ -n "$dh" ] && [ -n "$sh" ] && [ "$dh" != "$sh" ]; then
+			merge_pricing_rows "$src" "$dest"
+		fi
+	fi
 done
 
 # --- prune both baselines to the manifest set; stamp the current one ---

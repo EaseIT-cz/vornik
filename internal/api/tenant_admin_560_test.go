@@ -49,6 +49,10 @@ var allSurfaces = []Surface{
 	SurfaceProjectKeys, SurfaceSetupApply, SurfaceAccountTransitions, SurfaceMCPToolGrant,
 	SurfaceOperatorConsoleRead,
 	SurfaceModelProvider,
+	SurfaceApproverNotices,
+	SurfaceGitHubApp,
+	SurfaceProjectTemplates, SurfaceProjectFromTemplate, // GitHub #815; not granted
+	SurfaceMCPServers, SurfaceMemoryCacheStats, SurfaceMemoryBackfillTitles, SurfaceProjectDoctor, // GitHub #816; not granted
 }
 
 var grantedSurfaces = map[Surface]bool{
@@ -58,6 +62,8 @@ var grantedSurfaces = map[Surface]bool{
 	SurfaceMCPToolGrant:        true, // GitHub #780
 	SurfaceOperatorConsoleRead: true, // GitHub #787
 	SurfaceModelProvider:       true, // GitHub #794
+	SurfaceApproverNotices:     true, // GitHub #806
+	SurfaceGitHubApp:           true, // GitHub #802
 }
 
 // B3: exactly eight surfaces are granted (the fifth, operator_credentials,
@@ -73,8 +79,8 @@ func TestTenantAdmin560_Allowlist(t *testing.T) {
 			n++
 		}
 	}
-	if n != 9 || len(tenantAdminSurfaces) != 9 {
-		t.Fatalf("granted %d surfaces (map holds %d), want 9", n, len(tenantAdminSurfaces))
+	if n != 11 || len(tenantAdminSurfaces) != 11 {
+		t.Fatalf("granted %d surfaces (map holds %d), want 11", n, len(tenantAdminSurfaces))
 	}
 	if TenantAdminMay(Surface("unlisted")) {
 		t.Fatal("an unlisted surface was granted")

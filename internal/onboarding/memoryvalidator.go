@@ -66,10 +66,22 @@ type MemoryValidator struct {
 // NewMemoryValidator returns a validator that probes the real embedding
 // endpoint via memory.NewEmbedder with a 15s timeout.
 func NewMemoryValidator() MemoryValidator {
+	return memoryValidatorWithClient(setupProbeHTTPClient(15 * time.Second))
+}
+
+// NewManagedMemoryValidator probes embeddings through managedProbeGuard, with
+// no redirect, as the chat validator does; the owner cannot probe the
+// instance's private network (GitHub #807). modelHosts is the running
+// hosting.model_hosts.
+func NewManagedMemoryValidator(modelHosts []string) MemoryValidator {
+	return memoryValidatorWithClient(managedProbeGuard(modelHosts).NoRedirectHTTPClient(15 * time.Second))
+}
+
+func memoryValidatorWithClient(client *http.Client) MemoryValidator {
 	return MemoryValidator{
 		probe: func(ctx context.Context, cfg memory.Config) ([]float32, error) {
 			emb := memory.NewEmbedder(cfg)
-			emb.SetHTTPClient(setupProbeHTTPClient(15 * time.Second))
+			emb.SetHTTPClient(client)
 			// Billed to infrastructure, not to a project: a reachability probe
 			// has no tenant to charge. Recorded rather than skipped — "too small
 			// to bill" is the judgement that left embedding spend invisible.

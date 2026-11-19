@@ -373,6 +373,20 @@ type WorkflowStep struct {
 	// never gates the PR. Ignored for non-`forge.post_review` steps.
 	GatingReviews bool `yaml:"gating_reviews,omitempty"`
 
+	// GitHub #801 (github-app-channel design, "A review good by default").
+	// MaskSecrets, on forge.fetch_diff, masks every value the secret detector
+	// finds and proves the mask by a rescan, failing closed. GroundFindings,
+	// on forge.post_review, drops findings not on an added line or holding a
+	// secret-shaped value. CheckRun posts a check run beside the review;
+	// CheckConclusion "from_verdict" makes it fail on a kept blocker (default
+	// neutral). Gather, on context.gather, names the earlier steps whose
+	// messages it re-emits for the next agent.
+	MaskSecrets     bool     `yaml:"mask_secrets,omitempty"`
+	GroundFindings  bool     `yaml:"ground_findings,omitempty"`
+	CheckRun        bool     `yaml:"check_run,omitempty"`
+	CheckConclusion string   `yaml:"check_conclusion,omitempty"`
+	Gather          []string `yaml:"gather,omitempty"`
+
 	// DelegatedWorkflow pins the workflow that `delegatedTasks` emitted by THIS
 	// step run under, when a delegation spec doesn't set its own. It makes
 	// subtask routing deterministic instead of trusting the LLM to emit the
@@ -392,6 +406,14 @@ type WorkflowStep struct {
 	// COMPLETED without writing their promised findings file, and the
 	// chain "succeeded" all the way to a publisher holding no deliverable.
 	RequireOutputGlob string `yaml:"require_output_glob,omitempty"`
+
+	// RequireReviewActions (GitHub #751, reviewable-output design §6.12): the
+	// file require_output_glob matched is a review that must open with a
+	// "Verdict:" line and a numbered "## Actions" list, or "No action:
+	// ship.", within its first 150 words. Refused like the output contract:
+	// one corrective retry, then on_fail. Set by the companion review
+	// workflows, whose prompts state the format.
+	RequireReviewActions bool `yaml:"require_review_actions,omitempty" since:"2026.11.7"`
 
 	// RequireTools declares a TOOL contract for an agent step: after an
 	// otherwise-successful run, each named tool must have at least one

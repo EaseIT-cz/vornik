@@ -75,6 +75,28 @@ const (
 	// 18-security-and-tenancy.md amendment 2026-11-16). Its gate is in the
 	// UI package.
 	SurfaceModelProvider Surface = "model_provider"
+	// SurfaceApproverNotices is the console inbox's dismiss of a failed
+	// apply and acknowledgement of a withheld-tools notice (GitHub #806,
+	// agent-administered design part 22 §22.2.16d). It hides a card and
+	// applies nothing. Its gate is in the UI package.
+	SurfaceApproverNotices Surface = "approver_notices"
+	// SurfaceGitHubApp is the console's GitHub page: create, see and forget
+	// the instance's GitHub App (GitHub #802).
+	SurfaceGitHubApp Surface = "github_app"
+	// SurfaceProjectTemplates and SurfaceProjectFromTemplate are the template
+	// gallery's list and create routes, which the setup guide's step 2 calls.
+	// Templates are a Community feature, so these are operator surfaces in
+	// both editions, not the Enterprise admin suite (GitHub #815). Neither is
+	// granted to tenant_admin, like the setup surfaces.
+	SurfaceProjectTemplates    Surface = "project_templates"
+	SurfaceProjectFromTemplate Surface = "project_from_template"
+	// SurfaceMCPServers, SurfaceMemoryCacheStats, SurfaceMemoryBackfillTitles
+	// and SurfaceProjectDoctor are Community features that sat on the
+	// Enterprise admin gate (GitHub #816). None is granted to tenant_admin.
+	SurfaceMCPServers           Surface = "mcp_servers"
+	SurfaceMemoryCacheStats     Surface = "memory_cache_stats"
+	SurfaceMemoryBackfillTitles Surface = "memory_backfill_titles"
+	SurfaceProjectDoctor        Surface = "project_doctor"
 )
 
 // tenantAdminSurfaces is the closed allowlist of B3: granted surfaces only.
@@ -103,6 +125,14 @@ var tenantAdminSurfaces = map[Surface]bool{
 	// and the instance's model is theirs to choose); a multi-tenant instance
 	// (Stage T) must revisit it.
 	SurfaceModelProvider: true,
+	// GitHub #806: the owner clears their own inbox's informational cards
+	// (failed applies, withheld-tools notices); nothing is applied. Valid
+	// while managed mode is single-customer, as #623; Stage T must revisit.
+	SurfaceApproverNotices: true,
+	// GitHub #802: the owner creates the instance's GitHub App. Valid while
+	// managed mode is single-customer (the instance and its App are the
+	// owner's); Stage T must revisit.
+	SurfaceGitHubApp: true,
 }
 
 // TenantAdminMay reports whether a tenant_admin session may use surface.

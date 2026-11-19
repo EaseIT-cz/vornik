@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,31 @@ var engineSlots = map[string]chan struct{}{"broker": make(chan struct{}, 4), "ne
 
 // engineCallTool is the fetch seam; tests replace it.
 var engineCallTool = callMCPTool
+
+// engineSPYReturn3 is SPY's return over its last three completed sessions
+// (#826), from the broker's daily bars; nil when it cannot be read. Tests
+// replace it.
+var engineSPYReturn3 = func(ctx context.Context, _ *Executor, projectID string, now time.Time) *float64 {
+	ctx, cancel := context.WithTimeout(ctx, engineCallTimeout)
+	defer cancel()
+	bars, err := fetchDailyBars(ctx, brokerBaseURL(), projectID, "SPY")
+	if err != nil {
+		incEngine(engineFetchTotal, "spy_daily_bars", "failed")
+		return nil
+	}
+	incEngine(engineFetchTotal, "spy_daily_bars", "ok")
+	return threeSessionReturn(completedBars(bars, now))
+}
+
+// threeSessionReturn is the last close over the close three sessions
+// earlier, less one; nil with fewer than four closes or a non-positive base.
+func threeSessionReturn(bars []barClose) *float64 {
+	if len(bars) < 4 || !(bars[len(bars)-4].Close > 0) {
+		return nil
+	}
+	r := bars[len(bars)-1].Close/bars[len(bars)-4].Close - 1
+	return &r
+}
 
 // engineSMA50 reads the daemon's own daily SMA50 for the result's long
 // opens, the value the entry_gate_consistent verifier reads. A seam for tests.
@@ -99,13 +125,24 @@ func (e *Executor) engineDecide(ctx context.Context, in *StepOutcome, calls []tr
 	now := evidenceNow().UTC()
 	pol, caps := enginePolicy(p), engineCaps(p)
 	universe := watchlisted(p)
+	spy3 := engineSPYReturn3(ctx, e, p.ID, now)
 	build := func(cs []trading.ToolCall) rules.Inputs {
 		ins := trading.ShadowInputs(cs, universe, now, 0.01)
 		e.addOrderState(ctx, &ins, p.ID, now, pol)
+		ins.SPYReturn3 = spy3
 		return ins
 	}
 	ins := build(calls)
-	if fetched := e.fetchSetupInputs(ctx, p.ID, rules.SetupCandidates(ins, pol, caps)); len(fetched) > 0 {
+	// The model's adds need the hourly confirmation an open needs (#826 C2),
+	// so their setup inputs are fetched with the open candidates'.
+	adds := trading.AddSymbols(original)
+	need := rules.SetupCandidates(ins, pol, caps)
+	for _, sym := range adds {
+		if !slices.Contains(need, sym) {
+			need = append(need, sym)
+		}
+	}
+	if fetched := e.fetchSetupInputs(ctx, p.ID, need); len(fetched) > 0 {
 		ins = build(append(append([]trading.ToolCall{}, calls...), fetched...))
 	}
 	d := rules.Decide(ins, pol, caps)
@@ -119,16 +156,28 @@ func (e *Executor) engineDecide(ctx context.Context, in *StepOutcome, calls []tr
 		if derr != nil {
 			return fmt.Errorf("schema violation: rule engine: strategist result is not a JSON object: %w", derr)
 		}
-		in.ResultBytes = dropped
+		// No add goes through ungated either (#826 C2: fail closed).
+		none := map[string]string{}
+		for _, sym := range adds {
+			none[sym] = "insufficient_inputs"
+		}
+		in.ResultBytes, _ = trading.DropAdds(dropped, none)
 		return nil
 	}
+	opens := len(d.Entries)
 	if len(d.Entries) > 0 {
 		var dropped []string
 		out, dropped = trading.DropOpensBelowSMA50(out, engineSMA50(ctx, e, p, out))
 		if len(dropped) > 0 {
+			opens -= len(dropped)
 			e.logger.Warn().Str("task_id", in.Task.ID).Strs("symbols", dropped).
 				Msg("rule engine: open dropped, limit below (or no) daemon daily SMA50")
 		}
+	}
+	if gates := addGates(adds, ins, opens, pol); len(gates) > 0 {
+		var dropped []string
+		out, dropped = trading.DropAdds(out, gates)
+		e.logger.Info().Str("task_id", in.Task.ID).Strs("symbols", dropped).Msg("rule engine: add dropped (market brake, window or hourly)")
 	}
 	in.ResultBytes = out
 	e.recordFunnel(ctx, in)
@@ -139,6 +188,25 @@ func (e *Executor) engineDecide(ctx context.Context, in *StepOutcome, calls []tr
 		incEngine(engineTicksTotal, "no_opens")
 	}
 	return nil
+}
+
+// addGates decides each model add with rules.AddGate, in the result's
+// order; an add that passes takes one of the window's slots. It returns the
+// refused symbols with their gate.
+func addGates(adds []string, ins rules.Inputs, opens int, pol rules.Policy) map[string]string {
+	hourly := map[string]*rules.Hourly{}
+	for _, c := range ins.Candidates {
+		hourly[c.Symbol] = c.Hourly
+	}
+	gates := map[string]string{}
+	for _, sym := range adds {
+		if g := rules.AddGate(hourly[sym], ins, opens, pol); g != "" {
+			gates[sym] = g
+			continue
+		}
+		opens++
+	}
+	return gates
 }
 
 // fetchSetupInputs fetches hourly bars, a quote and fundamentals for each

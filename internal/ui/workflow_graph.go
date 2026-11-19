@@ -408,6 +408,9 @@ func edgeKindKey(kind string) (string, error) {
 
 // WorkflowGraphData backs the read-only workflow graph view.
 type WorkflowGraphData struct {
+	// ReadOnly renders the page for managed hosting's instance owner, who
+	// may read the definition and change nothing (GitHub #764).
+	ReadOnly    bool
 	Title       string
 	CurrentPage string
 	WorkflowID  string
@@ -425,6 +428,7 @@ type WorkflowGraphData struct {
 // template just plots primitives (no client layout library).
 func (s *Server) WorkflowGraph(w http.ResponseWriter, r *http.Request, workflowID string) {
 	data := s.workflowGraphData(workflowID)
+	data.ReadOnly = ownerReadOnly(r)
 	switch data.Error {
 	case "":
 		// ok

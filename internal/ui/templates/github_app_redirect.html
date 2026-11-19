@@ -1,0 +1,16 @@
+{{define "github_app_redirect.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    <main id="main" class="flex-1 max-w-xl mx-auto w-full py-10 px-4">
+        <form id="manifest-form" method="post" action="{{.Action}}" class="space-y-3">
+            <input type="hidden" name="manifest" value="{{.Manifest}}">
+            <p class="text-sm text-gray-300">Taking you to GitHub to create the App.</p>
+            <button type="submit" class="v-btn v-btn--primary">Continue to GitHub</button>
+        </form>
+    </main>
+    <script src="/ui/static/github-app-redirect.js"></script>
+</body>
+</html>
+{{end}}

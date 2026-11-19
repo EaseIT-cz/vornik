@@ -114,6 +114,8 @@ func (c *Container) startGraphWorker(mgr *memory.Manager) {
 		c.Logger.With().Str("component", "memory").Str("worker", "kg-extract").Logger(),
 		wcfg,
 	)
+	// GitHub #459: the re-embed round screens Art 18 restrictions first.
+	c.graphWorker.SetRestrictionScreen(persistence.NewSQLRestrictionScreen(c.DB))
 	c.Logger.Info().
 		Str("extractor_model", extractorModel).
 		Str("resolver_model", resolverModel).

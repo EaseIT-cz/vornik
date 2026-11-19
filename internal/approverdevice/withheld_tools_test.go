@@ -17,8 +17,8 @@ func TestPages_ListShowsWithheldTools(t *testing.T) {
 	phone := newBrowser(t, srv)
 	code, _, _ := f.svc.StartPairing(context.Background(), "Pixel")
 	phone.pairWith(code)
-	f.svc.SetWithheldTools(func(context.Context) []string {
-		return []string{"Withheld: hermes's server mail in comms. Vornik stopped <b>search_messages</b>."}
+	f.svc.SetWithheldTools(func(context.Context) []Notice {
+		return []Notice{{Key: "k1", Text: "Withheld: hermes's server mail in comms. Vornik stopped <b>search_messages</b>."}}
 	})
 	res, body := phone.do(http.MethodGet, "/ui/approve/", nil, nil)
 	if res.StatusCode != 200 || !strings.Contains(body, "Vornik stopped &lt;b&gt;search_messages&lt;/b&gt;.") {

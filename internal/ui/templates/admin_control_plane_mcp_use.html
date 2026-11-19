@@ -32,6 +32,21 @@
                 </label>
                 <button type="submit" class="v-btn v-btn--secondary">Show its tools</button>
             </form>
+            {{with .OAuth}}
+            <section class="rounded-md border border-dark-700 px-3 py-2 space-y-2 text-sm" data-mcp-oauth>
+                <h2 class="text-sm font-semibold text-gray-200">Sign-in for {{$.Server}}</h2>
+                {{if .Connected}}
+                <p class="text-gray-300">Connected{{with .ConnectedBy}} by {{.}}{{end}}{{with .ConnectedAt}} on {{.}}{{end}}{{with .ExpiresAt}}; the access token expires {{.}}{{end}}.{{if .NeedsReconnect}} <strong>It needs reconnecting.</strong>{{end}}</p>
+                {{if .Inherited}}<p class="text-xs text-amber-700 dark:text-amber-300">This sign-in is the instance's: every project using {{$.Server}} shares it, and disconnecting removes it for all of them.</p>{{end}}
+                <form method="POST" action="/ui/projects/{{$.Project}}/mcp-tools">
+                    <input type="hidden" name="server" value="{{$.Server}}">
+                    <button type="submit" name="action" value="disconnect" class="v-btn v-btn--quiet" data-confirm="Disconnect {{$.Server}}? Its tools stop working until someone connects it again.">Disconnect</button>
+                </form>
+                {{else}}
+                <p class="text-gray-400">Not connected.</p>
+                {{end}}
+            </section>
+            {{end}}
             {{with .Pending}}
             <section class="space-y-2">
                 <h2 class="text-sm font-semibold text-gray-200">Approved, waiting to apply</h2>

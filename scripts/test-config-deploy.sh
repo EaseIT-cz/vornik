@@ -423,16 +423,19 @@ else
 	fail "a tunable file was overwritten"
 fi
 
-# H6: a top-level file is kept.
+# H6, inverted 2026-11-19 (#776, drift design amendment): a top-level file
+# is canonical, so an unedited one now follows the template. Slice H kept it
+# preserve-existing, which is how a shipped pricing row never reached an
+# install. (An edited pricing.yaml: scripts/config-deploy-pricing_test.sh.)
 build_repo
 TGT="$TMP/h6"; rm -rf "$TGT"
 run_deploy_rev "rev-1"
 echo "pricing v2" > "$REPO/pricing.yaml"
 run_deploy_rev "rev-2"
-if [ "$(cat "$TGT/configs/pricing.yaml")" = "pricing" ]; then
-	pass "a top-level file is still preserve-existing"
+if [ "$(cat "$TGT/configs/pricing.yaml")" = "pricing v2" ]; then
+	pass "an unedited top-level file follows the template (#776)"
 else
-	fail "pricing.yaml was overwritten"
+	fail "an unedited pricing.yaml kept its first version"
 fi
 
 # H7: a second install of the same revision changes nothing.

@@ -31,6 +31,9 @@ import (
 
 // WorkflowEditData backs the workflow editor template.
 type WorkflowEditData struct {
+	// ReadOnly renders the page for managed hosting's instance owner, who
+	// may read the definition and change nothing (GitHub #764).
+	ReadOnly     bool
 	Title        string
 	CurrentPage  string
 	WorkflowID   string
@@ -113,6 +116,7 @@ type WorkflowTerminalView struct {
 // WorkflowEdit renders the editor.
 func (s *Server) WorkflowEdit(w http.ResponseWriter, r *http.Request, workflowID string) {
 	data := s.workflowEditData(workflowID)
+	data.ReadOnly = ownerReadOnly(r)
 	data.AssistProjectID = r.URL.Query().Get("projectId")
 	data.AssistProjectID = assistProjectFromRequest(data.AssistProjectID, s.defaultAssistProjectForWorkflow(workflowID))
 	if data.Error != "" {

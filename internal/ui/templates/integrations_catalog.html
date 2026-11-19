@@ -12,6 +12,13 @@
                 <p class="text-ink-500 text-xs mt-0.5">Connect the channels and tools Vornik uses — each one is tested live before it's saved.</p>
             </div>
 
+            {{if .GitHubApp}}
+            <a href="/ui/github" class="block glass rounded-xl border border-surface-600 px-5 py-4 hover:border-brand-500">
+                <span class="text-sm font-medium text-ink-100">Review pull requests with GitHub</span>
+                <span class="block text-xs text-ink-500 mt-0.5">Create this instance's GitHub App in one step, then install it on your repositories.</span>
+            </a>
+            {{end}}
+
             {{if not .Tiles}}
             <div class="glass rounded-xl border border-surface-600 px-5 py-10 text-center text-ink-500 text-sm">
                 {{if .IsAdmin}}No integrations are registered on this deployment.

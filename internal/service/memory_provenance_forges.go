@@ -23,22 +23,22 @@ func (c *Container) provenanceAppToken(ctx context.Context, projectID, host, own
 }
 
 func provenanceAppTokenFor(ctx context.Context, src *github.InstallationTokenSource, p *registry.Project, host, owner string) (string, string) {
-	if p == nil || !p.GitHub.Enabled() {
+	if p == nil || !p.EffectiveGitHub().Enabled() {
 		return "", ""
 	}
-	repoOwner, _, _ := strings.Cut(strings.TrimSpace(p.GitHub.ResolveOutboundRepo()), "/")
+	repoOwner, _, _ := strings.Cut(strings.TrimSpace(p.EffectiveGitHub().ResolveOutboundRepo()), "/")
 	if repoOwner == "" || !strings.EqualFold(repoOwner, owner) {
 		return "", ""
 	}
-	apiBase := p.GitHub.ResolvedAPIBaseURL()
+	apiBase := p.EffectiveGitHub().ResolvedAPIBaseURL()
 	if !strings.EqualFold(githubWebHost(apiBase), host) {
 		return "", ""
 	}
-	tok, err := src.Token(ctx, apiBase, p.GitHub.AppID, p.GitHub.InstallationID, p.GitHub.PrivateKeyPath)
+	tok, err := src.Token(ctx, provenanceMint(p, apiBase))
 	if err != nil || tok == "" {
 		return "", ""
 	}
-	return tok, provenanceAppIdentity(p.GitHub)
+	return tok, provenanceAppIdentity(p.EffectiveGitHub())
 }
 
 // provenanceAppIdentity names a project's App for a clone's marker: the API
@@ -62,10 +62,10 @@ func (c *Container) provenanceAppTokenByIdentity(ctx context.Context, identity s
 		return ""
 	}
 	for _, p := range c.Registry.ListProjects() {
-		if p == nil || !p.GitHub.Enabled() || provenanceAppIdentity(p.GitHub) != identity {
+		if p == nil || !p.EffectiveGitHub().Enabled() || provenanceAppIdentity(p.EffectiveGitHub()) != identity {
 			continue
 		}
-		if tok, err := c.provenanceGitHubTokens.Token(ctx, p.GitHub.ResolvedAPIBaseURL(), p.GitHub.AppID, p.GitHub.InstallationID, p.GitHub.PrivateKeyPath); err == nil {
+		if tok, err := c.provenanceGitHubTokens.Token(ctx, provenanceMint(p, p.EffectiveGitHub().ResolvedAPIBaseURL())); err == nil {
 			return tok
 		}
 	}
@@ -110,4 +110,17 @@ func (c *Container) provenanceForgeNotes() (forges, refusals []string) {
 		refusals = append(refusals, line+"; fix: "+r.Fix)
 	}
 	return forges, refusals
+}
+
+// provenanceMint is a provenance clone's mint for project p (GitHub #820):
+// scoped to the project's outbound repository (for an App-backed block, the
+// binding's), and exempt from the instance-key guard only when App-backed.
+func provenanceMint(p *registry.Project, apiBase string) github.KeyFileMint {
+	g := p.EffectiveGitHub()
+	m := github.KeyFileMint{APIBase: apiBase, AppID: g.AppID, InstallationID: g.InstallationID,
+		KeyPath: g.PrivateKeyPath, AppBacked: g.UseRegistration}
+	if r := strings.TrimSpace(g.ResolveOutboundRepo()); r != "" {
+		m.Repositories = []string{r}
+	}
+	return m
 }

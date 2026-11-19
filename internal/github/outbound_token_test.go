@@ -31,7 +31,7 @@ func TestMintInstallationToken_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	token, expires, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 4040507, 139940331, key)
+	token, expires, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 4040507, 139940331, key, nil)
 	if err != nil {
 		t.Fatalf("MintInstallationToken: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestMintInstallationToken_NotConfigured(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := MintInstallationToken(context.Background(), http.DefaultClient, "https://api.github.com", tc.appID, tc.installID, tc.key)
+			_, _, err := MintInstallationToken(context.Background(), http.DefaultClient, "https://api.github.com", tc.appID, tc.installID, tc.key, nil)
 			if !errors.Is(err, ErrOutboundNotConfigured) {
 				t.Errorf("err = %v, want ErrOutboundNotConfigured", err)
 			}
@@ -81,7 +81,7 @@ func TestMintInstallationToken_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 1, 1, key)
+	_, _, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 1, 1, key, nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Errorf("err = %v, want an HTTP 404 error", err)
 	}
@@ -101,7 +101,7 @@ func TestMintInstallationToken_ErrorFormat_PinsClassifierAnchor(t *testing.T) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"message":"nope"}`))
 		}))
-		_, _, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 1, 1, key)
+		_, _, err := MintInstallationToken(context.Background(), srv.Client(), srv.URL, 1, 1, key, nil)
 		srv.Close()
 		want := "installation-token HTTP " + strconv.Itoa(status)
 		if err == nil || !strings.Contains(err.Error(), want) {

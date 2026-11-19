@@ -47,6 +47,13 @@
                 </div>
             </section>
 
+            {{if or (eq .Role "admin") (eq .Role "tenant_admin")}}
+            <section class="space-y-1" data-approvers-link>
+                <h2 class="text-sm font-medium text-gray-200">Approver phones</h2>
+                <p class="text-xs text-gray-400">The phones that approve what your agents ask to change. <a class="text-accent-300 hover:underline" href="/ui/settings/approvers">Pair, revoke or remove a phone</a>.</p>
+            </section>
+            {{end}}
+
             <section class="space-y-3">
                 <div class="flex items-center justify-between">
                     <h2 class="text-sm font-medium text-gray-200">Linked identities</h2>

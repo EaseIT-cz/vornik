@@ -34,7 +34,8 @@ func verifyTradingSeries(ctx context.Context, d Deps) PrereqResult {
 		// Graceful skip in minimal deployments (no trading repos wired).
 		return PrereqResult{OK: true, Detail: "trading-series probe not wired (no trading data sources)"}
 	}
-	findings, err := d.Trading.ValidateSeries(ctx)
+	rep, err := d.Trading.ValidateSeries(ctx)
+	findings := rep.Findings
 	if err != nil {
 		return PrereqResult{
 			OK:          false,
@@ -42,14 +43,28 @@ func verifyTradingSeries(ctx context.Context, d Deps) PrereqResult {
 			Remediation: "check the trading snapshot repository / DB connectivity",
 		}
 	}
+	ledger := ledgerSummary(rep)
 	if len(findings) == 0 {
-		return PrereqResult{OK: true, Detail: "trading series healthy (no anomalies)"}
+		return PrereqResult{OK: true, Detail: "trading series healthy (no anomalies); " + ledger}
 	}
 	return PrereqResult{
 		OK:          false,
-		Detail:      summarizeFindings(findings),
-		Remediation: "inspect the equity sampler (5-min cadence, leader-gated) and the broker connection; a stale or gappy series usually means the sampler or IB Gateway was down. out_of_bounds / non_monotonic indicate a data-integrity bug worth a closer look.",
+		Detail:      summarizeFindings(findings) + "; " + ledger,
+		Remediation: "inspect the equity sampler (5-min cadence, leader-gated) and the broker connection; a stale or gappy series usually means the sampler or IB Gateway was down. out_of_bounds / non_monotonic indicate a data-integrity bug worth a closer look. ledger_divergence: the fill ledger disagrees with the broker's holdings; historical gaps are repaired by https://docs.vornik.io (operator-gated).",
 	}
+}
+
+// ledgerSummary states what the fill-ledger comparison examined (#822): the
+// denominator, published whether or not anything diverged.
+func ledgerSummary(rep TradingSeriesReport) string {
+	if !rep.LedgerWired {
+		return "ledger not compared (no fill or order repository wired)"
+	}
+	s := fmt.Sprintf("ledger compared %d symbols in %d projects", rep.LedgerSymbols, rep.LedgerProjects)
+	if len(rep.LedgerSkipped) > 0 {
+		s += "; not compared: " + strings.Join(rep.LedgerSkipped, ", ")
+	}
+	return s
 }
 
 // summarizeFindings renders a stable, readable one-liner: per-code counts plus

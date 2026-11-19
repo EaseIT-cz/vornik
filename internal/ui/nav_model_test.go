@@ -89,7 +89,7 @@ func TestNavModelContract(t *testing.T) {
 		}
 	}
 	order("results", "results", "spend", "trends", "adoption")
-	order("manage", "manage-overview", "projects", "integrations", "admin-keys", "admin-agents", "admin-skills", "reminders", "insights", "trading", "my-account")
+	order("manage", "manage-overview", "projects", "integrations", "admin-keys", "admin-agents", "admin-skills", "approvers", "reminders", "insights", "trading", "my-account")
 	order("diagnostics", "diagnostics-overview", "live", "tasks", "executions", "swarms", "workflows", "memory", "quality", "audit")
 	order("operator", "admin", "operator", "regulatory", "admin-control-plane")
 	// Diagnostics lands on its overview (#756).

@@ -20,7 +20,8 @@
 #       and refuses the cutover on a dead step error class (2026-09-17: a
 #       stale class flapped a daemon on Restart=on-failure).
 #   5. Stops the service, installs the new binaries, deploys config assets
-#      (scripts/config-deploy.sh: adds missing files, brings a canonical file
+#      (scripts/config-deploy.sh: adds missing files, adds new shipped model
+#      rows to an edited pricing.yaml without changing a line, brings a canonical file
 #      nobody edited up to the release's version, never changes one you
 #      edited or acknowledged), starts it. Because the unit is Type=notify,
 #      systemd only reports "ready" AFTER the DB migrations applied and health
@@ -672,14 +673,17 @@ install -m 0755 "$REPO_DIR/.bin/vornikctl" "$BIN_DIR/vornikctl"
 # agent-templates never reached an updated install. Preserve-existing, except
 # that a canonical file nobody edited follows the release (drift design slice
 # H). With the service stopped, so the new daemon starts on these files: it
-# reads agent-templates at start. A warning, not a failure: the binaries are
-# already swapped.
+# reads agent-templates at start. One exception to "kept" (#776): an edited
+# pricing.yaml gains the shipped model rows it lacks and changes no line it
+# has; the merged file is installed only after the NEW vornikctl (VORNIK_CTL,
+# just installed above) parses it the way the daemon will. A warning, not a
+# failure: the binaries are already swapped.
 CONFIG_ROOT="$(dirname "$CONFIG")"
-log "Deploying config assets into $CONFIG_ROOT/configs (files you edited are kept)"
-if ! VORNIK_DEPLOY_REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)" \
+log "Deploying config assets into $CONFIG_ROOT/configs (files you edited are kept; an edited pricing.yaml gains new shipped rows)"
+if ! VORNIK_DEPLOY_REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)" VORNIK_CTL="$BIN_DIR/vornikctl" \
      "$REPO_DIR/scripts/config-deploy.sh" "$CONFIG_ROOT"; then
   warn "config asset deploy reported a problem; re-run it by hand:"
-  warn "  VORNIK_DEPLOY_REVISION=\$(git -C $REPO_DIR rev-parse HEAD) $REPO_DIR/scripts/config-deploy.sh $CONFIG_ROOT"
+  warn "  VORNIK_DEPLOY_REVISION=\$(git -C $REPO_DIR rev-parse HEAD) VORNIK_CTL=$BIN_DIR/vornikctl $REPO_DIR/scripts/config-deploy.sh $CONFIG_ROOT"
 fi
 
 log "Starting $SERVICE (auto-applies additive migrations)"

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/github"
@@ -23,10 +24,12 @@ const ghTokenRenewBuffer = 5 * time.Minute
 // credentials. Tokens are cached per installation id and reused across a task's
 // steps until ghTokenRenewBuffer before expiry. Concurrency-safe.
 func (e *Executor) installationToken(ctx context.Context, project *registry.Project) (string, error) {
-	if project == nil || !project.GitHub.Enabled() {
+	if project == nil || !project.EffectiveGitHub().Enabled() {
 		return "", nil
 	}
-	g := project.GitHub
+	// Resolved: an App-backed block's App and installation come from the
+	// registration and the signed binding, never its file (GitHub #800).
+	g := project.EffectiveGitHub()
 
 	e.ghTokenMu.Lock()
 	defer e.ghTokenMu.Unlock()
@@ -36,7 +39,15 @@ func (e *Executor) installationToken(ctx context.Context, project *registry.Proj
 	// Keyed by the whole App identity, never the installation id alone: a
 	// project naming another's installation must not receive its cached
 	// push token (security review of 180ed1da9).
-	id := github.AppIdentity{APIBase: g.ResolvedAPIBaseURL(), AppID: g.AppID, InstallationID: g.InstallationID, KeyPath: g.PrivateKeyPath}
+	// #820: the token reaches only the block's outbound repository (for an
+	// App-backed block, the binding's), and the cache keys on that scope.
+	var repos []string
+	if r := strings.TrimSpace(g.ResolveOutboundRepo()); r != "" {
+		repos = []string{r}
+	}
+	m := github.KeyFileMint{APIBase: g.ResolvedAPIBaseURL(), AppID: g.AppID, InstallationID: g.InstallationID,
+		KeyPath: g.PrivateKeyPath, Repositories: repos, AppBacked: g.UseRegistration}
+	id := github.AppIdentity{APIBase: m.APIBase, AppID: m.AppID, InstallationID: m.InstallationID, KeyPath: m.KeyPath, Scope: github.ScopeKey(repos)}
 	if c, ok := e.ghTokens[id]; ok && time.Until(c.expires) > ghTokenRenewBuffer {
 		return c.token, nil
 	}
@@ -45,7 +56,11 @@ func (e *Executor) installationToken(ctx context.Context, project *registry.Proj
 	if mint == nil {
 		mint = defaultGitHubMint
 	}
-	token, expires, err := mint(ctx, g.ResolvedAPIBaseURL(), g.AppID, g.InstallationID, g.PrivateKeyPath)
+	if len(repos) == 0 {
+		e.logger.Warn().Str("project_id", project.ID).Int64("installation_id", m.InstallationID).
+			Msg("github: minting an unscoped push token; the github block names no repo (#820)")
+	}
+	token, expires, err := mint(ctx, m)
 	if err != nil {
 		return "", err
 	}
@@ -93,6 +108,6 @@ func (e *Executor) injectGitHubToken(ctx context.Context, env map[string]string,
 // an installation access token via the GitHub REST API. The key never leaves
 // this process — only the short-lived token is returned to the caller, which
 // injects it as GH_TOKEN into the agent container.
-func defaultGitHubMint(ctx context.Context, apiBase string, appID, installID int64, keyPath string) (string, time.Time, error) {
-	return github.MintFromKeyFile(ctx, apiBase, appID, installID, keyPath)
+func defaultGitHubMint(ctx context.Context, m github.KeyFileMint) (string, time.Time, error) {
+	return github.MintFromKeyFile(ctx, m)
 }

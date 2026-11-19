@@ -83,6 +83,11 @@ func DiscoverModelWindow(ctx context.Context, endpoint, apiKey, model string) (i
 	if n, isOllama, err := discoverOllamaWindow(ctx, endpoint, apiKey, model); isOllama {
 		return n, err
 	}
+	// llama-server answers neither Ollama's /api/ps nor with vLLM's refusal;
+	// it publishes its slot window at /props (#827).
+	if n, ok := discoverLlamaCppWindow(ctx, endpoint, apiKey); ok {
+		return n, nil
+	}
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":99000000,"messages":[{"role":"user","content":"x"}]}`, model)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -222,7 +227,7 @@ func discoverOllamaWindow(ctx context.Context, endpoint, apiKey, model string) (
 			ContextLength int    `json:"context_length"`
 		} `json:"models"`
 	}
-	if !ollamaGetJSON(ctx, root+"/api/ps", apiKey, &ps) || ps.Models == nil {
+	if !getJSON(ctx, root+"/api/ps", apiKey, &ps) || ps.Models == nil {
 		return 0, false, nil
 	}
 	for _, m := range *ps.Models {
@@ -250,10 +255,32 @@ func discoverOllamaWindow(ctx context.Context, endpoint, apiKey, model string) (
 	var ver struct {
 		Version string `json:"version"`
 	}
-	if !ollamaGetJSON(ctx, root+"/api/version", apiKey, &ver) || ver.Version == "" {
+	if !getJSON(ctx, root+"/api/version", apiKey, &ver) || ver.Version == "" {
 		return 0, false, nil
 	}
 	return 0, true, fmt.Errorf("model-window probe: %q: %w", model, ErrOllamaModelNotLoaded)
+}
+
+// discoverLlamaCppWindow reads a llama-server's window from GET <root>/props
+// (#827): default_generation_settings.n_ctx, which llama.cpp builds from a
+// slot's settings, so it is the window one request can use (per slot; not
+// divided again). ok is false for anything that does not answer like
+// llama-server, and the caller then runs the refusal probe. The model name is
+// not matched: llama-server serves one model under any name.
+func discoverLlamaCppWindow(ctx context.Context, endpoint, apiKey string) (int, bool) {
+	var props struct {
+		Default *struct {
+			NCtx int `json:"n_ctx"`
+		} `json:"default_generation_settings"`
+		TotalSlots int `json:"total_slots"`
+	}
+	if !getJSON(ctx, ollamaRoot(endpoint)+"/props", apiKey, &props) {
+		return 0, false
+	}
+	if props.Default == nil || props.Default.NCtx <= 0 || props.TotalSlots <= 0 {
+		return 0, false
+	}
+	return props.Default.NCtx, true
 }
 
 // ollamaDigest returns the model's digest from GET /api/tags, or "" when it
@@ -266,7 +293,7 @@ func ollamaDigest(ctx context.Context, root, apiKey, model string) string {
 			Digest string `json:"digest"`
 		} `json:"models"`
 	}
-	if !ollamaGetJSON(ctx, root+"/api/tags", apiKey, &tags) {
+	if !getJSON(ctx, root+"/api/tags", apiKey, &tags) {
 		return ""
 	}
 	for _, t := range tags.Models {
@@ -277,9 +304,9 @@ func ollamaDigest(ctx context.Context, root, apiKey, model string) string {
 	return ""
 }
 
-// ollamaGetJSON GETs url and decodes a 200 JSON body into v. False on any
+// getJSON GETs url and decodes a 200 JSON body into v. False on any
 // failure: the caller treats that as "not Ollama".
-func ollamaGetJSON(ctx context.Context, url, apiKey string, v any) bool {
+func getJSON(ctx context.Context, url, apiKey string, v any) bool {
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)

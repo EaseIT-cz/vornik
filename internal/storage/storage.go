@@ -325,6 +325,11 @@ type Repositories struct {
 	// ApproverDevices holds approver devices, pairing codes and the approval
 	// requests they decide (agent-administered Vornik design §9).
 	ApproverDevices persistence.ApproverDeviceRepository
+	// GitHubAppManifestStates holds the console's App-manifest states
+	// (GitHub #802).
+	GitHubAppManifestStates persistence.GitHubAppManifestStateRepository
+	// GitHubAppBindings holds the App's installation bindings (GitHub #800).
+	GitHubAppBindings persistence.GitHubAppBindingRepository
 	// AgentGrants holds what a device approved for agent namespaces:
 	// integrations, workflow reach, budget ceilings (design §7).
 	AgentGrants persistence.AgentGrantRepository
@@ -537,6 +542,8 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		AccountTransitions:      persistence.TrackHeldTransitions(sqlite.NewAccountTransitionRepository(db)), // #669: held tickets
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
+		GitHubAppManifestStates: sqlite.NewGitHubAppManifestStateRepository(db),
+		GitHubAppBindings:       sqlite.NewGitHubAppBindingRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
 		AgentAdminRefusals:      sqlite.NewAgentAdminRefusalRepository(db),
 		CompanionPushOutbox:     sqlite.NewCompanionPushOutbox(db),
@@ -722,6 +729,8 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		AccountTransitions:             persistence.TrackHeldTransitions(postgres.NewAccountTransitionRepository(dbtx)), // #669: held tickets
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
+		GitHubAppManifestStates:        postgres.NewGitHubAppManifestStateRepository(dbtx),
+		GitHubAppBindings:              postgres.NewGitHubAppBindingRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),
 		AgentAdminRefusals:             postgres.NewAgentAdminRefusalRepository(dbtx),
 		CompanionPushOutbox:            postgres.NewCompanionPushOutbox(dbtx),

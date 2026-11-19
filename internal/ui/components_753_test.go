@@ -128,9 +128,10 @@ func TestInbox_RowsUseTheComponent_759(t *testing.T) {
 	if strings.Contains(s, `class="rounded-xl border border-dark-600 bg-dark-800`) {
 		t.Error("an inbox row still uses the hand-styled card")
 	}
-	// Seven since #669 item 5 added the approved-but-not-applied row.
-	if n := strings.Count(s, `class="v-inbox-row"><div class="v-inbox-row__body`); n != 7 {
-		t.Errorf("%d rows use .v-inbox-row, want the 7 row kinds", n)
+	// Seven since #669 item 5 added the approved-but-not-applied row; eight
+	// since #806 added the withheld-tools notice row.
+	if n := strings.Count(s, `class="v-inbox-row"><div class="v-inbox-row__body`); n != 8 {
+		t.Errorf("%d rows use .v-inbox-row, want the 8 row kinds", n)
 	}
 	for _, id := range []string{`id="inbox-item-{{.TaskID}}" class="v-inbox-row"`, `id="broker-action-{{.ActionID}}" class="v-inbox-row"`, `id="{{.Anchor}}" class="v-inbox-row"`} {
 		if !strings.Contains(s, id) {

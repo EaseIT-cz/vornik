@@ -74,6 +74,8 @@ func TestFillRecord_HappyPath_WithCommission(t *testing.T) {
 			nil, nil, "reconcile", nil, // exec_id, account_id, source, source_detail
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The order's filled_qty recompute (GitHub #823), on a retried insert too.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE trading_orders o")).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := repo.Record(context.Background(), fill); err != nil {
 		t.Fatalf("Record: %v", err)
@@ -109,6 +111,8 @@ func TestFillRecord_NilCommissionBindsAsNull(t *testing.T) {
 			nil, nil, "reconcile", nil, // exec_id, account_id, source, source_detail
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The order's filled_qty recompute (GitHub #823), on a retried insert too.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE trading_orders o")).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := repo.Record(context.Background(), fill); err != nil {
 		t.Fatalf("Record: %v", err)
@@ -140,6 +144,8 @@ func TestFillRecord_DefaultsFilledAt(t *testing.T) {
 			nil, nil, "reconcile", nil, // exec_id, account_id, source, source_detail
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The order's filled_qty recompute (GitHub #823), on a retried insert too.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE trading_orders o")).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := repo.Record(context.Background(), fill); err != nil {
 		t.Fatalf("Record: %v", err)
@@ -156,6 +162,8 @@ func TestFillRecord_ConflictDoNothingIsSilent(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta("ON CONFLICT (id) DO NOTHING")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	// The order's filled_qty recompute (GitHub #823), on a retried insert too.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE trading_orders o")).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := repo.Record(context.Background(), &persistence.TradingFill{
 		ID: "dup", OrderID: "o", ProjectID: "p", Symbol: "S",
@@ -372,6 +380,8 @@ func TestFillRecord_WritesExecColumns(t *testing.T) {
 		WithArgs("exec-ex-1", "ord-1", "p-1", "AAPL", 4.0, 338.75, nil,
 			fill.FilledAt, "ex-1", "DUH1", "reconcile", "perm=2001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The order's filled_qty recompute (GitHub #823), on a retried insert too.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE trading_orders o")).WillReturnResult(sqlmock.NewResult(0, 0))
 	require.NoError(t, repo.Record(context.Background(), fill))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

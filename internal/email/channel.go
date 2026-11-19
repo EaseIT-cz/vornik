@@ -44,6 +44,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
@@ -261,6 +262,13 @@ type AttachmentExtraction struct {
 // instance is constructed per daemon boot; per-project multi-
 // address routing is a slice-2 concern.
 type Channel struct {
+	// failureNotices allows one failure notice per sender per hour (GitHub
+	// #369; failure_notice_369.go).
+	failureNotices conversation.NoticeWindow
+	// aiDisclosure applies the Art 50 notice to the failure notice (#369);
+	// nil discloses with the compiled defaults.
+	aiDisclosure *aidisclosure.Service
+
 	// aiMarker signs Art 50(2) marks on outbound bodies (aimark.go).
 	aiMarkerMu sync.Mutex
 	aiMarker   *aimark.Marker
@@ -747,6 +755,7 @@ func (c *Channel) handleRawMessage(ctx context.Context, raw RawMessage) {
 				Msg("email: the chat turn for this message ran out its time limit; marking seen and not retrying (a retry would time out the same way)")
 			c.forgetDeliveryFailure(raw.UID)
 			c.markSeenBestEffort(ctx, raw.UID)
+			c.sendFailureNotice(ctx, parsed, msg)
 			return
 		}
 		attempts := c.noteDeliveryFailure(raw.UID)
@@ -757,6 +766,7 @@ func (c *Channel) handleRawMessage(ctx context.Context, raw RawMessage) {
 				Msg("email: delivery failed repeatedly; marking seen and dropping so later messages are not starved")
 			c.forgetDeliveryFailure(raw.UID)
 			c.markSeenBestEffort(ctx, raw.UID)
+			c.sendFailureNotice(ctx, parsed, msg)
 			return
 		}
 		c.logger.Warn().Err(err).
@@ -1076,15 +1086,16 @@ func (c *Channel) sendOutbound(ctx context.Context, msg conversation.ChannelMess
 	}
 
 	out := OutboundMessage{
-		AIMark:      c.markBody(ctx, msg.Text),
-		From:        c.cfg.FromAddress,
-		To:          to,
-		Subject:     subject,
-		Body:        msg.Text,
-		InReplyTo:   inReplyTo,
-		References:  references,
-		Date:        c.clock(),
-		Attachments: attachments,
+		AutoSubmitted: msg.ChannelSpecific["auto_submitted"] == "1",
+		AIMark:        c.markBody(ctx, msg.Text),
+		From:          c.cfg.FromAddress,
+		To:            to,
+		Subject:       subject,
+		Body:          msg.Text,
+		InReplyTo:     inReplyTo,
+		References:    references,
+		Date:          c.clock(),
+		Attachments:   attachments,
 	}
 	rendered, msgID, err := RenderRFC5322(out)
 	if err != nil {

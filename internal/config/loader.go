@@ -450,6 +450,9 @@ func (c *Config) Validate() error {
 	if err := c.validateDatabase(); err != nil {
 		return err
 	}
+	if err := c.Bench.validate(c.Database.Name); err != nil {
+		return err
+	}
 	// A doctor threshold outside its range produces a check that can never
 	// fire, which is indistinguishable from the check not existing — the exact
 	// invisibility the config seam was added to remove. Fail the boot instead.

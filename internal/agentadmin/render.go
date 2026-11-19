@@ -233,6 +233,7 @@ func opFor(st *State, path, content string) FileOp {
 type projectData struct {
 	Namespace, ID, DisplayName, Purpose, SwarmID, DefaultWorkflowID string
 	MonthlyUSD                                                      string
+	MaxConcurrentTasks                                              int
 	Servers                                                         []ServerState
 	APIs                                                            []APIState
 	Secrets                                                         []string
@@ -248,7 +249,8 @@ func (r *Renderer) renderProject(ns string, p *ProjectState) (string, error) {
 	return r.exec(tmplProject, projectData{
 		Namespace: ns, ID: p.ID, DisplayName: p.DisplayName, Purpose: p.Purpose,
 		SwarmID: p.Swarm.ID, DefaultWorkflowID: p.DefaultWorkflowID,
-		MonthlyUSD: formatUSD(p.MonthlyUSD), Servers: servers, APIs: apis, Secrets: secrets,
+		MonthlyUSD: formatUSD(p.MonthlyUSD), MaxConcurrentTasks: p.MaxConcurrentTasks,
+		Servers: servers, APIs: apis, Secrets: secrets,
 	})
 }
 

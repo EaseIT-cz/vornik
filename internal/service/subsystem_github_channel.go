@@ -85,6 +85,7 @@ func (s *GitHubChannelSubsystem) Start(ctx context.Context) error {
 		logProjectID = "(multi-installation)"
 	}
 	store.SetPersister(c.channelSessionPersister("github"))
+	c.GitHubChannel.SetAIDisclosure(c.AIDisclosure) // the failure notice's Art 50 notice (#369)
 
 	receiver := &dispatcher.ChannelReceiver{
 		Channel:                  c.GitHubChannel,

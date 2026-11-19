@@ -153,6 +153,12 @@ type ParsedMessage struct {
 	// unparseable; the channel falls back to the wall clock.
 	Date time.Time
 
+	// AutoSubmitted is true for an automatic message (RFC 3834 §2): an
+	// Auto-Submitted header other than "no", a multipart/report body (a
+	// bounce or a read receipt), a Precedence of bulk, junk or list, or a
+	// mailer-daemon or postmaster sender. Such a message never gets a
+	// failure notice (GitHub #369), so two machines cannot reply forever.
+	AutoSubmitted bool
 	// AuthResults captures every "Authentication-Results:" header on
 	// the message (multi-hop relays each stamp one) so the slice-3
 	// HeaderAuthVerifier can inspect upstream MTA verdicts without
@@ -212,6 +218,8 @@ func ParseRFC5322(raw []byte) (ParsedMessage, error) {
 	if d, err := mail.ParseDate(msg.Header.Get("Date")); err == nil {
 		out.Date = d
 	}
+
+	out.AutoSubmitted = isAutomaticMessage(msg.Header, out.From)
 
 	body, err := io.ReadAll(msg.Body)
 	if err != nil {
@@ -305,4 +313,20 @@ func parseReferences(header string) []string {
 		out = append(out, f)
 	}
 	return out
+}
+
+// isAutomaticMessage applies RFC 3834 §2's signals (GitHub #369).
+func isAutomaticMessage(h mail.Header, from string) bool {
+	if v := strings.ToLower(strings.TrimSpace(h.Get("Auto-Submitted"))); v != "" && v != "no" {
+		return true
+	}
+	if ct := strings.ToLower(h.Get("Content-Type")); strings.HasPrefix(strings.TrimSpace(ct), "multipart/report") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(h.Get("Precedence"))) {
+	case "bulk", "junk", "list":
+		return true
+	}
+	local, _, _ := strings.Cut(strings.ToLower(from), "@")
+	return local == "mailer-daemon" || local == "postmaster"
 }

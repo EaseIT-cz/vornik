@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,12 +153,20 @@ func TestHostApprovals_GetWaitsForTheAnswer(t *testing.T) {
 	id := approverdevice.HostActionID("hermes", "ab01")
 	row, err := svc.Request(ctx, id)
 	require.NoError(t, err)
+	// GitHub #834: deterministic. The answer comes once the poll has read the
+	// request as pending (the seam), not after a sleep; and the decision's
+	// error is asserted, not discarded.
+	polled := make(chan struct{})
+	var once sync.Once
+	srv.hostApprovalPolled = func() { once.Do(func() { close(polled) }) }
+	decided := make(chan error, 1)
 	go func() {
-		time.Sleep(300 * time.Millisecond)
-		_ = svc.DecideChoice(ctx, red.Device, id, row.RenderedSHA256, "session")
+		<-polled
+		decided <- svc.DecideChoice(ctx, red.Device, id, row.RenderedSHA256, "session")
 	}()
 	start := time.Now()
 	rec := hostDo(srv, http.MethodGet, "/api/v1/agent/host-approvals/ab01?wait=5", hermes, nil)
+	require.NoError(t, <-decided, "the decision itself failed")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"choice":"session"`)
 	require.Less(t, time.Since(start), 4*time.Second, "the poll did not return when the answer came")

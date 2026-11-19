@@ -74,7 +74,7 @@ func TestAgentAdmin481_SuspensionIsStickyUntilReapproved(t *testing.T) {
 		t.Fatalf("list_my_setup does not say the tool is held: %q", note)
 	}
 	lines := f.c.agentWithheldToolLines(ctx)
-	if len(lines) != 1 || !strings.Contains(lines[0], `"search_messages"`) || !strings.Contains(lines[0], "approve them again") {
+	if len(lines) != 1 || !strings.Contains(lines[0].Text, `"search_messages"`) || !strings.Contains(lines[0].Text, "approve them again") {
 		t.Fatalf("device lines: %q", lines)
 	}
 	connected, _ := f.c.mcpManager.AgentReadVerdicts()

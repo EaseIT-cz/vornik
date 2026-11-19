@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/secrets"
 
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
@@ -329,7 +330,7 @@ func TestPostReview_HappyPathAndEventMapping(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 			in := executor.SystemStepInput{
 				Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 				Step:       &registry.WorkflowStep{Handler: "forge.post_review", GatingReviews: tc.gating},
@@ -377,7 +378,7 @@ func TestPostReview_GatingDerivesEventFromVerdict(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 			in := executor.SystemStepInput{
 				Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 7}),
 				Step:       &registry.WorkflowStep{Handler: "forge.post_review", GatingReviews: tc.gating},
@@ -401,7 +402,7 @@ func TestPostReview_Errors(t *testing.T) {
 		t.Error("missing deps should error")
 	}
 	// empty body
-	h := NewPostReviewHandler(fakeResolver{p: &fakeProvider{}}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: &fakeProvider{}}, realDiscloser())
 	if _, err := h.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{}`)}); err == nil {
 		t.Error("empty review body should error")
 	}
@@ -410,12 +411,12 @@ func TestPostReview_Errors(t *testing.T) {
 		t.Error("missing job should error")
 	}
 	// resolver error
-	hr := NewPostReviewHandler(fakeResolver{err: errors.New("no provider")}, realDiscloser())
+	hr := newTestPostReviewHandler(fakeResolver{err: errors.New("no provider")}, realDiscloser())
 	if _, err := hr.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{"body":"x"}`)}); err == nil {
 		t.Error("resolver error should propagate")
 	}
 	// post error
-	hp := NewPostReviewHandler(fakeResolver{p: &fakeProvider{reviewErr: errors.New("post boom")}}, realDiscloser())
+	hp := newTestPostReviewHandler(fakeResolver{p: &fakeProvider{reviewErr: errors.New("post boom")}}, realDiscloser())
 	if _, err := hp.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{"body":"x"}`)}); err == nil {
 		t.Error("post error should propagate")
 	}
@@ -693,4 +694,15 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// newTestPostReviewHandler is the handler as the daemon wires it, with the
+// default secret detector: since #838 a handler with no detector withholds
+// the prose it would publish (publication_838_test.go tests that case).
+func newTestPostReviewHandler(r ProviderResolver, d Discloser) *PostReviewHandler {
+	det, err := secrets.NewMultiDetector(secrets.Config{})
+	if err != nil {
+		panic(err)
+	}
+	return NewPostReviewHandler(r, d).WithSecretsDetector(det)
 }

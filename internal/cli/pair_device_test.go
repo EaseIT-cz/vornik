@@ -17,7 +17,9 @@ import (
 func newDeviceService(t *testing.T) *approverdevice.Service {
 	t.Helper()
 	db := sqlitetest.File(t, "d.db")
-	return approverdevice.New(sqlite.NewApproverDeviceRepository(db.DB))
+	svc := approverdevice.New(sqlite.NewApproverDeviceRepository(db.DB))
+	svc.SetAudit(sqlite.NewAdminAuditRepository(db.DB)) // as openApproverDevices does; pair codes are audited (#763)
+	return svc
 }
 
 func TestPairDevice_PrintsCodeURLAndHints(t *testing.T) {

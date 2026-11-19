@@ -132,7 +132,43 @@ func (s *Server) gateCompanionTool(key *persistence.APIKey, tool string) error {
 	if s.isBrokerProjectKey(key) && !brokerProjectTools[tool] {
 		return fmt.Errorf("BROKER_PROJECT: %s is not available to a key on a broker project", tool)
 	}
+	if scope, ok := companionToolScope[tool]; ok && !scope.granted(key) {
+		return errors.New(scope.refusal)
+	}
 	return nil
+}
+
+// companionToolScope is the memory or skill scope each tool needs (design 26
+// §3 C1, GitHub #844). The gate applies it, so tools/list offers only what the
+// key's scopes allow; each handler keeps its own check, and the refusal texts
+// here are the handlers' own, so a call outside scope reads the same as before.
+// TestCompanionToolsScope844_OfferedExactlyWhenCallable pins the two together.
+var companionToolScope = func() map[string]toolScope {
+	memRead := toolScope{func(k *persistence.APIKey) bool { return k.MemoryRead },
+		"this key lacks memory_read; ask the operator for `vornikctl companion grant --memory-read`"}
+	memWrite := toolScope{func(k *persistence.APIKey) bool { return k.MemoryWrite },
+		"this key lacks memory_write; ask the operator for `vornikctl companion grant --memory-write`"}
+	skillRead := toolScope{func(k *persistence.APIKey) bool { return k.SkillRead },
+		"this key lacks skill_read; ask the operator for `vornikctl companion grant --skill-read`"}
+	skillAdmin := func(refusal string) toolScope {
+		return toolScope{func(k *persistence.APIKey) bool { return k.SkillAdmin }, refusal}
+	}
+	approve := "this key lacks skill_admin; approving/rejecting skills requires `vornikctl companion grant --skill-admin`"
+	return map[string]toolScope{
+		"recall": memRead, "recent_memory": memRead, "memory_list": memRead, "list_scopes": memRead,
+		"remember": memWrite, "memory_correct": memWrite,
+		"skill_search": skillRead, "skill_get": skillRead, "skill_list": skillRead,
+		"skill_propose": {func(k *persistence.APIKey) bool { return k.SkillWrite },
+			"this key lacks skill_write; ask the operator for `vornikctl companion grant --skill-write`"},
+		"skill_approve": skillAdmin(approve), "skill_reject": skillAdmin(approve),
+		"skill_set_global": skillAdmin("this key lacks skill_admin; changing a skill's global reach requires `vornikctl companion grant --skill-admin`"),
+	}
+}()
+
+// toolScope is one entry of companionToolScope.
+type toolScope struct {
+	granted func(*persistence.APIKey) bool
+	refusal string
 }
 
 // brokerProjectFor is the project a broker workflow runs in for this key.

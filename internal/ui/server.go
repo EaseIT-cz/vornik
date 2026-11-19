@@ -741,6 +741,8 @@ type Server struct {
 	// than 500-ing. Operators see the gap and configure the missing
 	// piece without losing access to the rest.
 	adminAuditRepo persistence.AdminAuditRepository
+	// approverDevices backs the console's Approvers page (#763).
+	approverDevices ApproverDevices
 	// identityRepo backs /ui/admin/users (login approval). Nil (e.g.
 	// non-postgres / identity core off) → the page renders a
 	// "requires the identity core" notice and the nav badge is omitted.
@@ -818,6 +820,8 @@ type Server struct {
 	adminMCPRefresher    MCPRefresher
 	// operatorCredentials backs /ui/credentials (GitHub #623).
 	operatorCredentials OperatorCredentials
+	// githubApp backs /ui/github (GitHub #802); nil hides the page.
+	githubApp *GitHubAppActions
 	// mcpRefusals lists the MCP servers the daemon refused to register, for
 	// the hub's MCP section (GitHub #625 item 5). Nil: no list.
 	mcpRefusals func() []mcp.Refusal
@@ -905,6 +909,10 @@ type Server struct {
 	// agentApplyFailed lists approved requests that could not be applied
 	// (inbox_apply_failed.go, #669). nil hides the section.
 	agentApplyFailed func(context.Context) ([]ApplyFailedCard, bool, error)
+	// approverNotices are the console's #806 writes and its notice list.
+	approverNotices *ApproverNoticeActions
+	// ownerMemoryProbe probes the model-provider page's embeddings (#807).
+	ownerMemoryProbe onboarding.MemoryValidatorInterface
 	// agents backs /ui/admin/agents (agent-administered Vornik plan P6.5).
 	agents           AgentsSource
 	brokerActionKick func(actionID string)
@@ -2562,6 +2570,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/inbox/broker-action/", s.brokerActionInboxRouter)
 	mux.HandleFunc("/inbox/broker-actions/batch", s.BrokerActionBatch)
 	mux.HandleFunc("/inbox/standing/", s.StandingGrantChange)
+	mux.HandleFunc("/inbox/apply-failed/", s.ApproverNoticeRouter) // GitHub #806
+	mux.HandleFunc("/inbox/notices/", s.ApproverNoticeRouter)
+	mux.HandleFunc("/github", s.GitHubAppRouter) // GitHub #802
+	mux.HandleFunc("/github/", s.GitHubAppRouter)
 
 	// Executions — cross-task run list (IA completion) + detail/actions
 	// under the prefix.
@@ -2605,6 +2617,8 @@ func (s *Server) Handler() http.Handler {
 	// admin surface, so it serves Community and Enterprise identically.
 	// The managed instance owner's companion page (GitHub #587).
 	mux.HandleFunc("/companion", s.CompanionPage)
+	mux.HandleFunc("/settings/approvers", s.Approvers)  // #763
+	mux.HandleFunc("/settings/approvers/", s.Approvers) // #763
 	mux.HandleFunc("/account", s.MyAccount)
 	mux.HandleFunc("/account/", s.MyAccountAction)
 	mux.HandleFunc("/operator/accounts", s.operatorAccountsRouter)
@@ -2674,7 +2688,7 @@ func (s *Server) Handler() http.Handler {
 		// (tenant_admin) is refused the daemon-global authoring surfaces
 		// too, except project creation (/projects/new: the gallery and the
 		// wizard, granted by the B3 allowlist).
-		if role := api.SessionRoleFromContext(r.Context()); (role == auth.RoleUser || (role == auth.RoleTenantAdmin && !tenantAdminAuthoringPath(r.URL.Path))) && sessionUserGlobalConfigPath(r.URL.Path) {
+		if role := api.SessionRoleFromContext(r.Context()); globalAuthoringRefused(role, r.Method, r.URL.Path) {
 			if role == auth.RoleTenantAdmin {
 				s.logger.Info().Str("surface", "ui_global_authoring").Str("outcome", "refused").Str("path", r.URL.Path).
 					Msg("operator surface: tenant_admin refused")
@@ -2682,7 +2696,11 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "admin scope required", http.StatusForbidden)
 			return
 		} else if role == auth.RoleTenantAdmin && sessionUserGlobalConfigPath(r.URL.Path) {
-			s.logger.Info().Str("surface", "ui_project_creation").Str("outcome", "allowed").Str("path", r.URL.Path).
+			surface := "ui_project_creation"
+			if tenantAdminReadPath(r.Method, r.URL.Path) {
+				surface = "ui_owner_read" // #764
+			}
+			s.logger.Info().Str("surface", surface).Str("outcome", "allowed").Str("path", r.URL.Path).
 				Msg("operator surface: tenant_admin allowed")
 		}
 		mux.ServeHTTP(w, r)
@@ -2775,6 +2793,59 @@ var sessionUserGlobalAuthoringPrefixes = []string{
 	"/assistant/draft",
 	"/audit",
 	"/mcp",
+}
+
+// tenantAdminReadPath reports whether a tenant_admin session may read path
+// under the swarm and workflow roots (GitHub #764; 18-security-and-tenancy.md,
+// Amendment 2026-11-18 (#764)): GET only, the two lists, a definition's
+// /edit page and a workflow's /graph, with exactly one id segment that is not
+// empty, "." or "..". The wrapper sees the path before the mux cleans it, so
+// a dot segment or a trailing slash matches no shape and stays refused.
+func tenantAdminReadPath(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	if path == "/swarms" || path == "/workflows" {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) != 3 {
+		return false
+	}
+	root, id, view := parts[0], parts[1], parts[2]
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	switch root {
+	case "swarms":
+		return view == "edit"
+	case "workflows":
+		return view == "edit" || view == "graph"
+	}
+	return false
+}
+
+// globalAuthoringRefused reports whether a session of role is refused path
+// on the daemon-global authoring roots: a project user always; managed
+// hosting's instance owner except project creation (#560) and the
+// swarm/workflow reads (#764).
+func globalAuthoringRefused(role, method, path string) bool {
+	if !sessionUserGlobalConfigPath(path) {
+		return false
+	}
+	switch role {
+	case auth.RoleUser:
+		return true
+	case auth.RoleTenantAdmin:
+		return !tenantAdminAuthoringPath(path) && !tenantAdminReadPath(method, path)
+	}
+	return false
+}
+
+// ownerReadOnly reports whether r comes from managed hosting's instance
+// owner, for whom the swarm and workflow pages render read-only (#764).
+func ownerReadOnly(r *http.Request) bool {
+	return api.SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin
 }
 
 // tenantAdminAuthoringPath is the one daemon-global authoring root managed

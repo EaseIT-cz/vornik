@@ -64,6 +64,20 @@ func (r *TradingFillRepository) Record(ctx context.Context, fill *persistence.Tr
 		ptrStringOrNil(fill.ExecID), ptrStringOrNil(fill.AccountID),
 		defaultStr(fill.Source, "reconcile"), ptrStringOrNil(fill.SourceDetail),
 	)
+	if err != nil {
+		return mapDBError(err)
+	}
+	// GitHub #823: the order's filled_qty follows its stored fills, never
+	// past its qty and never down. Run on a retried (no-op) insert too, so
+	// a crash between the two statements is healed by the retry.
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE trading_orders o
+		   SET filled_qty = GREATEST(o.filled_qty, s.total)
+		  FROM (SELECT COALESCE(SUM(qty), 0) AS total FROM trading_fills
+		         WHERE order_id = $1 AND project_id = $2) s
+		 WHERE o.id = $1 AND o.project_id = $2
+		   AND s.total <= o.qty AND s.total > o.filled_qty`,
+		fill.OrderID, fill.ProjectID)
 	return mapDBError(err)
 }
 

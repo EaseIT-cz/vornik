@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: d915f90ba61c20cd1cfaad44244edcaf7251b62b2f01777869fd21c19e669cb6
+      sha256: e81c0e357e051032a333fe62c0549f0103f7c616082e5a25a939cfd4774f4d7c
 ---
 # Release Notes
 
@@ -16,6 +16,156 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.11.7
+
+!!! warning "Upgrade requirements"
+    - **GitHub tokens now reach only the repositories a project names**
+      (GitHub #820). Each token the daemon mints for a GitHub App is scoped
+      to the project's `repo` (or a `github_app` block's `repo_allowlist`).
+      A project naming a repository the App installation does not cover
+      used to get an installation-wide token; it now gets none, and its
+      reviews, pushes and replies fail. Before upgrading, check that every
+      repository your projects name is listed under the App installation's
+      *Repository access* on GitHub.
+    - **`vornikctl github-token` needs `--repo` or `--unscoped`.** A script
+      that calls it with neither now stops with an error. Pass
+      `--repo owner/name` (repeatable) for the repositories the token is
+      for.
+    - **A hand-made GitHub block may not use the instance's App key**
+      (GitHub #812). A `github`, `forge.github` or `github_app` block whose
+      key file is the key of the App created from the console is refused
+      when the configuration loads. Move such a project to
+      `use_registration: true`, which takes the App and installation from
+      the console's registration.
+
+### Features
+
+- **Use Vornik from AWS DevOps Agent** (GitHub #844). An AWS DevOps Agent
+  investigation can recall your team's incident memory and the procedures
+  an operator approved in Vornik. With a wider key, it can also store its
+  finding and hand follow-up work to a sandboxed workflow. Register your
+  Vornik's companion endpoint in the agent's console, and allowlist the
+  tools your key lists. The
+  [AWS DevOps Agent guide](../guides/aws-devops-agent.md) has the two key
+  profiles and how to reach Vornik privately or over HTTPS.
+- **A companion key is offered only the tools it may call** (GitHub #844).
+  `tools/list` used to show every memory and skill tool to every key, and
+  refused the ones outside the key's scopes only when they were called. It
+  now lists only what the key's scopes allow. A key granted `--memory-all
+  --skill-all` sees the same tools as before.
+- **A read-only key for AWS DevOps Agent on a Vornik-hosted instance**
+  (GitHub #846). **Connect your companion** gains *Connect AWS DevOps
+  Agent*, which mints a key that reads memory and approved skills only.
+  The key table now shows what each key can do.
+- **HTTPS from the installer** (GitHub #839). On a host with a public DNS
+  name and Caddy installed, `VORNIK_PUBLIC_HOSTNAME=<name>` makes the
+  quickstart put Caddy in front of the daemon, with a certificate from
+  Let's Encrypt over port 443 only. Caddy adds no credential: people sign
+  in with their own keys, and the login lockout sees each person's real
+  address. Thanks to Veaceslav Mindru, whose community pull request this
+  builds on.
+- **Vornik 101** (GitHub #839). A short guide to where Vornik fits, with an
+  optional lab that connects Claude Code and finishes one task. Written by
+  Veaceslav Mindru.
+- **A companion review opens with its verdict** (GitHub #751). The review
+  workflows lead with GREEN or NOT GREEN and a numbered list of actions.
+- **Community pull requests are credited where they land** (GitHub #840).
+  The public repository is written by an export, not by merges. A ported
+  community change now carries its author as co-author on the public sync
+  commit, and the export closes the pull request with a link.
+- **Create the GitHub App from the console** (GitHub #802). Integrations →
+  *Review pull requests with GitHub* creates the instance's GitHub App
+  through GitHub's App-manifest flow: GitHub fills in the permissions and
+  events, and Vornik keeps the key and webhook secret. You never paste a
+  key. It needs the instance's public `https` address
+  (`server.public_base_url` or `auth.external_base_url`).
+- **Installing the App sets up review** (GitHub #800). Each repository you
+  install the App on gets a review project of its own, with no YAML. The
+  GitHub page lists the repositories and can pause one.
+- **The admin tools set concurrency and role limits** (GitHub #798, #805).
+  `update_project` sets how many of a project's tasks run at once, and
+  `define_swarm` sets a role's output tokens and tool steps. Each value is
+  capped by a new `agent_admin` key, and a raise needs approval on your
+  phone.
+
+- **A pull-request review that is good by default** (GitHub #801, #244,
+  #814). For a project set up by installing the App, secrets are masked
+  before any model sees the diff, findings must quote the diff they are
+  about, a review team reads it, and the result posts as a neutral check
+  run with inline comments on the lines found. A large diff is read in
+  parts, and the review says which files it did not reach.
+- **Manage approver phones from the console** (GitHub #763, #833). Manage →
+  *Approver phones* lists the phones that approve sensitive actions, pairs
+  a new one with a code, and revokes or removes one. It needs a signed-in
+  browser session; an owner may pair a further phone but not revoke the
+  last one.
+- **A managed instance's owner sees more, and changes nothing they should
+  not** (GitHub #764, #765). The owner reads the instance's swarms and
+  workflows, and sees and disconnects a project's MCP sign-in on its MCP
+  tools page.
+- **Measure what learning adds, on the agent benchmark** (GitHub #809).
+  A learning study runs one model in four arms: alone, with instincts,
+  with self-healing workflows, and with both. Each arm learns on a
+  warm-up part of a task set and is measured on a held-out part, with
+  learning frozen in between and the learned state recorded. `bench agent
+  compare` accepts the arms when the pre-registration names the new
+  `learning` axis. The bench-only switches (`bench.learning`) are refused
+  on any daemon that is not a benchmark instance. The benchmark's harness
+  version is now 13, so its results do not compare with version 12's.
+
+### Fixed
+
+- **A pull-request review never publishes a secret it can recognise**
+  (GitHub #838, from a community contribution by Veaceslav Mindru). The
+  posted text is scanned, the quoted request and any CI notice included, and
+  each credential-shaped value, HTTP Basic credentials among them, is
+  replaced by `[REDACTED:<type>]`. An empty diff, or one over 1 MiB, is no
+  longer reviewed as if it were the whole change: that review step fails
+  with the reason, and nothing is posted. Reviews are pinned to the commit they reviewed.
+- **An agent's task key reads only its own task's messages** (GitHub #832).
+  It could read a sibling task's messages in the same project.
+- **A repeated run is told what the earlier one did** (GitHub #604). When a
+  task runs again after a restart, an interrupted run or a failure, its
+  first agent step now lists the tools the earlier run called and is asked
+  to check before repeating anything outside the workspace (a push, a pull
+  request, a comment, a message). Tool names are listed, never their
+  arguments.
+- **Agents no longer repeat an identical edit until the run is stopped**
+  (GitHub #831). A `file_edit` that changes nothing is refused, and a miss
+  says why the text did not match (whitespace, or where it differs).
+- **Reviews and dev runs fail less often for the wrong reason** (GitHub
+  #830, #612). The analyst must name its pinned test cases, so a missing
+  list is retried instead of failing the run; a write that carries the end
+  of a tool call is refused, so a review file never keeps the model's next
+  turn.
+- **Phone approvals** (GitHub #795, #806). An approved change outlives the
+  phone's request, a written change is never rejected afterwards, and a
+  failed apply can be dismissed or retried on the phone and in the console.
+- **Memory** (GitHub #459). A knowledge-graph entity stored without a
+  vector during an embedder outage is embedded once the embedder is back.
+- **Managed hosting** (GitHub #807). An owner who brings their own key can
+  enable memory, and types one endpoint for chat and embeddings.
+- **Community Edition** (GitHub #816). Six Community features that answered
+  only on Enterprise now answer on Community Edition.
+- **Regression detection** (GitHub #817). The baseline is the seven days
+  before the day compared, so a one-day regression is no longer diluted.
+- **Codex pricing** (GitHub #772). The shipped price table has the Codex
+  models' cached-input rates.
+- **An upgrade prices new models** (GitHub #776). Your `pricing.yaml` was
+  copied once at install and never took a model added to the shipped
+  table, so that model's spend was charged at the default rate. Now an
+  unedited `pricing.yaml` follows the release, and an edited one gains the
+  shipped rows it lacks under a `# Added by config-deploy` line. No row you
+  have is changed, and the upgrade lists the models whose prices you set
+  differently. The previous file is kept as `.pricing.yaml.pre-merge`.
+  `vornikctl doctor` names any shipped model your file still lacks.
+- **The setup guide finishes on Community Edition** (GitHub #815). With
+  `api.auth_enabled: true`, step 2 (*Choose what it is for*) answered
+  every option with "Could not create it: This is an Enterprise Edition
+  feature". The project-template routes now work in both editions, for
+  the same operator callers as before.
+
 
 ## 2026.11.6
 

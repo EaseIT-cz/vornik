@@ -83,6 +83,10 @@ func (p githubAppProber) Probe(ctx context.Context, cand CandidateConfig) ProbeR
 	if err != nil {
 		return p.fieldFail(start, "private_key_path", "could not parse as a PEM-encoded RSA private key")
 	}
+	// #820: a hand-made candidate may not use the instance App key.
+	if github.GuardKey(github.KeyHash([]byte(privateKeyPEM)), false) != nil {
+		return p.fieldFail(start, "private_key_path", "is this instance's App key; connect the repository through the App registration instead")
+	}
 
 	apiBaseURL := strings.TrimSpace(cand.Values["api_base_url"])
 	if apiBaseURL == "" {
@@ -92,7 +96,15 @@ func (p githubAppProber) Probe(ctx context.Context, cand CandidateConfig) ProbeR
 	probeCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	_, expires, mintErr := github.MintInstallationToken(probeCtx, p.client, apiBaseURL, appID, installationID, key)
+	// #820: scoped to the candidate's repositories, so the probe also proves
+	// the installation covers them (GitHub answers 422 when it does not).
+	var repos []string
+	for _, r := range strings.Split(cand.Values["repo_allowlist"], ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			repos = append(repos, r)
+		}
+	}
+	_, expires, mintErr := github.MintInstallationToken(probeCtx, p.client, apiBaseURL, appID, installationID, key, repos)
 	latency := time.Since(start)
 	if mintErr != nil {
 		outcome, failures := classifyGitHubMintErr(mintErr)
@@ -142,6 +154,10 @@ func classifyGitHubMintErr(err error) (Outcome, []CheckFailure) {
 		switch status {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
 			return OutcomeFail, []CheckFailure{{Field: "installation_id", Reason: "GitHub rejected the App/installation credentials"}}
+		case http.StatusUnprocessableEntity:
+			// #820: the probe mints scoped to the candidate's repositories;
+			// 422 is GitHub saying the installation does not cover one.
+			return OutcomeFail, []CheckFailure{{Field: "repo_allowlist", Reason: "the App installation does not cover every listed repository"}}
 		}
 	}
 	return OutcomeError, nil

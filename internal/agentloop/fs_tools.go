@@ -69,6 +69,11 @@ func fileWrite(env Env, raw json.RawMessage) string {
 	if content == "" || content == "null" {
 		return "ERROR: content is required for file_write. If the content was cut off, your context window may be exhausted — try writing a shorter version of the file, or break it into multiple smaller file_write calls."
 	}
+	// GitHub #612: before the path is resolved, so a merged turn is reported
+	// first whatever the path; nothing is written either way.
+	if refusal := mergedToolCallRefusal(content); refusal != "" {
+		return refusal
+	}
 	resolved, err := resolvePath(env.Workspace, path)
 	if err != nil {
 		return err.Error()
@@ -110,6 +115,10 @@ func fileEdit(env Env, raw json.RawMessage) string {
 	if oldStr == "" {
 		return "ERROR: old_string is required (empty match would match everywhere)"
 	}
+	// GitHub #612: before the path is resolved, as in fileWrite.
+	if refusal := mergedToolCallRefusal(newStr); refusal != "" {
+		return refusal
+	}
 	resolved, err := resolvePath(env.Workspace, path)
 	if err != nil {
 		return err.Error()
@@ -136,10 +145,17 @@ func fileEdit(env Env, raw json.RawMessage) string {
 	content := string(data)
 	count := strings.Count(content, oldStr)
 	if count == 0 {
-		return "ERROR: old_string not found in file"
+		return editNotFound(resolved, content, oldStr)
 	}
 	if count > 1 && !replaceAll {
 		return fmt.Sprintf("ERROR: old_string matches %d times — pass replace_all=true to replace every occurrence, or provide a longer old_string that uniquely identifies the location", count)
+	}
+	// GitHub #831: a no-op used to be written and answered "OK: replaced",
+	// which invited the same call again (8 of 15 file_edit loop kills). It is
+	// checked after the multi-match answer, which says more for that input.
+	if oldStr == newStr {
+		return "ERROR: new_string is the same as old_string, so this edit changes nothing and " + resolved +
+			" was not written. Put the text you want in new_string; if the file is already right, stop editing it and go on with your next step."
 	}
 	var updated string
 	replaced := 1
@@ -154,6 +170,44 @@ func fileEdit(env Env, raw json.RawMessage) string {
 		return "ERROR: " + err.Error()
 	}
 	return fmt.Sprintf("OK: replaced %d occurrence(s) in %s (%d bytes)", replaced, resolved, utf8.RuneCountInString(updated))
+}
+
+// editNotFound answers a file_edit whose old_string is not in the file: where,
+// how the text differs, and what to do next (GitHub #831; a bare "not found"
+// gave a weak model nothing to correct, 5 of 15 file_edit loop kills).
+func editNotFound(path, content, oldStr string) string {
+	lines := strings.Count(content, "\n")
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		lines++
+	}
+	return fmt.Sprintf("ERROR: old_string not found in %s (%d lines). %s The file may have changed since you read it: "+
+		"file_read it again and copy old_string exactly from that, or rewrite the file with file_write.",
+		path, lines, editMissHint(content, oldStr))
+}
+
+func editMissHint(content, oldStr string) string {
+	if squeezed := strings.Join(strings.Fields(oldStr), " "); squeezed != "" &&
+		strings.Contains(strings.Join(strings.Fields(content), " "), squeezed) {
+		return "It matches if whitespace is ignored: the whitespace inside or around it differs from the file's."
+	}
+	first := ""
+	for _, l := range strings.Split(oldStr, "\n") {
+		if first = strings.TrimSpace(l); first != "" {
+			break
+		}
+	}
+	if first == "" {
+		return "old_string holds only whitespace; include a line of the file's text."
+	}
+	for i, l := range strings.Split(content, "\n") {
+		if strings.TrimSpace(l) == first {
+			return fmt.Sprintf("Its first non-blank line matches line %d of the file, but the rest does not match exactly.", i+1)
+		}
+	}
+	if r := []rune(first); len(r) > 80 {
+		first = string(r[:80]) + "…"
+	}
+	return fmt.Sprintf("No line of the file matches its first non-blank line, %q.", first)
 }
 
 func readManyFiles(env Env, raw json.RawMessage) string {

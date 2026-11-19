@@ -2210,6 +2210,7 @@ func (e *Executor) prepareAgentStepInput(
 		PreviousResult: lastResultMessage,
 		StepPrompt:     stepPrompt,
 	}
+	e.attachPreviousAttempt(ctx, task, execution, state, opts)
 	// Inject a structured recent-activity block into the strategist's
 	// prompt so next-tick reasoning sees last 24h of fills, cancels, and
 	// refusals as data rather than depending on memory_search recall.

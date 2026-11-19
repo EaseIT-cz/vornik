@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/featuredoctor/feature_memoryrag.go
-      sha256: e054ebaf3862080e775f8b3cb35003d1072bb3281dad0c9c54c8d653a20a6080
+      sha256: 828b03f4dfd773b54703d28d8966c92594506e20cddc133bf62eb89d094e723b
     - path: internal/memoryfirewall/evaluator.go
       sha256: e86f66f23ad5cd34f55b0bee562d59514951c709f0f9709b6684e34bfead55ed
     - path: internal/memory/gates.go

@@ -186,6 +186,28 @@ a private host, not for a shared network. Tighten by:
    and firewalling the raw port.
 3. Keeping the Postgres (and scraper) port on `127.0.0.1` (the default).
 
+### HTTPS with the quickstart (optional)
+
+For a host with a public DNS name, the quickstart can put Caddy in front of
+the daemon. Caddy terminates TLS and adds no credential: each person still
+signs in with Vornik's own login (their own API key, or OIDC) and gets their
+own session.
+
+1. Install Caddy from your distribution (`sudo dnf install caddy` or
+   `sudo apt install caddy`), point the DNS name at this host, and open port
+   443. Port 80 can stay closed: certificates come over 443 (TLS-ALPN).
+2. Run the quickstart with the name:
+   `VORNIK_PUBLIC_HOSTNAME=vornik.example.org bash quickstart.sh`.
+   It writes `/etc/caddy/vornik.caddy` (with sudo), creates
+   `/etc/caddy/Caddyfile` holding `import /etc/caddy/vornik.caddy` when there
+   is none, and reloads Caddy. When a Caddyfile already exists without that
+   line, it prints the line to add and says HTTPS is not active yet.
+3. On a first install, `config.yaml` is seeded to trust the local proxy
+   (`server.real_ip`, header `X-Real-IP`) and to name the public origin
+   (`server.public_base_url`). On an existing install it is not changed: the
+   quickstart prints the block to add under `server:`.
+4. Firewall port 8080 from everything but this host.
+
 Anything more serious should go through the Helm chart in
 `deployments/helm/vornik` onto a real cluster.
 

@@ -820,6 +820,14 @@ func (e *ApplyEngine) reconcileRow(ctx context.Context, row *persistence.ConfigA
 	if err != nil {
 		return err
 	}
+	// GitHub #795 (part 22 §22.2.16c item 4): rolling forward a row whose
+	// proposal is no longer APPROVED meets the ledger's refusal, and the
+	// revert then put the pre-image back over a file the operator had since
+	// defined again. Neither direction is safe without a person: park it.
+	if p.Status != persistence.ProposalStatusApproved {
+		return e.parkInDrift(ctx, row, row.State, "",
+			fmt.Sprintf("the proposal is %s; its writes were never confirmed", p.Status))
+	}
 	// RE-CHECK THE READ SET BEFORE ROLLING ANYTHING FORWARD (re-audit
 	// 2026-09-15, CA-21).
 	//

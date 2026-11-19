@@ -43,6 +43,9 @@ import (
 
 // SwarmEditData backs the swarm editor template.
 type SwarmEditData struct {
+	// ReadOnly renders the page for managed hosting's instance owner, who
+	// may read the definition and change nothing (GitHub #764).
+	ReadOnly    bool
 	Title       string
 	CurrentPage string
 	SwarmID     string
@@ -99,6 +102,7 @@ type SwarmRoleView struct {
 // SwarmEdit renders the editor.
 func (s *Server) SwarmEdit(w http.ResponseWriter, r *http.Request, swarmID string) {
 	data := s.swarmEditData(swarmID)
+	data.ReadOnly = ownerReadOnly(r)
 	data.AssistProjectID = r.URL.Query().Get("projectId")
 	data.AssistProjectID = assistProjectFromRequest(data.AssistProjectID, s.defaultAssistProjectForSwarm(swarmID))
 	if data.Error != "" {

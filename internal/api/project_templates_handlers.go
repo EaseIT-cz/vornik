@@ -78,7 +78,7 @@ func (s *Server) ListProjectTemplates(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
 		return
 	}
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceProjectTemplates) { // GitHub #815: works in Community
 		return
 	}
 	if s.projectTemplates == nil {
@@ -189,7 +189,7 @@ func (s *Server) CreateProjectFromTemplate(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
 		return
 	}
-	if !s.requireAdminGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceProjectFromTemplate) { // GitHub #815: works in Community
 		return
 	}
 	if s.projectTemplates == nil {

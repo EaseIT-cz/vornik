@@ -2,7 +2,7 @@
 workflowId: "companion-doc-review"
 displayName: "Companion: Doc review"
 description: "Reviews documentation for freshness, clarity, link integrity, and divergence from the code it describes. **No network access:** it flags URLs that are obviously broken by pattern (localhost, deleted-org paths, deprecated domains) but cannot fetch, so a well-formed link that is dead will pass. Host LLM delegates when it touches docs or before a release."
-version: "1.1.0"
+version: "1.2.0"
 author: "Vadim Grinco <vadim@grinco.eu>"
 license: "Proprietary"
 entrypoint: "review"
@@ -36,6 +36,9 @@ steps:
     # purpose — a wildcard would be satisfied by an upstream artifact re-staged
     # into artifacts/out/ while this step runs.
     require_output_glob: "artifacts/out/review.md"
+    # GitHub #751: the review opens with the verdict and the actions
+    # (reviewable-output design §6.12); the prompt below states the format.
+    require_review_actions: true
     role: "reviewer"
     on_success: "measure"
     on_fail: "failed"
@@ -78,9 +81,18 @@ If a `code:` reference path is supplied, also read that and check
 for divergence (functions/flags named in docs that no longer
 exist; behavior described that the code contradicts).
 
+**Start with the verdict and the actions** (GitHub #751). The first lines
+of `review.md` are a line `Verdict: …` with at most two sentences of why,
+then a heading `## Actions` with a numbered list: one thing to do per item,
+with `file:line` where it applies. When nothing needs doing, write the single
+line `No action: ship.` instead of the heading. All of it within the first
+150 words. The findings and their evidence come after. The daemon checks
+this and sends the review back once if it is missing.
+
 Produce `artifacts/out/review.md` with:
 
-  - "Verdict" — one line: ship / fix-then-ship / rewrite.
+  - "Verdict" — the first line: ship / fix-then-ship / rewrite.
+  - "Actions" — as above, right after the verdict.
   - "Freshness" — stale version pins, outdated screenshots,
     last-edit-vs-code-edit timestamp mismatches.
   - "Clarity" — passages a new reader would miss.

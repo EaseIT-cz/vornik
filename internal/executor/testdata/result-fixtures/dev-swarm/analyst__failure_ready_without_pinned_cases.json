@@ -1,0 +1,13 @@
+{
+  "swarm": "dev-swarm",
+  "role": "analyst",
+  "reason": "GitHub #830: a ready analysis that names no pinned cases breaks rule pinned_cases_named, so the executor retries it instead of failing the run later.",
+  "expect": "fail",
+  "payload": {
+    "analysis": {
+      "feature": "outputSchema-validator",
+      "subtask": "draft the JSON Schema converter",
+      "ready": true
+    }
+  }
+}

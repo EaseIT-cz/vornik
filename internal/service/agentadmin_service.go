@@ -21,6 +21,7 @@ import (
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/approval"
 	"vornik.io/vornik/internal/approverdevice"
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/imagemanifest"
 	"vornik.io/vornik/internal/persistence"
@@ -504,8 +505,8 @@ func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.Contr
 	if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, AgentAdminInertActor); err != nil {
 		return AgentAdminResult{}, err
 	}
-	if why, _ := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); why != "" {
-		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why, Rule: agentadmin.RuleApplyRefused}, nil
+	if out := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); out.Why != "" {
+		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + out.Why, Rule: agentadmin.RuleApplyRefused}, nil
 	}
 	if err := s.recordNarrowing(ctx, ch.Narrow); err != nil {
 		// GitHub #172 item 3 (design §23.4): the files and the ledger row
@@ -554,11 +555,11 @@ func (s *agentAdminService) applyInertTransition(ctx context.Context, p *persist
 	if err = s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, AgentAdminInertActor); err != nil {
 		return AgentAdminResult{}, err
 	}
-	if why, unpublished := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); why != "" {
-		if !unpublished {
+	if out := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); out.Why != "" {
+		if !out.Unpublished {
 			exit = configExitKeepBusy
 		}
-		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why, Rule: agentadmin.RuleApplyRefused}, nil
+		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + out.Why, Rule: agentadmin.RuleApplyRefused}, nil
 	}
 	// Published: busy clears with Finish or stays for recovery.
 	exit = configExitKeepBusy
@@ -612,17 +613,30 @@ var preWriteApplyErrors = []error{
 	controlplane.ErrReviewOnly, controlplane.ErrTooManyOps, controlplane.ErrContentTooLarge, controlplane.ErrScaffoldConflict,
 }
 
+// applyOutcome is why an apply did not take, or Why "" when it did.
+type applyOutcome struct {
+	Why string
+	// Unpublished: the refusal left the configuration unpublished. This is a
+	// pre-write Apply error with no journal row open beforehand (an open row
+	// is resumed and may return anything), or a verify miss whose rollback
+	// succeeded.
+	Unpublished bool
+	// Retry: the refusal is worth the approval tick's retry (GitHub #795):
+	// a running task, or a journal row the failed attempt left open that is
+	// not DRIFT, which the retry's Apply resumes.
+	Retry bool
+}
+
 // applyAndVerify applies an APPROVED proposal and confirms the result loaded.
 // The reload strips an invalid project with a warning, so "applied" alone is
-// not proof (plan P3 global rules). A miss rolls back. It returns why the
-// change did not take, or "", and whether a refusal provably left the
-// configuration unpublished: a pre-write Apply error with no apply journal
-// open for the proposal beforehand (an open one is resumed and may return
-// anything), or a verify miss whose rollback succeeded. retryable keeps a
+// not proof (plan P3 global rules). A miss rolls back. retryable keeps a
 // proposal refused for a running task APPROVED, for the approval tick's
 // retry; rejecting it made that retry fail as "the change is rejected"
-// (audit 2026-10-12 finding A).
-func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string, ch agentadmin.Change, retryable bool) (string, bool) {
+// (audit 2026-10-12 finding A). A proposal whose journal row is still open
+// after the failure is never rejected, whoever calls. Its writes may be on
+// disk, and only an APPROVED proposal's row is resumed (GitHub #795, part 22
+// §22.2.16c item 2).
+func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string, ch agentadmin.Change, retryable bool) applyOutcome {
 	resumes := true
 	if s.engine.Journal == nil {
 		resumes = false
@@ -630,22 +644,30 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 		resumes = false
 	}
 	if err := s.engine.Apply(ctx, id, actor, false); err != nil {
-		if !retryable || !errors.Is(err, controlplane.ErrBusy) {
-			// R3 (design §23.9): the compensation outlives the request.
-			rctx, cancel := compensationContext(ctx, agentCompensationWriteTimeout)
+		// R3 (design §23.9): the compensation outlives the request.
+		rctx, cancel := compensationContext(ctx, agentCompensationWriteTimeout)
+		open, drift := s.openJournalAfter(rctx, id)
+		busy := retryable && errors.Is(err, controlplane.ErrBusy)
+		if !open && !busy {
 			_ = s.proposals.SetStatus(rctx, id, persistence.ProposalStatusRejected, actor)
-			cancel()
 		}
-		unpublished := applyRefusalUnpublished(err, resumes)
+		cancel()
+		out := applyOutcome{Unpublished: applyRefusalUnpublished(err, resumes), Retry: busy || (retryable && open && !drift)}
 		switch {
 		case errors.Is(err, controlplane.ErrBusy):
-			return "a task of this project is running; try again when it finishes", unpublished
+			out.Why = "a task of this project is running; try again when it finishes"
+		case open && drift:
+			out.Why = "the change was written but not confirmed, and an operator must decide (vornikctl control-plane journal list)"
+		case open:
+			out.Why = "the change was written but not yet confirmed; Vornik finishes it on the next attempt"
 		case errors.Is(err, controlplane.ErrStaleBase):
-			return "a file this change was prepared against has changed; prepare it again", unpublished
+			out.Why = "a file this change was prepared against has changed; prepare it again"
 		case errors.Is(err, controlplane.ErrWriterFenced):
-			return "this Vornik node is not the one that changes configuration right now; try again shortly", unpublished
+			out.Why = "this Vornik node is not the one that changes configuration right now; try again shortly"
+		default:
+			out.Why = "the change could not be applied: " + err.Error()
 		}
-		return "the change could not be applied: " + err.Error(), unpublished
+		return out
 	}
 	verify := s.verify
 	if verify == nil {
@@ -655,11 +677,28 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 		// R2 (design §23.9): detached, bounded, counted and recorded.
 		if rerr := s.rollBackAgentChange(ctx, ch.Namespace, id, ch.Verb, rollbackStageVerify, errors.New("did not load "+missing)); rerr != nil {
 			s.c.Logger.Error().Err(rerr).Str("proposal_id", id).Msg("agent admin: rollback after a failed verify failed")
-			return "Vornik could not load " + missing + "; rolling the change back failed", false
+			return applyOutcome{Why: "Vornik could not load " + missing + "; rolling the change back failed"}
 		}
-		return "Vornik could not load " + missing + "; the change was rolled back", true
+		return applyOutcome{Why: "Vornik could not load " + missing + "; the change was rolled back", Unpublished: true}
 	}
-	return "", false
+	return applyOutcome{}
+}
+
+// openJournalAfter reports whether a failed apply left a journal row open
+// for the proposal, and whether that row is DRIFT (the operator's). A failed
+// read counts as open and not DRIFT: landed writes cannot be ruled out.
+func (s *agentAdminService) openJournalAfter(ctx context.Context, id string) (open, drift bool) {
+	if s.engine.Journal == nil {
+		return false, false
+	}
+	row, err := s.engine.Journal.OpenForProposal(ctx, id)
+	switch {
+	case errors.Is(err, persistence.ErrNotFound):
+		return false, false
+	case err != nil:
+		return true, false
+	}
+	return true, row.State == persistence.JournalStateDrift
 }
 
 // applyRefusalUnpublished reports whether a failed ApplyEngine.Apply
@@ -1023,14 +1062,17 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 				return err
 			}
 		}
-		if why, unpublished := s.applyAndVerify(ctx, p.ID, actor, ch, true); why != "" {
-			if !unpublished {
+		if out := s.applyAndVerify(ctx, p.ID, actor, ch, true); out.Why != "" {
+			if !out.Unpublished {
 				exit = configExitKeepBusy
 			}
-			if strings.HasPrefix(why, "a task of this project is running") {
-				return errors.New(why) // transient: the tick retries
+			// Transient: the tick retries (#795). A change whose account
+			// transition stays busy for recovery cannot begin again, so its
+			// refusal stays final (§22.2.16c item 3).
+			if out.Retry && (publication == nil || out.Unpublished) {
+				return errors.New(out.Why)
 			}
-			return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, why)
+			return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, out.Why)
 		}
 	default:
 		return fmt.Errorf("%w: the change is %s", approverdevice.ErrPermanent, strings.ToLower(p.Status))
@@ -1263,7 +1305,11 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 	st := &agentadmin.State{
 		Namespace: ns, DefaultBudgetUSD: cfg.EffectiveDefaultProjectBudget(), CeilingUSD: cfg.EffectiveNamespaceBudget(),
 		AgentImage: cfg.EffectiveAgentImage(imagemanifest.AgentImageTag),
-		Projects:   map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
+		// The caps and token defaults (part 06 §6.9, #798, #805).
+		MaxConcurrentTasksCap: cfg.EffectiveMaxConcurrentTasks(), MaxRoleTokensCap: cfg.EffectiveMaxRoleTokens(),
+		MaxRoleToolIterationsCap: cfg.EffectiveMaxRoleToolIterations(),
+		AgentMaxTokens:           agentContainerLLM(s.c.Config).MaxTokens, ModelMaxTokens: agentModelMaxTokens(s.c.Config),
+		Projects: map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
 		FileHashes: map[string]string{}, ProjectYAML: map[string][]byte{}, Locked: map[string]bool{},
 		Approvals: map[string]map[string]agentadmin.IntegrationApproval{}, Advertised: map[string][]string{},
 		AdvertisedReads: map[string][]string{},
@@ -1399,3 +1445,15 @@ func truncate(s string, n int) string {
 }
 
 var _ = sort.Strings
+
+// agentModelMaxTokens is the agent LLM's model_limits max_tokens per model,
+// what the executor gives a role on that model (part 06 §6.9).
+func agentModelMaxTokens(cfg *config.Config) map[string]int {
+	out := map[string]int{}
+	for model, l := range agentContainerLLM(cfg).ModelLimits {
+		if l.MaxTokens > 0 {
+			out[model] = l.MaxTokens
+		}
+	}
+	return out
+}

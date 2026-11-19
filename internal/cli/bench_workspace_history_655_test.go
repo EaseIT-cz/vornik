@@ -94,9 +94,9 @@ func TestGitWorkspace_PrepareLeavesOneCommitAndArchivesTheRest_655(t *testing.T)
 	if !strings.Contains(msg, "lh-06 r2") || !strings.Contains(msg, "§12.29") || !strings.Contains(msg, "§12.30") {
 		t.Fatalf("the root commit names the task, the repeat and the rule: %q", msg)
 	}
-	// Only the state went; the rest of the tree is as the clear left it.
-	if _, err := os.Stat(filepath.Join(dir, "scratch/other/other.go")); err != nil {
-		t.Fatal("untargeted files stay")
+	// §12.33: only the baseline carries over, so the untargeted file goes too.
+	if _, err := os.Stat(filepath.Join(dir, "scratch/other/other.go")); !os.IsNotExist(err) {
+		t.Fatal("an earlier task's untargeted file must be gone (§12.33)")
 	}
 	if gitOut(t, dir, "rev-parse", "HEAD^{tree}") == treeBefore {
 		t.Fatal("the tree must differ from before by exactly the cleared state")

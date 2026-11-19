@@ -20,6 +20,11 @@ import (
 // environment before the credential store (#626).
 const OwnerModelAPIKeyName = "OWNER_MODEL_API_KEY"
 
+// OwnerEmbeddingAPIKeyName is the credential-store name of an embedding key
+// the owner typed on the model-provider page, beside OwnerModelAPIKeyName
+// (GitHub #807, security design 18 amendment 2026-11-18).
+const OwnerEmbeddingAPIKeyName = "OWNER_EMBEDDING_API_KEY"
+
 // RestartReasonModelProvider is the restart-pending code the owner's save
 // marks; a restart clears it (operations-API design §6.12 R1).
 const RestartReasonModelProvider = "model_provider"
@@ -47,6 +52,21 @@ func OwnerModelProviderContent(content []byte, endpoint, model string) ([]byte, 
 		{Key: "id", Value: model},
 		{Key: "good_for", Value: "the default model, from your own provider"},
 	})
+}
+
+// OwnerMemoryContent returns content with memory enabled on the owner's
+// embedding provider: the OpenAI-compatible endpoint, the model, the
+// dimension the probe returned, and the key behind keyName (a credential
+// store name, never the key). GitHub #807.
+func OwnerMemoryContent(content []byte, endpoint, model string, dimension int, keyName string) ([]byte, error) {
+	return setYAML(content,
+		yamlSet{"memory.enabled", true},
+		yamlSet{"memory.embedding_provider", ""},
+		yamlSet{"memory.embedding_endpoint", endpoint},
+		yamlSet{"memory.embedding_model", model},
+		yamlSet{"memory.embedding_dimension", dimension},
+		yamlSet{"memory.embedding_api_key", "${" + keyName + "}"},
+	)
 }
 
 // WithRestartPendingSource wires the one restart-pending registry's reader

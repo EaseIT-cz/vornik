@@ -1419,8 +1419,8 @@ func (m *Manager) tickBacklog(ctx context.Context, project *registry.Project, ev
 	// off the cleaned item title (deposit marker stripped, detail cut) so
 	// the branch name matches what the PR title says.
 	var forgeJob *forgeapi.ForgeJob
-	if project.GitHub.Enabled() {
-		if repo := project.GitHub.ResolveOutboundRepo(); repo != "" {
+	if project.EffectiveGitHub().Enabled() {
+		if repo := project.EffectiveGitHub().ResolveOutboundRepo(); repo != "" {
 			title := backlogItemTitle(prompt)
 			forgeJob = &forgeapi.ForgeJob{
 				Repo:  repo,
@@ -1620,7 +1620,7 @@ func (m *Manager) reconcileBacklogItems(ctx context.Context, abs string, project
 // activeTasks counts, by status, the tasks that hold an evaluation back, so
 // the ACTIVE_TASKS reason can say what it is waiting for — and, for an
 // approval, who can release it (outcome-quality LLD §S7 #15). Whether an
-// approval wait should hold the tick at all is open question Q15a.
+// approval wait holds the tick was decided A, as built (GitHub #369 Q15a, 2026-11-18).
 type activeTasks struct {
 	running, waitingForChildren, queued, pending, awaitingApproval int
 }
@@ -2716,13 +2716,24 @@ func autonomyFailureCooldown(tasks []*persistence.Task, taskType, workflowID, pr
 
 func autonomyCircuitOpen(tasks []*persistence.Task) (string, bool) {
 	var terminal []autonomyTaskSummary
+	bare := 0
 	for _, task := range tasks {
 		summary := summarizeAutonomyTask(task)
 		if summary.source != persistence.TaskCreationSourceAutonomous {
 			continue
 		}
 		switch summary.status {
-		case persistence.TaskStatusCompleted, persistence.TaskStatusFailed, persistence.TaskStatusCancelled:
+		case persistence.TaskStatusCompleted, persistence.TaskStatusFailed:
+			terminal = append(terminal, summary)
+		case persistence.TaskStatusCancelled:
+			// Only a cancel with a recorded cause, e.g. an approval timeout,
+			// counts. A bare operator cancel is dropped before the window is
+			// cut (#369 Q15b, decision B; outcome-quality Amendment
+			// 2026-11-18, item 2).
+			if strings.TrimSpace(summary.lastError) == "" {
+				bare++
+				continue
+			}
 			terminal = append(terminal, summary)
 		}
 	}
@@ -2746,12 +2757,13 @@ func autonomyCircuitOpen(tasks []*persistence.Task) (string, bool) {
 			cancelled++
 		}
 	}
-	// A cancel still counts toward the trip (open question Q15b,
-	// outcome-quality LLD §S7 #15); the reason reports the two apart so an
-	// operator can tell failing work from work they stopped.
+	// The reason reports failed and caused cancels apart, and the bare
+	// cancels left out, so an operator can tell failing work from work they
+	// stopped (§S7 #15, #369 Q15b).
 	failures := failed + cancelled
 	if len(terminal) >= 8 && failures >= 6 && failures > completed*2 {
-		return fmt.Sprintf("recent autonomous completion ratio too low (%d failed, %d cancelled, %d completed)", failed, cancelled, completed), true
+		return fmt.Sprintf("recent autonomous completion ratio too low (%d failed, %d cancelled with a cause, %d completed; %d bare operator cancels left out)",
+			failed, cancelled, completed, bare), true
 	}
 	return "", false
 }

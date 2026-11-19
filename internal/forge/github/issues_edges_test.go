@@ -40,7 +40,7 @@ func TestIssueRESTRejectsUnsafeResponses(t *testing.T) {
 		})
 	}
 	p := testProvider("http://localhost")
-	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey) (string, time.Time, error) {
+	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey, []string) (string, time.Time, error) {
 		return "", time.Time{}, errors.New("mint unavailable")
 	}
 	if _, err := p.ListIssues(context.Background(), "o/r", forge.IssueFilter{}); err == nil {

@@ -31,6 +31,11 @@ type RoleInput struct {
 	// Model is optional: a model id from the installation's catalogue
 	// (design §18.6 item 2).
 	Model string `json:"model,omitempty"`
+	// MaxTokens and MaxToolIterations are the role's limits, bounded by
+	// agent_admin.max_role_tokens and max_role_tool_iterations; omitted is
+	// the installation default (part 06 §6.9, GitHub #805).
+	MaxTokens         int `json:"max_tokens,omitempty"`
+	MaxToolIterations int `json:"max_tool_iterations,omitempty"`
 }
 
 // DefineSwarmInput is define_swarm. Every agent project owns exactly one

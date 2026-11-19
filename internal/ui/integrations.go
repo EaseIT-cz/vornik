@@ -259,6 +259,9 @@ type IntegrationsCatalogData struct {
 	CurrentPage string
 	IsAdmin     bool
 	Tiles       []IntegrationTileVM
+	// GitHubApp links the one-click GitHub App page (GitHub #802) when it
+	// is wired and this caller may use it.
+	GitHubApp bool
 }
 
 func integrationFormHref(kindID, projectID string) string {
@@ -388,6 +391,8 @@ func (s *Server) IntegrationsCatalog(w http.ResponseWriter, r *http.Request) {
 		CurrentPage: "integrations",
 		IsAdmin:     caller.IsAdmin,
 	}
+	data.GitHubApp = s.githubApp != nil &&
+		api.OperatorSurfaceAccessFor(r, s.isAdminKeyForSurface, api.SurfaceGitHubApp) == api.OperatorSurfaceAllowed
 	for _, k := range s.integrationsRegistry() {
 		if k.Scope == integrations.ScopeDaemon {
 			if !caller.IsAdmin {

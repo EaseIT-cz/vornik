@@ -103,6 +103,16 @@ var integrationPageListed = map[string]pageListing{
 		"the subtest's repository is fresh (newApproverHarness(t, fresh)); it holds only the five rows the subtest creates"},
 	"internal/persistence/repotest/approver_device_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 1)": {pageLimitIsSubject,
 		"the call tests the limit itself, on the subtest's fresh repository"},
+	// GitHub #459: the limit itself is under test; the presence checks in the
+	// same suite read unbounded.
+	"internal/persistence/repotest/knowledge_reembed_459_suite.go|repo.ListMissingEmbedding(ctx, 1)": {pageLimitIsSubject,
+		"the call tests the limit itself: it asserts one row comes back, whichever"},
+	"internal/persistence/repotest/knowledge_reembed_459_suite.go|repo.ListMissingEmbedding(ctx, 0)": {pageUnbounded,
+		"a limit of 0 lists every vectorless entity (ListMissingEmbedding's contract), so other tests' rows cannot push the subtest's out"},
+	// GitHub #806: the dismiss cases run on the approver suite's fresh
+	// repository too.
+	"internal/persistence/repotest/approver_dismiss_806_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*24*time.Hour), 20)": {pageResetFirst,
+		"the subtest's repository is fresh (newApproverHarness(t, fresh)); it holds only the three rows the subtest creates"},
 	"internal/memory/classify_attempted_330_integration_test.go|newBF().BackfillBatchAcrossProjects(ctx, 2)": {pageOwnRowsFirst,
 		"the backfill reads oldest first and both rows are 30 years old; the restart check is an absence the rows would head the queue for"},
 	"internal/memory/embed_queue_lease_integration_test.go|repo.DequeueEmbedBatch(ctx, 10)": {pagePagedThrough,

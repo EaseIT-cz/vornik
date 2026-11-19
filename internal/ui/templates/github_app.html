@@ -1,0 +1,77 @@
+{{define "github_app.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-3xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5">
+            <h1 class="text-xl font-semibold text-gray-100">GitHub</h1>
+            {{if .Flash}}
+            <div class="bg-emerald-900/30 border border-emerald-700/50 rounded-xl p-3 text-emerald-600 dark:text-emerald-200 text-sm" role="status">{{.Flash}}</div>
+            {{end}}
+            {{if .Error}}
+            <div class="bg-rose-900/30 border border-rose-700/50 rounded-xl p-3 text-rose-600 dark:text-rose-200 text-sm" role="alert">{{.Error}}</div>
+            {{end}}
+
+            {{if .Registration.Registered}}
+            <section class="glass rounded-xl border border-dark-700 p-5 space-y-3" aria-labelledby="gh-app">
+                <h2 id="gh-app" class="text-base font-semibold text-gray-100">This instance's GitHub App</h2>
+                <dl class="grid grid-cols-3 gap-2 text-sm">
+                    <dt class="text-gray-400">App</dt><dd class="col-span-2 font-mono">{{.Registration.Slug}} (id {{.Registration.AppID}})</dd>
+                    <dt class="text-gray-400">Owner</dt><dd class="col-span-2 font-mono">{{.Registration.Owner}}</dd>
+                    <dt class="text-gray-400">Key file</dt><dd class="col-span-2 font-mono break-all">{{.Registration.PrivateKeyPath}}</dd>
+                    <dt class="text-gray-400">Webhook secret</dt><dd class="col-span-2 font-mono">VORNIK_GITHUB_APP_WEBHOOK_SECRET <span class="text-gray-500 font-sans">(credential store)</span></dd>
+                </dl>
+                {{if .InstallURL}}
+                <a href="{{.InstallURL}}" rel="noopener" class="v-btn v-btn--primary">Install on repositories</a>
+                {{end}}
+                {{if .Repos}}
+                <table class="w-full text-sm mt-2">
+                    <caption class="text-left text-gray-400 pb-1">Repositories the App is installed on. To stop reviewing one, pause it here: deleting its project brings the project back within five minutes.</caption>
+                    <thead><tr class="text-left text-gray-400"><th class="py-1">Repository</th><th>Project</th><th>State</th><th></th></tr></thead>
+                    <tbody>
+                    {{range .Repos}}
+                    <tr class="border-t border-dark-700">
+                        <td class="py-1 font-mono">{{.Repo}}</td>
+                        <td class="font-mono">{{.ProjectID}}</td>
+                        <td>{{.State}}</td>
+                        <td class="text-right">
+                            {{if eq .State "active"}}<form method="post" action="/ui/github/repos/{{.Repo}}/pause"><button type="submit" class="v-btn v-btn--quiet">Pause</button></form>{{end}}
+                            {{if eq .State "paused"}}<form method="post" action="/ui/github/repos/{{.Repo}}/resume"><button type="submit" class="v-btn v-btn--secondary">Resume</button></form>{{end}}
+                            {{if eq .State "held"}}<form method="post" action="/ui/github/repos/{{.Repo}}/provision"><button type="submit" class="v-btn v-btn--secondary">Provision</button></form>{{end}}
+                        </td>
+                    </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+                {{end}}
+                <form method="post" action="/ui/github/forget" class="space-y-2 pt-2 border-t border-dark-700">
+                    <label class="flex items-center gap-2 text-sm text-gray-300"><input type="checkbox" name="confirm" value="yes" required> Vornik stops using this App. It stays on GitHub until I delete it there.</label>
+                    <button type="submit" class="v-btn v-btn--quiet">Forget this App</button>
+                </form>
+            </section>
+            {{else}}
+            <p class="text-sm text-gray-400">Create the GitHub App Vornik uses to review pull requests and answer issues. GitHub creates it with the right permissions and events; Vornik keeps its key and webhook secret. You then choose the repositories to install it on.</p>
+            {{if .Problem}}
+            <div class="bg-amber-900/30 border border-amber-700/50 rounded-xl p-3 text-amber-700 dark:text-amber-200 text-sm" role="alert">{{.Problem}}</div>
+            {{else}}
+            <form method="post" action="/ui/github/manifest" class="glass rounded-xl border border-dark-700 p-5 space-y-4">
+                <fieldset class="space-y-2">
+                    <legend class="text-sm font-medium text-gray-200">Who owns the App</legend>
+                    <label class="flex items-center gap-2 text-sm"><input type="radio" name="owner" value="personal" checked> My GitHub account</label>
+                    <label class="flex items-center gap-2 text-sm"><input type="radio" name="owner" value="organization"> An organisation:
+                        <input type="text" name="org" autocomplete="off" spellcheck="false" class="ml-1 px-2 py-1 rounded-md bg-dark-700 border border-control text-gray-200 font-mono text-sm" aria-label="Organisation name"></label>
+                </fieldset>
+                <label class="block text-sm">GitHub Enterprise address <span class="text-gray-500">(leave empty for github.com)</span>
+                    <input type="url" name="enterprise_url" placeholder="https://github.example.com" autocomplete="off" class="mt-1 w-full px-2 py-1 rounded-md bg-dark-700 border border-control text-gray-200 font-mono text-sm"></label>
+                <button type="submit" class="v-btn v-btn--primary">Create GitHub App</button>
+            </form>
+            {{end}}
+            {{end}}
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

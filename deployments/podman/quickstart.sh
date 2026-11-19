@@ -45,6 +45,9 @@
 #   VORNIK_SKIP_FETCH 1 = use VORNIK_DIR as-is, no clone/pull (offline/dev)
 #   VORNIK_HTTP_PORT  host port for the UI/API     (default: 8080)
 #   POSTGRES_PORT     host port for PostgreSQL      (default: 5432)
+#   VORNIK_PUBLIC_HOSTNAME DNS name for an optional HTTPS front door: a host
+#                     Caddy (preinstalled) terminates TLS; Vornik's own login
+#                     stays the sign-in (GitHub #839)
 #
 if [ "${VORNIK_QUICKSTART_SOURCED:-}" = 1 ]; then
   set -eu
@@ -57,7 +60,7 @@ REPO_URL="${VORNIK_REPO_URL:-https://github.com/EaseIT-cz/vornik}"
 # (`make quickstart-stamp-ref REF=<tag>`), so the PUBLISHED installer pins a
 # concrete release rather than a moving branch. Keep it a real, recent tag in
 # the repo. Override at runtime with VORNIK_REF (e.g. VORNIK_REF=main).
-DEFAULT_VORNIK_REF="2026.11.6"
+DEFAULT_VORNIK_REF="2026.11.7"
 REF="${VORNIK_REF:-$DEFAULT_VORNIK_REF}"
 DIR="${VORNIK_DIR:-$HOME/vornik}"
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
@@ -579,6 +582,93 @@ warn_auth_disabled() {
   fi
 }
 
+# --- Optional HTTPS front door (VORNIK_PUBLIC_HOSTNAME; GitHub #839 part A,
+# quickstart design amendment 2026-11-19). Caddy terminates TLS; login stays
+# Vornik's own, one session per person. No Python, no YAML rewrite, and a
+# re-run never edits an existing config.
+
+# https_hostname_ok <name> — a DNS name: letters, digits, dots and hyphens,
+# no empty label, no label starting or ending with a hyphen. It is pasted
+# into a Caddyfile, so nothing else may get through.
+https_hostname_ok() {
+  case "$1" in
+    ''|*[!A-Za-z0-9.-]*|.*|*.|*..*|-*|*-.*|*.-*|*-) return 1 ;;
+  esac
+  return 0
+}
+
+# https_render_site <template> <hostname> <http-port> <out>
+https_render_site() {
+  sed -e "s/__VORNIK_HOSTNAME__/$2/g" -e "s/__VORNIK_HTTP_PORT__/$3/g" "$1" > "$4"
+}
+
+# https_config_block <hostname> — the server: lines Vornik needs behind the
+# proxy, indented for the server block.
+https_config_block() {
+  printf '  public_base_url: "https://%s"\n' "$1"
+  printf '  real_ip:\n'
+  printf '    enabled: true\n'
+  printf '    header: X-Real-IP\n'
+  printf '    trusted_proxies: ["127.0.0.1/32", "::1/128"]\n'
+}
+
+# https_seed_config <config.yaml> <hostname> — on a FRESH seed only: insert
+# the block right after the template's `server:` line (the file was just
+# copied from our own template, so its layout is known).
+https_seed_config() {
+  _blk="$(https_config_block "$2")"
+  # Fails when no `server:` line took the block (review 0db8 L1): a silent
+  # miss would leave every proxied request keyed on 127.0.0.1.
+  awk -v blk="$_blk" '{ print } /^server:[[:space:]]*$/ && !done { print blk; done = 1 }
+    END { exit done ? 0 : 1 }' "$1" > "$1.tmp.$$" &&
+    mv "$1.tmp.$$" "$1" || { rm -f "$1.tmp.$$"; warn "$1 has no server: block; add the HTTPS block by hand:"; https_config_block "$2" >&2; return 1; }
+}
+
+# https_port_ok <port> — digits only; it is pasted into the Caddyfile.
+https_port_ok() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+
+# https_install_site <rendered> — validate, then install as
+# $VORNIK_CADDY_ETC/vornik.caddy (default /etc/caddy). The site is live only
+# when the Caddyfile imports it; this never takes over an existing Caddyfile.
+# Returns 0 when Caddy was reloaded, 3 when HTTPS is not active yet, 1 on a
+# file that does not validate.
+https_install_site() {
+  _etc="${VORNIK_CADDY_ETC:-/etc/caddy}"
+  _site="$_etc/vornik.caddy"
+  if ! caddy validate --adapter caddyfile --config "$1" >/dev/null 2>&1; then
+    warn "The generated Caddy site did not validate; nothing was installed."
+    return 1
+  fi
+  sudo install -m 0644 "$1" "$_site" || return 1
+  if [ ! -e "$_etc/Caddyfile" ]; then
+    # noclobber (review 0db8 L2): a Caddyfile someone else created since the
+    # check above is never overwritten.
+    printf '# vornik-https-site\nimport %s\n' "$_site" |
+      sudo sh -c 'set -C; cat > "$1"' sh "$_etc/Caddyfile" 2>/dev/null || [ -e "$_etc/Caddyfile" ] || return 1
+  fi
+  if ! grep -Eq "^[[:space:]]*import[[:space:]]+$_site([[:space:]]|\$)" "$_etc/Caddyfile" 2>/dev/null; then
+    warn "HTTPS is not active yet: $_etc/Caddyfile does not import the Vornik site."
+    warn "  Add this line to it, then: sudo systemctl reload caddy"
+    warn "    import $_site"
+    return 3
+  fi
+  sudo systemctl reload caddy || return 1
+  return 0
+}
+
+# https_probe <hostname> — one request to the login page; reports, decides
+# nothing.
+https_probe() {
+  if curl -fsS -o /dev/null --max-time 20 "https://$1/ui/login"; then
+    ok "https://$1/ answers (sign in with your own API key)"
+  else
+    warn "https://$1/ did not answer yet: DNS for $1 must point here and port 443 be open; Caddy's log: journalctl -u caddy -e"
+  fi
+}
+
 # When sourced by quickstart_test.sh, stop here — expose the helpers above
 # without running the install body (which calls sudo/podman/git/build).
 if [ "${VORNIK_QUICKSTART_SOURCED:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
@@ -622,6 +712,13 @@ if ! command -v brew >/dev/null 2>&1; then
   for b in /home/linuxbrew/.linuxbrew/bin/brew "$HOME/.linuxbrew/bin/brew"; do
     [ -x "$b" ] && eval "$("$b" shellenv)" && break
   done
+fi
+# Optional HTTPS front door (GitHub #839): checked before anything changes.
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ]; then
+  https_hostname_ok "$VORNIK_PUBLIC_HOSTNAME" || die "VORNIK_PUBLIC_HOSTNAME='$VORNIK_PUBLIC_HOSTNAME' is not a DNS name (letters, digits, dots and hyphens)."
+  https_port_ok "$HTTP_PORT" || die "VORNIK_HTTP_PORT='$HTTP_PORT' is not a port number."
+  command -v caddy >/dev/null 2>&1 || die "VORNIK_PUBLIC_HOSTNAME needs Caddy on this host; install its system package first (deployments/podman/README.md, Exposing beyond the host)."
+  warn "HTTPS mode writes /etc/caddy/vornik.caddy with sudo and reloads Caddy; Vornik's own login stays the sign-in."
 fi
 # Core tools. On Bazzite/Silverblue these are already in the base image, so
 # this loop usually no-ops — we never reinstall what's present.
@@ -780,6 +877,10 @@ if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
   cp "$DIR/deployments/podman/config/vornik.host.yaml" "$CONFIG_DIR/config.yaml"
   new_install=1
   ok "Seeded $CONFIG_DIR/config.yaml"
+  if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ]; then
+    https_seed_config "$CONFIG_DIR/config.yaml" "$VORNIK_PUBLIC_HOSTNAME" &&
+      ok "config.yaml trusts the local proxy and names https://$VORNIK_PUBLIC_HOSTNAME"
+  fi
   telemetry_interactive=0
   if [ -t 1 ] && [ -c /dev/tty ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
     telemetry_interactive=1
@@ -803,6 +904,11 @@ fi
 seed_db_password "$CONFIG_DIR" "$DIR/deployments/podman/.env" "$DIR/deployments/podman/.env.example"
 ensure_api_key "$CONFIG_DIR"
 [ -n "$new_install" ] || warn_auth_disabled "$CONFIG_DIR/config.yaml"
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ] && [ -z "$new_install" ] && ! grep -q 'header: X-Real-IP' "$CONFIG_DIR/config.yaml"; then
+  # A re-run never edits an existing config (#839): it says what to add.
+  warn "$CONFIG_DIR/config.yaml was not changed. For HTTPS behind Caddy, add under server:"
+  https_config_block "$VORNIK_PUBLIC_HOSTNAME" | sed 's/^/      /' >&2
+fi
 
 # Seed the registry tree on first run; deploy what the release added on every run.
 seed_configs "$DIR" "$CONFIG_DIR"
@@ -832,6 +938,16 @@ mkdir -p "$UNIT_DIR"
 install -m 0644 "$DIR/deployments/podman/systemd/vornik.service" "$UNIT_DIR/vornik.service"
 systemctl --user daemon-reload
 systemctl --user enable --now vornik.service || die "Failed to start vornik.service. Check: journalctl --user -u vornik -e"
+
+# Optional HTTPS front door (#839): Caddy terminates TLS for the daemon.
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ]; then
+  https_site_tmp="$(mktemp)"
+  https_render_site "$DIR/deployments/podman/https/Caddyfile" "$VORNIK_PUBLIC_HOSTNAME" "$HTTP_PORT" "$https_site_tmp"
+  https_rc=0; https_install_site "$https_site_tmp" || https_rc=$?
+  rm -f "$https_site_tmp"
+  [ "$https_rc" = 0 ] && https_probe "$VORNIK_PUBLIC_HOSTNAME"
+  warn "Firewall port $HTTP_PORT from everything but this host: the agents reach it locally, everyone else through https://$VORNIK_PUBLIC_HOSTNAME."
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Wait for readiness and report.

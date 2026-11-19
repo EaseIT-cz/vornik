@@ -678,6 +678,82 @@ else
   bad "config-deploy.sh did not land configs/agent-templates"
 fi
 
+# --- Optional HTTPS front door (GitHub #839 part A). -------------------------
+echo "https front door:"
+for h in "vornik.example.org" "a-b.c" ; do
+  if https_hostname_ok "$h"; then ok "hostname $h accepted"; else bad "hostname $h refused"; fi
+done
+for h in "" "a b" "a/b" 'x$(id)' "-a.b" "a..b" "a.b." "a-.b" "a;b"; do
+  if https_hostname_ok "$h"; then bad "hostname '$h' accepted"; else ok "hostname '$h' refused"; fi
+done
+
+https_render_site "$SCRIPT_DIR/https/Caddyfile" vornik.example.org 8080 "$TMP/site"
+if grep -q '^vornik.example.org {' "$TMP/site" && grep -q 'reverse_proxy 127.0.0.1:8080' "$TMP/site" \
+   && grep -q 'header_up X-Real-IP {remote_host}' "$TMP/site" \
+   && ! grep -qi 'basic_auth\|Authorization\|/ui/login' "$TMP/site"; then
+  ok "the site proxies to the daemon, sets X-Real-IP, and adds no credential or login redirect"
+else
+  bad "rendered site: $(cat "$TMP/site")"
+fi
+
+printf 'server:\n  address: "0.0.0.0:8080"\n  read_timeout: 30s\napi:\n  auth_enabled: true\n' > "$TMP/config.yaml"
+https_seed_config "$TMP/config.yaml" vornik.example.org
+if awk '/^server:/{s=1;next} /^[^ ]/{s=0} s' "$TMP/config.yaml" | grep -q 'header: X-Real-IP' \
+   && grep -q 'public_base_url: "https://vornik.example.org"' "$TMP/config.yaml" \
+   && grep -q 'trusted_proxies: \["127.0.0.1/32", "::1/128"\]' "$TMP/config.yaml" \
+   && grep -q '^  address: "0.0.0.0:8080"' "$TMP/config.yaml" && grep -q '^  auth_enabled: true' "$TMP/config.yaml"; then
+  ok "a fresh seed gains the real_ip block and public_base_url inside server:, keeping every line"
+else
+  bad "seeded config: $(cat "$TMP/config.yaml")"
+fi
+blk="$(https_config_block h.example)"
+for k in 'public_base_url:' 'enabled: true' 'header: X-Real-IP' 'trusted_proxies:'; do
+  case "$blk" in *"$k"*) : ;; *) bad "the printed block lacks $k" ;; esac
+done
+ok "the block printed for an existing config holds every key"
+# Review 0db8 L1: a config with no server: line is refused and left as it was.
+printf 'api:\n  auth_enabled: true\n' > "$TMP/noserver.yaml"; nsb="$(cat "$TMP/noserver.yaml")"
+if ( https_seed_config "$TMP/noserver.yaml" h.example ) 2>/dev/null; then bad "a config with no server: block was reported seeded"
+elif [ "$(cat "$TMP/noserver.yaml")" = "$nsb" ]; then ok "a config with no server: block is refused and unchanged"
+else bad "a config with no server: block was changed"; fi
+# Review 0db8 L4: the port is digits only.
+for p in 8080 443; do if https_port_ok "$p"; then ok "port $p accepted"; else bad "port $p refused"; fi; done
+for p in "" "80/x" "8080;" "a"; do if https_port_ok "$p"; then bad "port '$p' accepted"; else ok "port '$p' refused"; fi; done
+
+# Install: stub caddy/sudo/systemctl/curl and a temporary /etc/caddy.
+make_stub caddy 'exit "${CADDY_VALIDATE_RC:-0}"'
+make_stub sudo '"$@"'
+make_stub systemctl 'echo "$*" >> "$SYSTEMCTL_LOG"'
+make_stub install '/usr/bin/install "$@"'
+make_stub tee '/usr/bin/tee "$@"'
+make_stub grep '/usr/bin/grep "$@"'
+make_stub printf '/usr/bin/printf "$@"'
+make_stub sh '/usr/bin/sh "$@"'   # the noclobber write runs `sudo sh -c 'set -C; cat > …'`
+make_stub cat '/usr/bin/cat "$@"'
+SYSTEMCTL_LOG="$TMP/systemctl.log"; export SYSTEMCTL_LOG
+for mode in absent imports other badsite; do
+  etc="$TMP/etc-$mode"; mkdir -p "$etc"; : > "$SYSTEMCTL_LOG"
+  case "$mode" in
+    imports) printf 'import %s/vornik.caddy\n' "$etc" > "$etc/Caddyfile" ;;
+    other)   printf 'example.com {\n  respond "hi"\n}\n' > "$etc/Caddyfile" ;;
+  esac
+  # `|| true`: the sourced installer turns on set -e, and a missing Caddyfile
+  # (mode absent) would otherwise end the whole suite here, silently.
+  before="$(cat "$etc/Caddyfile" 2>/dev/null || true)"
+  rc=0
+  if [ "$mode" = badsite ]; then
+    ( PATH="$STUB"; VORNIK_CADDY_ETC="$etc" CADDY_VALIDATE_RC=1 https_install_site "$TMP/site" ) 2>/dev/null || rc=$?
+  else
+    ( PATH="$STUB"; VORNIK_CADDY_ETC="$etc" https_install_site "$TMP/site" ) 2>/dev/null || rc=$?
+  fi
+  case "$mode" in
+    absent)  if [ "$rc" = 0 ] && grep -q "import $etc/vornik.caddy" "$etc/Caddyfile" && grep -q 'reload caddy' "$SYSTEMCTL_LOG"; then ok "no Caddyfile: one is created holding the import, and Caddy reloads"; else bad "absent: rc=$rc"; fi ;;
+    imports) if [ "$rc" = 0 ] && [ -f "$etc/vornik.caddy" ] && grep -q 'reload caddy' "$SYSTEMCTL_LOG"; then ok "a Caddyfile that imports the site: installed and reloaded"; else bad "imports: rc=$rc"; fi ;;
+    other)   if [ "$rc" = 3 ] && [ "$(cat "$etc/Caddyfile")" = "$before" ] && ! grep -q reload "$SYSTEMCTL_LOG"; then ok "a Caddyfile without the import is left alone, nothing reloads, HTTPS reported not active"; else bad "other: rc=$rc"; fi ;;
+    badsite) if [ "$rc" = 1 ] && [ ! -e "$etc/vornik.caddy" ]; then ok "a site that does not validate installs nothing"; else bad "badsite: rc=$rc"; fi ;;
+  esac
+done
+
 echo "---"
 echo "PASS: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

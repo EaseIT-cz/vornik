@@ -122,6 +122,7 @@ func (f *wipeFixture) verifyUnscopedLinks(victim, control string) {
 // change this one too.
 var wipeMustKeep = map[string]string{
 	"secret_redaction_audit":  "kept table",
+	"github_app_repositories": "kept table: the App's binding (GitHub #800)",
 	"project_skills":          "partly wiped: global skills stay",
 	"control_plane_proposals": "partly wiped: radius beyond the project stays",
 	"data_subject_links":      "partly wiped: links to surviving rows stay",

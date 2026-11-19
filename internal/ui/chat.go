@@ -144,6 +144,10 @@ type ChatPageData struct {
 	ProjectID   string
 	ProjectName string
 
+	// ConnectProvider links the model-provider page beside the error: a
+	// managed instance with no chat dispatcher (GitHub #807).
+	ConnectProvider bool
+
 	// Prefill is the question carried from the home page's Ask box (#756,
 	// design §14.2): it fills the composer, escaped by html/template, and
 	// is never sent until the person presses Send.
@@ -359,6 +363,12 @@ func (s *Server) chatPageData(r *http.Request, projectID string) ChatPageData {
 	if s.chatDispatcher == nil {
 		data.Disabled = true
 		data.Error = "Chat is not configured on this deployment (no chat dispatcher wired)."
+		// GitHub #807: a managed instance's owner fixes this on the
+		// model-provider page; the notice says so and links it.
+		if s.managedHosting {
+			data.Error = "No model is connected yet."
+			data.ConnectProvider = true
+		}
 	}
 	if s.projectReg != nil {
 		if p := s.projectReg.GetProject(projectID); p != nil {

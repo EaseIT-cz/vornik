@@ -22,7 +22,7 @@ func testProvider(base string) *Provider {
 		installationID: 2,
 		apiBaseURL:     strings.TrimRight(base, "/"),
 		httpClient:     &http.Client{Timeout: 5 * time.Second},
-		mintFn: func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey) (string, time.Time, error) {
+		mintFn: func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey, []string) (string, time.Time, error) {
 			return "ghs_test", time.Now().Add(time.Hour), nil
 		},
 		now: time.Now,
@@ -311,7 +311,7 @@ func TestFetchDiff_HTTPError(t *testing.T) {
 func TestToken_Caches(t *testing.T) {
 	calls := 0
 	p := testProvider("http://unused")
-	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey) (string, time.Time, error) {
+	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey, []string) (string, time.Time, error) {
 		calls++
 		return "ghs_cached", time.Now().Add(time.Hour), nil
 	}

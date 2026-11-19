@@ -63,6 +63,7 @@ type StepOutcome struct {
 // used to write agentError.
 var stepOutcomeExitTier = map[string]bool{
 	"output_file_contract": true,
+	"review_actions":       true, // #751: the same schema-violation retry
 	"broker_egress":        true,
 	"tool_contract":        true,
 	"plausibility":         true,
@@ -94,6 +95,7 @@ func (e *Executor) stepOutcomePoint() *pipeline.Decide[*StepOutcome] {
 	e.stepOutcomeOnce.Do(func() {
 		c := pipeline.NewDecide[*StepOutcome](pipeline.ExecutorStepOutcome, executorPipelineLogger{e.logger})
 		c.Register("output_file_contract", e.outputFileContractParticipant)
+		c.Register("review_actions", e.reviewActionsParticipant) // #751
 		c.Register("broker_egress", e.brokerEgressParticipant)
 		c.Register("tool_contract", e.toolContractParticipant)
 		c.Register("plausibility", e.plausibilityParticipant)

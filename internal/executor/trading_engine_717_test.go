@@ -69,6 +69,7 @@ type fakeTools struct {
 	inflight map[string]int // per service
 	peak     map[string]int
 	delay    time.Duration
+	falling  bool // hourly bars fall, so the last close is under its SMA20 (#826)
 }
 
 func toolService(tool string) string {
@@ -110,9 +111,12 @@ func (f *fakeTools) call(_ context.Context, _, projectID, tool string, _ map[str
 		// SMA20 and RSI14 is about 60, inside [35,75].
 		closes, c := make([]map[string]any, 30), 960.0
 		for i := range closes {
-			if i%2 == 0 {
+			switch {
+			case f.falling:
+				c -= 2
+			case i%2 == 0:
 				c += 3
-			} else {
+			default:
 				c -= 2
 			}
 			closes[i] = map[string]any{"close": c}

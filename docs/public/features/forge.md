@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/forge/forge.go
-      sha256: 8fe94fe7e928d7d2e18eaabf8d0b149db4210746cebe491ccb8202ab8e221c88
+      sha256: db90c7afc4e5000556cc76d4a729a029b3199f03b9e7f2049cee7a95cc15a5bd
     - path: internal/forge/github/github.go
-      sha256: 77b398d2904c0b16036455b2a00323cee1d2dbce584b9d15d47113756b51923a
+      sha256: 466960e1c2eaeb34a2f9460c6b215fbae8cf095e5571099f751d78742c9088b8
     - path: internal/forge/issues.go
       sha256: 26e007910abebbabf41b907c81741ae7d53680e9675bce1748785129f35e60c4
     - path: internal/forge/github/issues.go
@@ -148,6 +148,11 @@ This is the part that matters for security review:
   read once at startup and never leaves the daemon process.
 - Outbound calls use a **short-lived installation token** the daemon mints on
   demand and caches in memory for a few minutes.
+- Each token reaches **only the repository the project names** (`repo`, or
+  for an App-backed project the bound repository), even when the App is
+  installed on a whole organisation. A forge block that names no repository,
+  and takes it from each event, mints a token for every repository the
+  installation covers, and the daemon logs each such mint.
 - The **push** hands that token to `git` through an in-process credential header
   — never on the command line (so it can't be seen in the process list), never
   in the remote URL, and never written to on-disk git config. Pushes are

@@ -318,3 +318,10 @@ func TestResolver_BuildsLLMUserMessageWithJSONArrays(t *testing.T) {
 		t.Errorf("CANDIDATES JSON did not parse: %v\nraw=%q", err, candsRaw)
 	}
 }
+
+// ListMissingEmbedding and UpdateEmbedding satisfy the #459 methods; this fake
+// stores no vectors.
+func (f *fakeEntityRepo) ListMissingEmbedding(context.Context, int) ([]*persistence.KnowledgeEntity, error) {
+	return nil, nil
+}
+func (f *fakeEntityRepo) UpdateEmbedding(context.Context, string, []float32) error { return nil }

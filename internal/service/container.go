@@ -65,6 +65,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"vornik.io/vornik/internal/benchlearning"
+
 	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/agentadmin"
@@ -143,6 +145,12 @@ import (
 
 // Container holds all initialized services and dependencies.
 type Container struct {
+	// benchGate is the learning study's freeze gate (GitHub #809;
+	// bench_809.go), opened once on first use.
+	benchGateOnce sync.Once
+	benchGate     *benchlearning.Gate
+	benchGateErr  error
+
 	Config *config.Config
 	// speedFactor* cache the declared inference-speed factor, shared by the
 	// lease and every step timeout (dynamic-tool-budget design §6.2.1b).
@@ -417,6 +425,13 @@ type Container struct {
 	// project has the block configured. See
 	// https://docs.vornik.io
 	GitHubChannel *github.Channel
+	// githubApps holds the registered App's bindings (GitHub #800); nil
+	// without the bindings table. githubChannel is the channel the
+	// always-mounted route serves, swapped when a registration appears
+	// after boot; githubTaskCreatorFor builds a route's task creator.
+	githubApps           *githubAppBindings
+	githubChannel        atomic.Pointer[github.Channel]
+	githubTaskCreatorFor func(*registry.Project) github.TaskCreator
 	// GitHubProject is the project the GitHub App channel is
 	// pinned to in single-installation mode. Nil when the channel
 	// runs with multiple installations — GitHubProjects is the
@@ -2252,6 +2267,11 @@ func (c *Container) Run(ctx context.Context) error {
 	// was resolved is withdrawn: now, and every five minutes (config-apply
 	// journal design §13.3, GitHub #302).
 	c.StartJournalCardSweep(ctx)
+	// GitHub #800: write each bound repository's review project into this
+	// node's tree, now, after each installation event and every 5 minutes.
+	if c.githubApps != nil {
+		go c.githubApps.run(ctx)
+	}
 
 	if c.capabilities().RunWorkers {
 		// Chat-provider readiness gate. Before the scheduler starts

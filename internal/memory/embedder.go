@@ -442,7 +442,7 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 		return nil, embedFail(EmbedReasonRequest, fmt.Errorf("marshal embedding request: %w", err))
 	}
 
-	url := strings.TrimRight(e.cfg.EmbeddingEndpoint, "/") + "/v1/embeddings"
+	url := EmbeddingsURL(e.cfg.EmbeddingEndpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
 		return nil, embedFail(EmbedReasonRequest, fmt.Errorf("create embedding request: %w", err))
@@ -711,4 +711,22 @@ func (e *Embedder) embedOneBedrock(ctx context.Context, scope EmbedScope, text s
 // same-host redirects only (#505).
 func modelEndpointHTTPClient(timeout time.Duration) *http.Client {
 	return dialguard.ModelEndpointClient(timeout)
+}
+
+// EmbeddingsURL is the embeddings endpoint for a configured base. The base is
+// the provider's OpenAI-compatible base ending in /v1, the form the chat
+// client takes, so one string serves both; a pre-#807 base without /v1 still
+// appends /v1/embeddings (security design 18 amendment 2026-11-18).
+func EmbeddingsURL(base string) string {
+	b := strings.TrimRight(strings.TrimSpace(base), "/")
+	if EmbeddingBaseIsLegacy(b) {
+		return b + "/v1/embeddings"
+	}
+	return b + "/embeddings"
+}
+
+// EmbeddingBaseIsLegacy reports a base in the pre-#807 form, without /v1.
+func EmbeddingBaseIsLegacy(base string) bool {
+	b := strings.ToLower(strings.TrimRight(strings.TrimSpace(base), "/"))
+	return !strings.HasSuffix(b, "/v1")
 }

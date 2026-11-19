@@ -437,7 +437,7 @@ type Executor struct {
 	// implementation (overridable in tests; nil → defaultGitHubMint).
 	ghTokenMu sync.Mutex
 	ghTokens  map[github.AppIdentity]ghCachedToken
-	ghMintFn  func(ctx context.Context, apiBase string, appID, installID int64, keyPath string) (string, time.Time, error)
+	ghMintFn  func(ctx context.Context, m github.KeyFileMint) (string, time.Time, error)
 	// ingestQueue (optional) routes ingestion through the
 	// project_ingest_queue → IngestWorker pipeline introduced in
 	// Phase 1 of the memory hardening roadmap. Nil falls back to

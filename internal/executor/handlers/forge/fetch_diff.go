@@ -1,16 +1,20 @@
 package forge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // FetchDiffHandler implements the "forge.fetch_diff" system step: fetch a change
@@ -24,6 +28,18 @@ type FetchDiffHandler struct {
 	// fetched. Failing a review because the bookkeeping is unavailable would
 	// trade a duplicate review for no review at all.
 	reviewState persistence.ForgePRReviewStateRepository
+
+	// detector masks the diff on a step with mask_secrets (GitHub #801 B).
+	detector secrets.Detector
+}
+
+// WithSecretsDetector attaches the daemon's secret detector, the one the
+// executor scans agent results with (GitHub #801 B).
+func (h *FetchDiffHandler) WithSecretsDetector(d secrets.Detector) *FetchDiffHandler {
+	if h != nil {
+		h.detector = d
+	}
+	return h
 }
 
 // NewFetchDiffHandler wires the handler.
@@ -62,6 +78,9 @@ func (h *FetchDiffHandler) Execute(ctx context.Context, in executor.SystemStepIn
 	diff, scope, head, err := h.fetchAndClose(ctx, provider, in.Task.ProjectID, job, name)
 	if err != nil {
 		return executor.SystemStepResult{}, err
+	}
+	if in.Step != nil && in.Step.MaskSecrets {
+		return h.maskedResult(diff, job, scope, head)
 	}
 
 	out, _ := json.Marshal(map[string]any{
@@ -138,6 +157,12 @@ func (h *FetchDiffHandler) fetchAndClose(
 		diff, scope, head, observed, err := h.diffForJob(ctx, provider, projectID, job)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("%s: fetch diff for %s#%d: %w", name, job.Repo, job.Number, err)
+		}
+		// #838: an empty diff gives the reviewer nothing to cover; refused
+		// rather than reviewed. no-change (no commits since the last
+		// review) is the deliberate no-op and keeps its own text.
+		if scope != scopeNoChange && len(bytes.TrimSpace(diff)) == 0 {
+			return nil, "", "", fmt.Errorf("%s: the forge returned an empty diff for %s#%d; refusing a review that covers no change", name, job.Repo, job.Number)
 		}
 		if h.reviewState == nil {
 			// No coalescing bookkeeping: nothing can have been absorbed, so
@@ -322,4 +347,64 @@ func observePending(st *persistence.ForgePRReviewState) pendingObservation {
 		return pendingObservation{known: true}
 	}
 	return pendingObservation{value: st.PendingHeadSHA, known: true}
+}
+
+// diffReadCap is the provider's read limit (internal/forge/github
+// maxResponseBytes): a diff that long was cut there.
+const diffReadCap = 1 << 20
+
+// maskedResult is the result of a mask_secrets step (GitHub #801 B and G):
+// the masked diff, code first, cut to the inline budget, with counts by
+// type and the files not inline named. No value is ever in it.
+func (h *FetchDiffHandler) maskedResult(diff []byte, job *forgeapi.ForgeJob, scope, head string) (executor.SystemStepResult, error) {
+	masked, counts, err := maskDiff(h.detector, diff)
+	if err != nil {
+		return executor.SystemStepResult{}, err
+	}
+	truncated := len(diff) >= diffReadCap
+	kept, notIn := inlineDiff(masked, diffInlineBudget)
+	parts := len(servedParts(masked)) // #814: the reader serves the same parts
+	cutFile := ""
+	if files := splitDiffFiles(masked); truncated && len(files) > 0 {
+		cutFile = files[len(files)-1].name() // #814 N1: never reviewed whole
+	}
+	total := 0
+	types := make([]string, 0, len(counts))
+	for t, n := range counts {
+		total += n
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	var lead strings.Builder
+	if total > 0 {
+		fmt.Fprintf(&lead, "Vornik masked %d secret-shaped values in this diff (%s). Do not ask for them.\n", total, strings.Join(types, ", "))
+	}
+	if truncated {
+		lead.WriteString("The diff was longer than 1 MiB and was cut when fetched; files past the cut are not in it.\n")
+		if cutFile != "" {
+			fmt.Fprintf(&lead, "The fetch cut %s partway.\n", cutFile)
+		}
+	}
+	if len(notIn) > 0 {
+		fmt.Fprintf(&lead, "Not in this diff text: %d files (%s). Read them with forge_diff_part, parts 2 to %d.\n",
+			len(notIn), strings.Join(notIn, ", "), parts)
+	}
+	if lead.Len() > 0 {
+		lead.WriteString("\n")
+	}
+	out, _ := json.Marshal(map[string]any{
+		"message":     lead.String() + string(kept),
+		"diff":        string(masked),
+		"repo":        job.Repo,
+		"number":      job.Number,
+		"scope":       scope,
+		"outcome":     scope,
+		"head_sha":    head,
+		"masked":      map[string]any{"count": total, "by_type": counts},
+		"not_in_diff": notIn,
+		"parts":       parts,
+		"cut_file":    cutFile,
+		"truncated":   truncated,
+	})
+	return executor.SystemStepResult{Result: out}, nil
 }

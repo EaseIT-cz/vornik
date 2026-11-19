@@ -181,9 +181,14 @@ func TestSQLTraceStore_ReadsTheTerminalAndItsRecoveryFlag_655(t *testing.T) {
 // Both §12.29 rules change what a journal's succeeded means and what a task
 // starts from, so journals either side must not compare.
 func TestHarnessVersionMovesForTheCheckpointRule_655(t *testing.T) {
-	// 10 for §12.29; 11 since §12.30 replaced the history too.
-	if HarnessVersion != "11" {
-		t.Fatalf("HarnessVersion = %q, want 11 (benchmark LLD §12.29, §12.30)", HarnessVersion)
+	// 10 for §12.29; 11 since §12.30 replaced the history too; 12 since
+	// §12.33 keeps only the baseline (#808); 13 since the canonical config
+	// hash and the learning axis (#809).
+	if HarnessVersion != "13" {
+		t.Fatalf("HarnessVersion = %q, want 13 (benchmark LLD §12.29, §12.30, §12.33, #809)", HarnessVersion)
+	}
+	if WorkspaceResetBaseline == WorkspaceResetTargetsStateAndHistory {
+		t.Fatal("the baseline reset needs its own provenance value")
 	}
 	if WorkspaceResetTargetsStateAndHistory == WorkspaceResetTargetsAndState {
 		t.Fatal("the reset that also replaces the history needs its own provenance value")

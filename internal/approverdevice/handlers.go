@@ -345,6 +345,13 @@ func (s *Service) approveRouter(w http.ResponseWriter, r *http.Request) {
 		s.remove(w, r, strings.TrimSuffix(strings.TrimPrefix(rest, "devices/"), "/remove"))
 	case strings.HasSuffix(rest, "/connect") && !strings.Contains(strings.TrimSuffix(rest, "/connect"), "/"):
 		s.connect(w, r, strings.TrimSuffix(rest, "/connect"))
+	case strings.HasPrefix(rest, "notices/") && strings.HasSuffix(rest, "/ack") &&
+		!strings.Contains(strings.TrimSuffix(strings.TrimPrefix(rest, "notices/"), "/ack"), "/"):
+		s.acknowledgeNotice(w, r, strings.TrimSuffix(strings.TrimPrefix(rest, "notices/"), "/ack"))
+	case strings.HasSuffix(rest, "/dismiss") && !strings.Contains(strings.TrimSuffix(rest, "/dismiss"), "/"):
+		s.dismissApplyFailed(w, r, strings.TrimSuffix(rest, "/dismiss"))
+	case strings.HasSuffix(rest, "/retry") && !strings.Contains(strings.TrimSuffix(rest, "/retry"), "/"):
+		s.retryApplyFailed(w, r, strings.TrimSuffix(rest, "/retry"))
 	case strings.HasPrefix(rest, "group/") && !strings.Contains(strings.TrimPrefix(rest, "group/"), "/"):
 		s.groupPage(w, r, strings.TrimPrefix(rest, "group/"))
 	case !strings.Contains(rest, "/"):
@@ -363,9 +370,9 @@ type listData struct {
 	Notify  string
 	// Push is this device's Web Push line, empty when Web Push is off.
 	Push string
-	// Withheld are the daemon's lines for suspended agent read tools
-	// (design §6.5 item 6).
-	Withheld []string
+	// Withheld are the daemon's notices for suspended agent read tools
+	// (design §6.5 item 6) that nobody acknowledged (GitHub #806).
+	Withheld []Notice
 	// Failed are approved requests that could not be applied, recorded in
 	// the last 7 days; FailedMore says more exist than are shown (#669).
 	Failed     []ApplyFailedRow
@@ -376,9 +383,13 @@ type listData struct {
 // #669 item 5, design 22 §22.2.16b): read-only, its reason masked and cut.
 // The phone and the console inbox both show these rows.
 type ApplyFailedRow struct {
+	ID         string
 	Sentence   string
 	ApprovedAt time.Time
 	Reason     string
+	// Retryable: the failure is the given-up kind, read from the raw reason
+	// before masking and cutting (GitHub #806).
+	Retryable bool
 }
 
 const (
@@ -405,7 +416,8 @@ func (s *Service) applyFailedRows(rows []persistence.AgentApprovalRequestRow) ([
 	}
 	out := make([]ApplyFailedRow, 0, len(rows))
 	for _, r := range rows {
-		row := ApplyFailedRow{Sentence: r.Sentence, Reason: cutRunes(s.mask(r.ApplyError), applyFailedReasonCut)} // masked, then cut
+		row := ApplyFailedRow{ID: r.ID, Sentence: r.Sentence, Retryable: retryable(r.ApplyError),
+			Reason: cutRunes(s.mask(r.ApplyError), applyFailedReasonCut)} // masked, then cut
 		if r.DecidedAt != nil {
 			row.ApprovedAt = *r.DecidedAt
 		}
@@ -416,13 +428,13 @@ func (s *Service) applyFailedRows(rows []persistence.AgentApprovalRequestRow) ([
 
 // SetWithheldTools installs the source of the Approvals page's withheld
 // lines (agent-administered design §6.5 item 6, GitHub #413).
-func (s *Service) SetWithheldTools(fn func(ctx context.Context) []string) {
+func (s *Service) SetWithheldTools(fn func(ctx context.Context) []Notice) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.withheldTools = fn
 }
 
-func (s *Service) withheldLines(ctx context.Context) []string {
+func (s *Service) withheldLines(ctx context.Context) []Notice {
 	s.mu.RLock()
 	fn := s.withheldTools
 	s.mu.RUnlock()
@@ -461,7 +473,7 @@ func (s *Service) listPage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("approverdevice: approvals page: the failed-apply list could not be read; section hidden: %v", ferr)
 	}
 	s.render(w, http.StatusOK, "list.html", listData{Device: d, Pending: singles, Groups: groups,
-		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Push: s.pushListLine(r.Context(), d.ID), Withheld: s.withheldLines(r.Context()),
+		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Push: s.pushListLine(r.Context(), d.ID), Withheld: s.Notices(r.Context()),
 		Failed: failed, FailedMore: more})
 }
 
@@ -959,7 +971,12 @@ func (s *Service) revoke(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	d, _ := FromRequest(r)
-	if err := s.Revoke(r.Context(), id); err != nil {
+	principal := "device:unknown"
+	if d != nil {
+		principal = "device:" + d.ID
+	}
+	// #763: every revoke is audited; a double tap on Revoke is not an error.
+	if err := s.RevokeBy(r.Context(), id, principal, "approver"); err != nil && !errors.Is(err, ErrAlreadyRevoked) && !errors.Is(err, ErrNoAudit) {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}

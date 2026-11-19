@@ -227,7 +227,10 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if err := d.applyTimestampNormalization(ctx); err != nil {
 		return err
 	}
-	return d.applyFunnelOutcomeRefill(ctx)
+	if err := d.applyFunnelOutcomeRefill(ctx); err != nil {
+		return err
+	}
+	return d.applyBarSessionRepair(ctx)
 }
 
 // additiveColumn is a column added to an EXISTING table after that table first
@@ -375,6 +378,11 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"api_keys", "agent_namespace", `TEXT NOT NULL DEFAULT ''`},
 	// Postgres migration 209 — a permanently failed approved change.
 	{"agent_approval_requests", "apply_error", `TEXT`},
+	// Postgres migration 255 (GitHub #806): a dismissed or retried failed apply.
+	{"agent_approval_requests", "dismissed_at", `TEXT`},
+	{"agent_approval_requests", "dismissed_by", `TEXT`},
+	{"agent_approval_requests", "retried_at", `TEXT`},
+	{"agent_approval_requests", "retried_by", `TEXT`},
 	// Postgres migration 215 — approver-device rotation sharing and dead-value
 	// recognition (agent-administered design §9.2, amendment 2026-10-05).
 	{"approver_devices", "prev_token_hash", `TEXT`},

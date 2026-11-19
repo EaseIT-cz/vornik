@@ -18,6 +18,7 @@
 #
 # Usage: scripts/release-audit.sh [count]
 #        scripts/release-audit.sh --check-token   (the token expiry only)
+#        scripts/release-audit.sh --ce-prs        (community PRs waiting on us)
 set -uo pipefail
 
 EE="${RELEASE_AUDIT_EE_REPO:-EaseIT-cz/vornik}"
@@ -64,6 +65,46 @@ check_token() {
 		note "- CE publish token expires on $expires ($days days left)"
 	fi
 }
+
+# --ce-prs (GitHub #840, export runbook amendment 2026-11-19): the open
+# community PRs older than 7 days that no maintainer (an OWNER, MEMBER or
+# COLLABORATOR) has commented on or reviewed, and open PRs a CE sync already
+# shipped (CE-PR-Shipped on public main), which the export failed to close.
+# It reports; it fails nothing (2026-11-19: #19 had waited 42 days unseen).
+check_ce_prs() {
+	local today now_s rows n created age answered shipped=0 waiting=0 examined=0
+	today="${RELEASE_AUDIT_TODAY:-$(date -u +%F)}"
+	now_s=$(date -u -d "$today" +%s)
+	rows="$(gh pr list -R "$CE" --state open --limit 200 --json number,createdAt --jq '.[] | "\(.number)\t\(.createdAt)"' 2>/dev/null)" || {
+		note "- could not list the open pull requests on $CE"; return 0; }
+	local shipped_list
+	shipped_list="$(gh api "repos/$CE/commits?sha=main&per_page=100" --jq '.[].commit.message' 2>/dev/null |
+		sed -n "s#^CE-PR-Shipped: $CE\#\([0-9][0-9]*\)\$#\1#p" | sort -u)"
+	note "## Community pull requests on $CE"
+	while IFS=$'\t' read -r n created; do
+		[ -n "$n" ] || continue
+		examined=$((examined + 1))
+		if grep -qx "$n" <<<"$shipped_list"; then
+			note "- #$n was shipped by a CE sync but is still open: close it with a link to the sync commit"
+			shipped=$((shipped + 1))
+			continue
+		fi
+		age=$(( (now_s - $(date -u -d "${created%%T*}" +%s)) / 86400 ))
+		[ "$age" -gt 7 ] || continue
+		answered="$( { gh api "repos/$CE/issues/$n/comments" --jq '.[].author_association' 2>/dev/null
+			gh api "repos/$CE/pulls/$n/reviews" --jq '.[].author_association' 2>/dev/null; } | grep -cE '^(OWNER|MEMBER|COLLABORATOR)$')"
+		if [ "${answered:-0}" = 0 ]; then
+			note "- #$n has waited $age days with no maintainer response"
+			waiting=$((waiting + 1))
+		fi
+	done <<<"$rows"
+	note "- examined $examined open pull request(s): $waiting waiting on a maintainer over 7 days, $shipped shipped but open"
+}
+
+if [ "${1:-}" = "--ce-prs" ]; then
+	check_ce_prs
+	exit 0
+fi
 
 if [ "${1:-}" = "--check-token" ]; then
 	check_token

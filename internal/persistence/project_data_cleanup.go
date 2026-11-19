@@ -451,4 +451,7 @@ var ProjectScopedTablesNotWiped = map[string]string{
 	"secret_redaction_audit": NotWipedKeptPrefix + "the security record that a secret reached a sink in this " +
 		"project, the evidence for rotating a credential that lives on at its vendor; it holds ids, a sink " +
 		"name, a pattern name and a count, never the secret or any content (column set pinned by the guards)",
+	"github_app_repositories": NotWipedKeptPrefix + "the registered GitHub App's record of a repository it is " +
+		"installed on (GitHub #800): GitHub's installation owns it, not the project. Deleting the project does " +
+		"not unbind the repository; pausing it on the GitHub page, or removing it from the installation, does",
 }

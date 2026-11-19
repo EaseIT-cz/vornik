@@ -91,12 +91,14 @@ func TestListProjectTemplates_NotConfigured(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "TEMPLATES_NOT_CONFIGURED")
 }
 
-func TestListProjectTemplates_RequiresAdmin(t *testing.T) {
+func TestListProjectTemplates_RequiresOperatorScope(t *testing.T) {
 	srv, _, _, _ := templateRig(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/project-templates", nil)
 	rec := httptest.NewRecorder()
 	srv.ListProjectTemplates(rec, req)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	// 403 since #815 (requireOperatorScopeFor). In the daemon the auth
+	// middleware answers a request with no key 401 before any handler.
+	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestListProjectTemplates_MethodGuard(t *testing.T) {

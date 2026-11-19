@@ -125,4 +125,4 @@ was sent.
 Security issues: [security](security.md). Compliance and data protection:
 **enterprise@vornik.io**.
 
-<!-- summary-reviewed-through: 2026.11.6 -->
+<!-- summary-reviewed-through: 2026.11.7 -->

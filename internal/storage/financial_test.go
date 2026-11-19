@@ -318,6 +318,10 @@ func TestTradingFill_RecordIncrementsMetrics(t *testing.T) {
 			6.0, 178.50, &commission, sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()). // exec_id, account_id, source, source_detail (exec-reconcile cols)
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	// The order's filled_qty recompute that follows each fill (GitHub #823).
+	h.mock.ExpectExec("UPDATE trading_orders o").
+		WithArgs("ord-1", "proj-fin").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := repos.TradingFills.Record(context.Background(), &persistence.TradingFill{
 		ID:            "fill-1",

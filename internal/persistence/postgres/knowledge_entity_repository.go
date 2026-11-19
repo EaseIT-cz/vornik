@@ -329,3 +329,40 @@ func strOrNull(s string) any {
 	}
 	return s
 }
+
+// ListMissingEmbedding implements persistence.KnowledgeEntityRepository
+// (GitHub #459): entities that are not superseded and have no vector, oldest first, across
+// projects. A limit <= 0 lists every one.
+func (r *KnowledgeEntityRepository) ListMissingEmbedding(ctx context.Context, limit int) ([]*persistence.KnowledgeEntity, error) {
+	q := knowledgeEntitySelect + ` WHERE embedding IS NULL AND lifecycle_state <> 'superseded' ORDER BY created_at, id`
+	args := []any{}
+	if limit > 0 {
+		q += ` LIMIT $1`
+		args = append(args, limit)
+	}
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*persistence.KnowledgeEntity
+	for rows.Next() {
+		e, err := scanKnowledgeEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// UpdateEmbedding implements persistence.KnowledgeEntityRepository: it writes
+// vec only where the entity still has no vector (GitHub #459).
+func (r *KnowledgeEntityRepository) UpdateEmbedding(ctx context.Context, id string, vec []float32) error {
+	if id == "" || len(vec) == 0 {
+		return fmt.Errorf("KnowledgeEntityRepository.UpdateEmbedding: id and vector required")
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE knowledge_entities SET embedding = $1, updated_at = now() WHERE id = $2 AND embedding IS NULL`,
+		encodeVector(vec), id)
+	return mapDBError(err)
+}

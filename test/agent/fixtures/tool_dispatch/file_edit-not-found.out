@@ -1,1 +1,1 @@
-ERROR: old_string not found in file
+ERROR: old_string not found in $WS/notes.txt (2 lines). No line of the file matches its first non-blank line, "nope". The file may have changed since you read it: file_read it again and copy old_string exactly from that, or rewrite the file with file_write.

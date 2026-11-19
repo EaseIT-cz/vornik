@@ -21,6 +21,7 @@ var managePurpose = map[string]string{
 	"admin-keys":   "API keys and the credentials Vornik keeps for you.",
 	"admin-agents": "The coding agents connected to this instance.",
 	"admin-skills": "Know-how your assistants apply, and the drafts waiting for approval.",
+	"approvers":    "Pair, revoke and remove the phones that approve sensitive actions.",
 	"reminders":    "Reminders and recurring jobs you have scheduled.",
 	"insights":     "What each tool costs against its budget.",
 	"trading":      "The trading assistant's settings and positions.",

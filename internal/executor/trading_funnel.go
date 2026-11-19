@@ -95,7 +95,7 @@ func (e *Executor) fillFunnelOutcomes(ctx context.Context, projectID, symbol str
 	}
 	daily := make([]trading.DailyBar, 0, len(bars))
 	for _, b := range bars {
-		daily = append(daily, trading.DailyBar{Session: trading.SessionDate(b.TS), High: b.High, Low: b.Low, Close: b.Close})
+		daily = append(daily, trading.DailyBar{Session: trading.BarSession(b.TS), High: b.High, Low: b.Low, Close: b.Close})
 	}
 	through := trading.CompletedThrough(now)
 	for _, c := range pending {
@@ -149,14 +149,31 @@ func (e *Executor) recordBenchmarkCloses(ctx context.Context, benchmarks []strin
 	if e.tradingBenchmarkRepo == nil || !slices.Contains(benchmarks, symbol) {
 		return
 	}
-	through := trading.CompletedThrough(now)
-	closes := make([]persistence.BenchmarkClose, 0, len(bars))
-	for _, b := range bars {
-		if s := trading.SessionDate(b.TS); !s.After(through) && b.Close > 0 {
-			closes = append(closes, persistence.BenchmarkClose{Symbol: symbol, Session: s, Close: b.Close})
+	done := completedBars(bars, now)
+	closes := make([]persistence.BenchmarkClose, 0, len(done))
+	for _, b := range done {
+		session := trading.BarSession(b.TS)
+		if !trading.IsUSTradingDay(session) { // #824: never a weekend or a holiday
+			e.logger.Warn().Str("symbol", symbol).Time("session", session).Msg("benchmark close not recorded: not a US trading day")
+			continue
 		}
+		closes = append(closes, persistence.BenchmarkClose{Symbol: symbol, Session: session, Close: b.Close})
 	}
 	if err := e.tradingBenchmarkRepo.Record(ctx, closes); err != nil {
 		e.logger.Warn().Err(err).Str("symbol", symbol).Msg("benchmark closes not recorded (measurement only)")
 	}
+}
+
+// completedBars keeps the bars of completed sessions with a positive close:
+// the one reading of "completed" that benchmark closes and the engine's SPY
+// three-session return share (#826).
+func completedBars(bars []barClose, now time.Time) []barClose {
+	through := trading.CompletedThrough(now)
+	out := make([]barClose, 0, len(bars))
+	for _, b := range bars {
+		if !trading.BarSession(b.TS).After(through) && b.Close > 0 {
+			out = append(out, b)
+		}
+	}
+	return out
 }

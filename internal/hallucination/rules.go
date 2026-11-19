@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"vornik.io/vornik/internal/codespan"
+
 	"vornik.io/vornik/internal/textutil"
 )
 
@@ -655,22 +657,7 @@ var toolCallXMLWrappers = []string{
 // Tokenizer specials are searched in the raw text, not this
 // stripped form — code blocks shouldn't grant immunity for
 // `<|im_start|>` and friends.
-func stripCodeRegions(text string) string {
-	stripped := codeFencedRE.ReplaceAllString(text, "")
-	stripped = codeInlineRE.ReplaceAllString(stripped, "")
-	return stripped
-}
-
-// codeFencedRE matches a triple-backtick fenced block,
-// non-greedy across lines. (?s) enables DOTALL so `.` spans
-// newlines.
-var codeFencedRE = regexp.MustCompile("(?s)```.*?```")
-
-// codeInlineRE matches an inline-backtick run. Backtick
-// interior is forbidden via [^`]* so a stray triple-backtick
-// sequence the fenced-pass missed doesn't get re-matched
-// here.
-var codeInlineRE = regexp.MustCompile("`[^`]*`")
+func stripCodeRegions(text string) string { return codespan.Strip(text) }
 
 // findContaining returns a short window around the first
 // occurrence of needle in haystack — enough context for the

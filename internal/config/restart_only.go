@@ -42,6 +42,18 @@ type restartOnlyPath struct {
 // restartOnlyPaths enumerates the verified read-once fields.
 var restartOnlyPaths = []restartOnlyPath{
 	{
+		path: "bench.instance",
+		reason: "the learning study's guard is checked once at start (GitHub #809, " +
+			"bench_809.go); the bench workers keep the values they started with",
+		value: func(c *Config) string { return fmt.Sprint(c.Bench.Instance) },
+	},
+	{
+		path: "bench.learning",
+		reason: "the bench trigger and auto mode are wired once at start, after the " +
+			"guard (GitHub #809); a reload cannot switch them on, off or retune them",
+		value: func(c *Config) string { return fmt.Sprintf("%+v", c.Bench.Learning) },
+	},
+	{
 		path: "memory.classifier.auto_backfill_interval_seconds",
 		reason: "the classify-backfill loop creates its ticker once at start " +
 			"(internal/memory/classify_backfill.go: time.NewTicker(interval))",

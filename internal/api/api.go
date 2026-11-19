@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 	"vornik.io/vornik/internal/aimark"
+	"vornik.io/vornik/internal/benchlearning"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -736,6 +737,9 @@ type Server struct {
 	// hostApprovals files and reads Hermes approval requests (Hermes
 	// approval transport design §4.3).
 	hostApprovals HostApprovals
+	// hostApprovalPolled is a test seam: it runs after a long poll's state
+	// read finds the request still pending (GitHub #834).
+	hostApprovalPolled func()
 	// agentGrants backs the agent tool gate (N4 for agent projects), with
 	// its examined/refused denominator.
 	agentGrants     persistence.AgentGrantRepository
@@ -1065,6 +1069,10 @@ type Server struct {
 	// makes the endpoints return 503 (same fail-soft contract every
 	// other optional surface uses).
 	instinctRepo persistence.InstinctRepository
+	// benchConfig and benchGate are the learning study's (GitHub #809;
+	// bench_learning_809.go). A nil gate leaves its routes answering 404.
+	benchConfig config.BenchConfig
+	benchGate   *benchlearning.Gate
 	// instinctScorer is the Wilson+decay confidence model the
 	// /admin/instincts/recompute endpoint hands to RecomputeConfidence.
 	// Nil makes recompute 503 even when the repo is wired.

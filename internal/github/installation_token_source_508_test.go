@@ -12,12 +12,12 @@ import (
 func TestInstallationTokenSource508_CachesUntilNearExpiry(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	mints := 0
-	s := &InstallationTokenSource{Now: func() time.Time { return now }, Mint: func(context.Context, string, int64, int64, string) (string, time.Time, error) {
+	s := &InstallationTokenSource{Now: func() time.Time { return now }, Mint: func(context.Context, KeyFileMint) (string, time.Time, error) {
 		mints++
 		return "tok", now.Add(time.Hour), nil
 	}}
 	for i := 0; i < 3; i++ {
-		if tok, err := s.Token(context.Background(), "https://api.github.com", 1, 7, "/k"); err != nil || tok != "tok" {
+		if tok, err := s.Token(context.Background(), KeyFileMint{APIBase: "https://api.github.com", AppID: 1, InstallationID: 7, KeyPath: "/k"}); err != nil || tok != "tok" {
 			t.Fatalf("Token = %q, %v", tok, err)
 		}
 	}
@@ -25,7 +25,7 @@ func TestInstallationTokenSource508_CachesUntilNearExpiry(t *testing.T) {
 		t.Errorf("mints = %d, want 1", mints)
 	}
 	now = now.Add(56 * time.Minute)
-	_, _ = s.Token(context.Background(), "https://api.github.com", 1, 7, "/k")
+	_, _ = s.Token(context.Background(), KeyFileMint{APIBase: "https://api.github.com", AppID: 1, InstallationID: 7, KeyPath: "/k"})
 	if mints != 2 {
 		t.Errorf("mints near expiry = %d, want 2", mints)
 	}
@@ -36,14 +36,14 @@ func TestInstallationTokenSource508_CachesUntilNearExpiry(t *testing.T) {
 // token; the cache is keyed by the whole App identity.
 func TestInstallationTokenSource508_CacheKeyIsTheWholeAppIdentity(t *testing.T) {
 	var minted []string
-	s := &InstallationTokenSource{Mint: func(_ context.Context, _ string, _, _ int64, key string) (string, time.Time, error) {
-		minted = append(minted, key)
-		return "tok-" + key, time.Now().Add(time.Hour), nil
+	s := &InstallationTokenSource{Mint: func(_ context.Context, m KeyFileMint) (string, time.Time, error) {
+		minted = append(minted, m.KeyPath)
+		return "tok-" + m.KeyPath, time.Now().Add(time.Hour), nil
 	}}
 	ctx := context.Background()
-	victim, _ := s.Token(ctx, "https://api.github.com", 1, 77, "/victim.pem")
-	borrower, _ := s.Token(ctx, "https://api.github.com", 2, 77, "/attacker.pem")
-	other, _ := s.Token(ctx, "https://api.github.com", 1, 77, "/attacker.pem")
+	victim, _ := s.Token(ctx, KeyFileMint{APIBase: "https://api.github.com", AppID: 1, InstallationID: 77, KeyPath: "/victim.pem"})
+	borrower, _ := s.Token(ctx, KeyFileMint{APIBase: "https://api.github.com", AppID: 2, InstallationID: 77, KeyPath: "/attacker.pem"})
+	other, _ := s.Token(ctx, KeyFileMint{APIBase: "https://api.github.com", AppID: 1, InstallationID: 77, KeyPath: "/attacker.pem"})
 	if borrower == victim || other == victim || len(minted) != 3 {
 		t.Errorf("a different App identity reused the cached token: %q %q %q (mints %v)", victim, borrower, other, minted)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -425,7 +426,7 @@ func (r *ApproverDeviceRepository) CreateRequest(ctx context.Context, q persiste
 	return insertApprovalRequest(ctx, r.db, q)
 }
 
-const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error, decided_choice, withdrawn_by, withdraw_reason`
+const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error, decided_choice, withdrawn_by, withdraw_reason, dismissed_at, dismissed_by, retried_at, retried_by`
 
 func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence.AgentApprovalRequestRow, error) {
 	var (
@@ -434,10 +435,22 @@ func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence
 		decided, applied     sql.NullTime
 		by, applyErr, choice sql.NullString
 		wBy, wReason         sql.NullString
+		dismissed, retried   sql.NullTime
+		dBy, rBy             sql.NullString
 	)
 	if err := s.Scan(&q.ID, &q.Namespace, &q.Kind, &q.Sentence, &rendered, &q.RenderedSHA256, &q.Status,
-		&q.CreatedAt, &q.ExpiresAt, &decided, &by, &applied, &q.ApplyAttempts, &applyErr, &choice, &wBy, &wReason); err != nil {
+		&q.CreatedAt, &q.ExpiresAt, &decided, &by, &applied, &q.ApplyAttempts, &applyErr, &choice, &wBy, &wReason,
+		&dismissed, &dBy, &retried, &rBy); err != nil {
 		return q, err
+	}
+	q.DismissedBy, q.RetriedBy = dBy.String, rBy.String
+	if dismissed.Valid {
+		t := dismissed.Time
+		q.DismissedAt = &t
+	}
+	if retried.Valid {
+		t := retried.Time
+		q.RetriedAt = &t
 	}
 	q.Rendered, q.DecidedByDevice, q.ApplyError, q.DecidedChoice = []byte(rendered), by.String, applyErr.String, choice.String
 	q.WithdrawnBy, q.WithdrawReason = wBy.String, wReason.String
@@ -568,7 +581,7 @@ func (r *ApproverDeviceRepository) ListApprovedUnapplied(ctx context.Context) ([
 // ListApplyFailedSince implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) ListApplyFailedSince(ctx context.Context, since time.Time, limit int) ([]persistence.AgentApprovalRequestRow, error) {
 	return r.listRequests(ctx, `status = 'approved' AND created_at >= $1 AND applied_at IS NOT NULL AND applied_at >= $2
-		AND apply_error IS NOT NULL AND apply_error <> '' ORDER BY applied_at DESC, id DESC LIMIT $3`,
+		AND apply_error IS NOT NULL AND apply_error <> '' AND dismissed_at IS NULL ORDER BY applied_at DESC, id DESC LIMIT $3`,
 		since.Add(-persistence.ApplyFailedCreatedSlack), since, limit)
 }
 
@@ -644,4 +657,78 @@ func (r *ApproverDeviceRepository) CreateRequestCapped(ctx context.Context, q pe
 		}
 		return insertApprovalRequest(ctx, x, q)
 	})
+}
+
+// DismissApplyFailed implements persistence.ApproverDeviceRepository (GitHub #806).
+func (r *ApproverDeviceRepository) DismissApplyFailed(ctx context.Context, id, actor string, now time.Time) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET dismissed_at = $1, dismissed_by = $2
+		WHERE id = $3 AND status = 'approved' AND applied_at IS NOT NULL AND apply_error IS NOT NULL AND apply_error <> ''
+		AND dismissed_at IS NULL`, now, actor, id)
+	if err != nil {
+		return mapDBError(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 1 {
+		return err
+	}
+	q, err := r.GetRequest(ctx, id)
+	if err != nil {
+		return persistence.ErrApprovalNoTransition
+	}
+	if q.DismissedAt != nil {
+		return nil // already dismissed: the first dismissal stands
+	}
+	return persistence.ErrApprovalNoTransition
+}
+
+// ResetForRetry implements persistence.ApproverDeviceRepository (GitHub #806).
+func (r *ApproverDeviceRepository) ResetForRetry(ctx context.Context, id, reasonPrefix, actor string, now time.Time) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET applied_at = NULL, apply_error = NULL,
+		apply_holder = NULL, apply_lease_until = NULL, apply_attempts = 0, retried_at = $1, retried_by = $2
+		WHERE id = $3 AND status = 'approved' AND applied_at IS NOT NULL AND dismissed_at IS NULL
+		AND left(apply_error, $4) = $5 AND expires_at > $1 AND (apply_lease_until IS NULL OR apply_lease_until < $1)`,
+		now, actor, id, len([]rune(reasonPrefix)), reasonPrefix)
+	if err != nil {
+		return mapDBError(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return err
+		}
+		return persistence.ErrApprovalNoTransition
+	}
+	return nil
+}
+
+// AckNotice implements persistence.ApproverDeviceRepository (GitHub #806).
+func (r *ApproverDeviceRepository) AckNotice(ctx context.Context, key, actor string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO approver_notice_acks (notice_key, acked_at, acked_by) VALUES ($1, $2, $3)
+		ON CONFLICT (notice_key) DO NOTHING`, key, now, actor)
+	return mapDBError(err)
+}
+
+// ListNoticeAcks implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListNoticeAcks(ctx context.Context) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT notice_key FROM approver_notice_acks`)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
+// PruneNoticeAcks implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) PruneNoticeAcks(ctx context.Context, live []string) error {
+	if live == nil {
+		live = []string{}
+	}
+	_, err := r.db.ExecContext(ctx, `DELETE FROM approver_notice_acks WHERE NOT (notice_key = ANY($1))`, pq.Array(live))
+	return mapDBError(err)
 }

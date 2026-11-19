@@ -47,6 +47,13 @@ var shippedTemplateSamples = map[string]map[string][]string{
 		"mcpServers":       {}, // offline CLI: multiselect optional, may be empty
 		"llmModel":         {""},
 	},
+	// GitHub #800: written by Vornik for each repository the App is
+	// installed on; hidden from the gallery.
+	"github-app-review": {
+		"projectId":   {"gh-acme-widgets"},
+		"displayName": {"acme/widgets"},
+		"repo":        {"acme/widgets"},
+	},
 	"code-reviewer": {
 		"projectId": {"smoke-reviewer"}, "displayName": {"Smoke Reviewer"},
 		"repo": {"acme/widgets"}, "llmModel": {""},

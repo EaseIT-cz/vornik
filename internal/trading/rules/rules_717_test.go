@@ -13,8 +13,8 @@ import (
 func TestSetupCandidates_717(t *testing.T) {
 	in := Inputs{
 		InSession: true, StateOK: true,
-		Held:    map[string]bool{"MSFT": true},
-		SPY:     &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500},
+		Held: map[string]bool{"MSFT": true},
+		SPY:  &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, SPYReturn3: f64(0.01),
 		Regimes: usRegime(),
 		Candidates: []Candidate{
 			{Symbol: "AAPL", Region: "us", Score: goodScore()},                                                         // passes daily
@@ -36,7 +36,7 @@ func TestDecide_LimitBelowSMA50IsDailyTrend_717(t *testing.T) {
 	c := Candidate{Symbol: "AAPL", Region: "us", Score: sc, Hourly: &Hourly{Close: 101, SMA20: 100, RSI14: 50},
 		// the live ask sits 1% under the last close, so the limit is under SMA50
 		Quote: &Quote{Bid: sc.LastClose*0.99 - 0.02, Ask: sc.LastClose * 0.99}, Tick: 0.01, EarningsInSessions: ptr(10)}
-	in := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500},
+	in := Inputs{InSession: true, StateOK: true, SPY: &Scorecard{LastClose: 510, SMA50: 505, SMA200: 500}, SPYReturn3: f64(0.01),
 		Regimes: usRegime(), Candidates: []Candidate{c}}
 	d := Decide(in, DefaultPolicy(), Caps{MaxRiskUSD: 75, MaxEntriesPerTick: 2, MaxPositions: 8})
 	if len(d.Entries) != 0 || len(d.Funnel) != 1 || d.Funnel[0].Gate != "daily_trend" {

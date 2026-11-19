@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os/user"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -21,17 +20,16 @@ import (
 	"vornik.io/vornik/internal/storage"
 )
 
-// `vornikctl pair-device` and `vornikctl devices list|revoke` (agent-
+// `vornikctl pair-device` and `vornikctl devices list|revoke|remove` (agent-
 // administered Vornik design §9.2, plan P2.5).
 //
-// They open the daemon's storage DIRECTLY with the daemon's config, the
-// `vornikctl broker-action` pattern, and there is deliberately no HTTP route
-// for them. Pairing therefore proves possession of the account that can read
-// the daemon's config and database: when Vornik runs as its own OS user, that
-// is the Vornik account, which a harness running as the human's user cannot
-// use. An HTTP admin route would instead make "holds an admin-class key" the
-// pairing factor, and a key in the human's environment is usable by an agent
-// running as that human.
+// They open the daemon's storage directly with the daemon's config, the
+// `vornikctl broker-action` pattern. Since #763 (design part 09, amendment
+// 2026-11-18) the console offers the same operations to an owner-class
+// browser session: the CLI-only rule proved possession of the account that
+// runs Vornik only where Vornik has its own OS user, and the default install
+// shares the user's account. Pair codes and revokes are audited in the
+// service (StartPairingBy, RevokeBy), as remove is.
 
 var (
 	pairDeviceLabel string
@@ -160,7 +158,7 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 	if strings.TrimSpace(label) == "" {
 		label = defaultDeviceLabel(nowFunc())
 	}
-	code, expires, err := svc.StartPairing(ctx, label)
+	code, expires, err := svc.StartPairingBy(ctx, label, cliPrincipal(), "vornikctl") // #763: audited
 	if err != nil {
 		return err
 	}
@@ -269,7 +267,15 @@ func revokeDevice(ctx context.Context, svc *approverdevice.Service, id string, o
 	}
 	for _, d := range devs {
 		if d.ID == id {
-			if err := svc.Revoke(ctx, id); err != nil {
+			// #763: recorded as the OS user running the CLI, as remove is.
+			switch err := svc.RevokeBy(ctx, id, cliPrincipal(), "vornikctl"); {
+			case errors.Is(err, approverdevice.ErrAlreadyRevoked):
+				_, _ = fmt.Fprintf(out, "%s (%s) is already revoked.\n", id, d.Label)
+				return nil
+			case errors.Is(err, approverdevice.ErrNoAudit):
+				_, _ = fmt.Fprintf(out, "Revoked %s (%s), but the admin audit could not record it.\n", id, d.Label)
+				return nil
+			case err != nil:
 				return err
 			}
 			_, _ = fmt.Fprintf(out, "Revoked %s (%s).\n", id, d.Label)
@@ -290,11 +296,7 @@ func removeDevice(ctx context.Context, svc *approverdevice.Service, id string, o
 			}
 		}
 	}
-	principal := "cli:unknown"
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		principal = "cli:" + u.Username
-	}
-	switch err := svc.Remove(ctx, id, principal, "vornikctl"); {
+	switch err := svc.Remove(ctx, id, cliPrincipal(), "vornikctl"); {
 	case errors.Is(err, persistence.ErrApproverDeviceLive):
 		return fmt.Errorf("%s is still an approver: revoke it first (vornikctl devices revoke %s)", id, id)
 	case errors.Is(err, persistence.ErrNotFound):

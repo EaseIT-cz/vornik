@@ -2,6 +2,7 @@ package featuredoctor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/memory"
@@ -109,5 +110,24 @@ func TestMemoryRAGPrereq_EmbeddingEndpointSetButProberMissing(t *testing.T) {
 	res := findMemoryRAGPrereq(t, "embedding model reachable").Check(context.Background(), deps)
 	if res.OK {
 		t.Fatalf("missing embedding prober must not report reachable, got %+v", res)
+	}
+}
+
+// GitHub #807: an endpoint in the old form (no /v1) still works, and the
+// doctor names the one form both clients now take.
+func TestMemoryRAGPrereq_LegacyEmbeddingEndpointNamesTheNewForm_807(t *testing.T) {
+	for endpoint, wantNote := range map[string]bool{"https://openrouter.ai/api": true, "https://openrouter.ai/api/v1": false} {
+		deps := Deps{
+			Config: stubConfig{vals: map[string]any{
+				"memory.embedding_model":    "text-embedding-3-small",
+				"memory.embedding_endpoint": endpoint,
+			}},
+			Embeddings: stubEmbeddingProber{reachable: true},
+		}
+		res := findMemoryRAGPrereq(t, "embedding model reachable").Check(context.Background(), deps)
+		gotNote := strings.Contains(res.Detail, "old form") && strings.Contains(res.Detail, "https://openrouter.ai/api/v1")
+		if !res.OK || gotNote != wantNote {
+			t.Errorf("%s: %+v (note of the /v1 form: %v, want %v)", endpoint, res, gotNote, wantNote)
+		}
 	}
 }

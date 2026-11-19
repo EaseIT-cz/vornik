@@ -385,7 +385,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `memory.min_refute_score` | float | Minimum hybrid-search (RRF) score a chunk must reach before memory_correct's claim search will refute it (0 = default 0.05). Guards against refuting an unrelated chunk on a weak claim match. | — |
 | `memory.embedding_model` | string | Embedding model name. Required when enabled. | — |
 | `memory.embedding_dimension` | int | Vector dimension produced by the model. | — |
-| `memory.embedding_endpoint` | string | Override endpoint for embedding requests. | — |
+| `memory.embedding_endpoint` | string | Override endpoint for embedding requests: the provider's OpenAI-compatible base ending in /v1, the form chat.endpoint takes (Vornik appends /embeddings). A base without /v1 still works (Vornik appends /v1/embeddings). | — |
 | `memory.embedding_api_key` | string | Override API key for embedding requests. | — |
 | `memory.bedrock.region` | string | AWS region for native Bedrock embeddings when memory.embedding_provider=bedrock. | — |
 | `memory.ingest_require_producer_success` | bool | Gate RAG ingest on the producing task reaching COMPLETED (default on). | — |
@@ -536,6 +536,12 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `hosting.backup_bucket` | string | Managed hosting only: the backup bucket the owner export is read from, at instances/<hosting.instance_id>/exports/, with the instance's own role. Empty: exports are not configured. | — |
 | `hosting.backup_region` | string | Managed hosting only: the backup bucket's region; empty means storage.s3.region. | — |
 
+## bench
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `bench` | struct | Benchmark-instance marker and the learning study's bench-only switches. | — |
+
 ## integrations
 
 | Key | Type | Description | Environment override |
@@ -604,6 +610,20 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `agent_admin.agent_image` | string | Runtime image of the roles an agent defines (default the standard agent image). | — |
 | `agent_admin.private_api_hosts` | list | Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed. | — |
 | `agent_admin.models` | list | Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue). | — |
+| `agent_admin.max_concurrent_tasks` | int | Highest maxConcurrentTasks update_project may set on an agent project (default 2, below the scheduler's default cap of 4, so one project cannot take every slot). scheduler.max_concurrent_tasks still caps all projects together. Raising a project's value needs approval on an approver device. | — |
+| `agent_admin.max_role_tokens` | int | Highest max_tokens define_swarm may set on an agent role (default 32768). A value above the role's current one needs approval on an approver device. | — |
+| `agent_admin.max_role_tool_iterations` | int | Highest max_tool_iterations define_swarm may set on an agent role (default 120). It caps the role's base budget; with tool_budget.enabled the executor may scale that base by up to tool_budget.max_factor. A value above the role's current one (30 when unset) needs approval on an approver device. | — |
+
+## github_app_registration
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `github_app_registration.app_id` | int | The App's numeric id, written by the console's Create GitHub App. | — |
+| `github_app_registration.slug` | string | The App's slug on GitHub (github.com/apps/<slug>). | — |
+| `github_app_registration.owner` | string | The account or organisation that owns the App. | — |
+| `github_app_registration.html_url` | string | The App's page on GitHub; installing starts at <html_url>/installations/new. | — |
+| `github_app_registration.api_base_url` | string | GitHub's REST base for the App (empty: api.github.com; GitHub Enterprise: https://<host>/api/v3). | — |
+| `github_app_registration.private_key_path` | string | The App's private key file, written 0600 by the console. | — |
 
 ## gateway
 

@@ -145,7 +145,7 @@ func Run(h *History, v Variant, p rules.Policy, caps rules.Caps, costMult float6
 			return false
 		})
 		// The decision, before the open, filled at the open.
-		longs := decide(h, v, p, caps, i, open, lastExit, lossPrev, &res).Entries
+		longs := decide(h, v, p, caps, i, open, lastExit, lossPrev, entriesSince(all, h, i, p), &res).Entries
 		for _, e := range longs {
 			bar := h.Bars[day][e.Symbol]
 			pos := &Position{Symbol: e.Symbol, Region: h.Regions[e.Symbol], RegimeLabel: h.Regimes[day][h.Regions[e.Symbol]].Label,
@@ -203,11 +203,11 @@ func Run(h *History, v Variant, p rules.Policy, caps rules.Caps, costMult float6
 
 // decide builds the session's engine inputs and runs rules.Decide.
 func decide(h *History, v Variant, p rules.Policy, caps rules.Caps, i int, open []*Position,
-	lastExit map[string]int, lossPrev float64, res *Result) rules.Decision {
+	lastExit map[string]int, lossPrev float64, recent int, res *Result) rules.Decision {
 	day := h.Sessions[i]
 	in := rules.Inputs{InSession: true, StateOK: true, Held: map[string]bool{}, CooledDown: map[string]bool{},
 		RealizedLossTodayUSD: lossPrev, Positions: len(open), PositionsByRegion: map[string]int{},
-		Regimes: map[string]rules.Regime{}}
+		Regimes: map[string]rules.Regime{}, EntriesWindow: recent, SPYReturn3: spyReturn3(h, i)}
 	for _, pos := range open {
 		in.Held[pos.Symbol] = true
 		in.PositionsByRegion[pos.Region]++
@@ -246,6 +246,40 @@ func decide(h *History, v Variant, p rules.Policy, caps rules.Caps, i int, open 
 		in.Candidates = append(in.Candidates, c)
 	}
 	return rules.Decide(in, p, caps)
+}
+
+// entriesSince counts the entries of the rolling window's earlier sessions
+// (#826): the window is today and the EntryWindowSessions-1 before it, and
+// today's entries are the ones being decided.
+func entriesSince(all []*Position, h *History, i int, p rules.Policy) int {
+	from := h.Sessions[max(0, i-(p.EntryWindowSessions-1))]
+	n := 0
+	for _, pos := range all {
+		if pos.EntrySession >= from && pos.EntrySession < h.Sessions[i] {
+			n++
+		}
+	}
+	return n
+}
+
+// spyReturn3 is SPY's return over the three completed sessions before
+// session i (#826). A session's scorecard holds the previous session's
+// close, so it is Scores[i].LastClose over Scores[i-3].LastClose. Before the
+// history reaches back that far, or without a SPY scorecard, it is not
+// modelled and passes (0), like the hourly window; a missing SPY scorecard
+// on session i itself is already insufficient_inputs.
+func spyReturn3(h *History, i int) *float64 {
+	zero := 0.0
+	if i < 3 {
+		return &zero
+	}
+	last, ok1 := h.Scores[h.Sessions[i]]["SPY"]
+	base, ok2 := h.Scores[h.Sessions[i-3]]["SPY"]
+	if !ok1 || !ok2 || !(base.LastClose > 0) {
+		return &zero
+	}
+	r := last.LastClose/base.LastClose - 1
+	return &r
 }
 
 // earningsIn counts the sessions until the symbol's next report, today

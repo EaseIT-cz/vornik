@@ -59,6 +59,9 @@ func (s *Server) ProjectMCPTools(w http.ResponseWriter, r *http.Request, project
 		case "apply", "withdraw":
 			s.mcpToolsPendingAction(w, r, projectID, r.PostFormValue("action"))
 			return
+		case "disconnect": // #765
+			s.mcpToolsDisconnect(w, r, projectID)
+			return
 		}
 		s.mcpToolsGrant(w, r, projectID)
 	default:
@@ -94,6 +97,9 @@ func (s *Server) mcpToolsPage(r *http.Request, projectID, server string) MCPUseD
 		built.Grants = own
 		data = built
 	}
+	if data.Server != "" && s.mcpToolsMayConnect(r) {
+		data.OAuth = s.mcpToolsOAuthRow(r.Context(), projectID, data.Server)
+	}
 	data.Pending = s.mcpToolsPendingFor(r.Context(), projectID)
 	return data
 }
@@ -110,6 +116,8 @@ var mcpToolsFlash = map[string]string{
 	"withdrawn":          "Withdrawn: the change will not be applied.",
 	"apply-failed":       "The change was rejected and rolled back. The operator can see why on the Proposals tab.",
 	"error":              "Something went wrong. Try again in a moment.",
+	"disconnected":       "Disconnected: the stored sign-in for that server is removed. Connect it again to use its tools.",
+	"disconnect-refused": "That server could not be disconnected from this page.",
 	"not-approved":       "That proposal is not approved.",
 	"wall-clock-lowered": "The change was refused by its re-validation.",
 }

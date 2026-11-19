@@ -119,6 +119,8 @@ check() { # name want_rc want_stdout_substring rc
     echo "managed-upgrade: $1 — OK"
   fi
 }
+# Patterns anchor at the program name (^gate, not gate): a temp path such as
+# ~/tmp-gotest/gate-tmp/... matched the bare word (gate stamp, 2026-11-18).
 never() { # name pattern: no call matches
   if grep -q -- "$2" "$s/calls" 2>/dev/null; then
     echo "FAIL: $1: a call matched [$2]:"; sed 's/^/  /' "$s/calls"; fail=1
@@ -150,7 +152,7 @@ esac
 
 reset; echo -n 2.0-1 > "$s/installed"; rc=$(up)
 check "a same or older version is refused" 1 '"step":"check"' "$rc"
-never "a refused version changes nothing" "rpm -U\|systemctl stop\|gate"
+never "a refused version changes nothing" "^rpm -U\|^systemctl stop\|^gate "
 
 reset; echo -n "1.0-1'x" > "$s/installed"; rc=$(up)
 check "a version outside RPM's characters never reaches vercmp" 1 '"step":"check"' "$rc"
@@ -174,7 +176,7 @@ check "not a managed image is refused" 1 "not a managed image" "$rc"
 
 reset; touch "$s/eula_needed"; rc=$(up)
 check "the EULA without the hash is refused" 1 '"step":"eula"' "$rc"
-never "the EULA refusal is before any change" "rpm -U\|systemctl stop\|gate\|accept-eula"
+never "the EULA refusal is before any change" "^rpm -U\|^systemctl stop\|^gate \|accept-eula"
 
 reset; touch "$s/eula_needed"; rc=$(up --eula-hash wrong)
 check "the EULA with a wrong hash is refused" 1 '"step":"eula"' "$rc"
@@ -235,7 +237,7 @@ check "a stale state file at the to-version is removed (then the same version is
 reset; touch "$s/deps_missing"; rc=$(up)
 check "a missing requirement is refused before any change" 1 '"ok":false,"release":"2.0-1","result":"failed","step":"deps"' "$rc"
 check "the reason names what is missing" 1 'git is needed by vornik-enterprise-2.0-1' "$rc"
-never "a missing requirement changes nothing" "gate\|systemctl stop\|vornikctl backup\|rpm -U --define"
+never "a missing requirement changes nothing" "^gate \|^systemctl stop\|^vornikctl backup\|^rpm -U --define"
 ever "the check runs in the C locale" "rpm-test LC_ALL=C"
 [ ! -e "$work/state/state.json" ] || { echo "FAIL: a deps refusal left state.json"; fail=1; }
 if [ "$(wc -l < "$work/out")" != 1 ] || LC_ALL=C grep -q '[^ -~]' "$work/out"; then

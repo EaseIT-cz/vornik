@@ -2,7 +2,7 @@
 workflowId: "companion-architectural-review"
 displayName: "Companion: Architectural review"
 description: "Reviews an attached document, diff, or PR for architectural issues. Host LLM clients (Claude Code etc.) delegate this when they want a second opinion without burning their own context. Attach the artifact under review as an input file — the reviewer reads the staged content, never project memory."
-version: "1.2.0"
+version: "1.3.0"
 author: "Vadim Grinco <vadim@grinco.eu>"
 license: "Proprietary"
 entrypoint: "review"
@@ -44,6 +44,9 @@ steps:
     # purpose — a wildcard would be satisfied by an upstream artifact re-staged
     # into artifacts/out/ while this step runs.
     require_output_glob: "artifacts/out/review.md"
+    # GitHub #751: the review opens with the verdict and the actions
+    # (reviewable-output design §6.12); the prompt below states the format.
+    require_review_actions: true
     role: "reviewer"
     on_success: "measure"
     on_fail: "failed"
@@ -109,6 +112,14 @@ Fallbacks: for a diff or PR passed inline in the task payload
 artifact is staged and the payload carries no inline content, write
 a review that says exactly that — "no reviewable content was
 provided" — rather than reviewing memory chunks.
+
+**Start with the verdict and the actions** (GitHub #751). The first lines
+of `review.md` are a line `Verdict: …` with at most two sentences of why,
+then a heading `## Actions` with a numbered list: one thing to do per item,
+with `file:line` where it applies. When nothing needs doing, write the single
+line `No action: ship.` instead of the heading. All of it within the first
+150 words. The findings and their evidence come after. The daemon checks
+this and sends the review back once if it is missing.
 
 Produce `artifacts/out/review.md` per the reviewer role's contract.
 Focus on architectural concerns over micro-style: coupling,

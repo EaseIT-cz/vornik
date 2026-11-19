@@ -1868,6 +1868,31 @@ handle_get_conversation_window() {
         "$url" 2>/dev/null || echo '{"error":"request failed"}'
 }
 
+# GitHub #814 — forge_diff_part: part N of this review's masked diff, served
+# by the daemon from the running execution's fetch_diff result, to this
+# task's own key only (github-app-channel design, "Reading a large diff in
+# parts").
+handle_forge_diff_part() {
+    local params="$1"
+    local part url project_id task_id exec_id
+    part=$(printf '%s' "$params" | jq -r '.part // ""')
+    project_id=$(jq -r '.projectId // .project_id // ""' "$INPUT_FILE")
+    task_id="${VORNIK_TASK_ID:-}"
+    exec_id="${VORNIK_EXECUTION_ID:-$(jq -r '.workflow.executionId // ""' "$INPUT_FILE" 2>/dev/null)}"
+    if [ -z "${VORNIK_API_URL:-}" ] || [ -z "$project_id" ] || [ -z "$task_id" ] || [ -z "$exec_id" ]; then
+        printf '{"error":"forge_diff_part unavailable: no task is bound to this step"}'
+        return
+    fi
+    case "$part" in
+        ''|*[!0-9]*) printf '{"error":"part must be an integer of 2 or more"}'; return ;;
+    esac
+    url="${VORNIK_API_URL}/api/v1/projects/${project_id}/tasks/${task_id}/executions/${exec_id}/diff-part?part=${part}"
+    vornik_resolve_url "$url"; url="$VORNIK_URL"
+    curl -sS --max-time 20 $VORNIK_CURL_OPT \
+        -H "X-API-Key: ${VORNIK_API_KEY:-}" \
+        "$url" 2>/dev/null || echo '{"error":"request failed"}'
+}
+
 # Phase 32 — handle summarize_thread tool call.
 # Persists the lead-generated summary as a 'note' task_message
 # whose metadata records the summarized message_ids. The prompt
@@ -2495,6 +2520,9 @@ exec_tool() {
             ;;
         get_conversation_window)
             handle_get_conversation_window "$arguments"
+            ;;
+        forge_diff_part)
+            handle_forge_diff_part "$arguments"
             ;;
         summarize_thread)
             handle_summarize_thread "$arguments"

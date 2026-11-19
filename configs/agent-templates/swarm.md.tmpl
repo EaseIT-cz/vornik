@@ -12,8 +12,15 @@ roles:
 {{- if .Model}}
       model: {{q .Model}}
 {{- end}}
+{{- if .MaxTokens}}
+      maxTokens: {{.MaxTokens}}
+{{- end}}
       runtime:
         image: {{q $.AgentImage}}
+{{- if .MaxToolIterations}}
+        envVars:
+          VORNIK_MAX_TOOL_ITERATIONS: "{{.MaxToolIterations}}"
+{{- end}}
       permissions:
         allowedTools:
 {{- range .Tools}}

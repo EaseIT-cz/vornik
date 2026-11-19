@@ -23,6 +23,12 @@
 # reset costs nothing but the chunks not yet run. Checked BETWEEN chunks, with a
 # projection from the chunks already measured, so a chunk is never started that
 # the remaining budget cannot finish.
+# --phase warmup labels a learning study's warm-up pass (GitHub #809): its
+# journals are kept, and every scoring reader refuses them unless
+# --include-warmup names them. With task batches (the default; not with
+# --task-batch 0), --autopilot-every N runs
+# `bench agent autopilot` after every N warm-up task batches (the blackbox
+# arms' auto mode; VORNIK_API_KEY must be the bench daemon's admin key).
 #   (default)   score an arm against pinned gold and journal the verdicts
 #
 # ALWAYS SMOKE FIRST. The preflight below checks configuration; only a real run
@@ -79,7 +85,7 @@ TBATCH=""
 # run` records which calibration and policy an arm was produced under. Optional:
 # a plain scoring arm needs neither, and omitting them leaves the run byte-
 # identical to before this was plumbed.
-GATE_POLICY=""; CALIBRATION=""
+GATE_POLICY=""; CALIBRATION=""; PHASE=""; AUTOPILOT_EVERY=0
 OUTDIR="./agentbench-runs"; MODE="run"
 # `bench agent` is in every edition since 2026.11 (#609); an older CE-built
 # vornikctl did not have it, and the first thing that told us so was a topup
@@ -110,6 +116,8 @@ while [ $# -gt 0 ]; do
         --gate-policy)     GATE_POLICY="$2"; shift 2 ;;
         --calibration)     CALIBRATION="$2"; shift 2 ;;
         --context-policy)  POLICY="$2"; shift 2 ;;
+        --phase)           PHASE="$2"; shift 2 ;;
+        --autopilot-every) AUTOPILOT_EVERY="$2"; shift 2 ;;
         --gold-manifest)   GOLD="$2"; shift 2 ;;
         --tasks)           TASKS="$2"; shift 2 ;;
         --runs)            RUNS="$2"; shift 2 ;;
@@ -391,6 +399,21 @@ if [ -f "$SWARMFILE" ]; then
   same provider as the role's primary."
     note "role fallbacks stay on-provider"
 fi
+
+# 3c. CONFIGURATION OF THE BUILD (GitHub #836, benchmark LLD §12.34). A rebuild
+#     updates the daemon, harness and agent image, not the bench's configs tree,
+#     so a fix that ships as a template change (#830's analyst rule) would not
+#     reach the arm. The arm's swarm and its task set's workflows must match
+#     this commit's templates, apart from each role's model, modelFallback and
+#     runtime.image (checked by 0c, 3 and 3b). Refuses; never copies.
+_cfgguard="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bench-config-drift-guard.sh"
+_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -r "$_cfgguard" ] || fail "cannot read the configuration guard at $_cfgguard"
+# shellcheck source=scripts/bench-config-drift-guard.sh
+. "$_cfgguard"
+_cfgsum=$(bench_assert_config_matches_build "$CFGDIR" "$_repo/configs" "$SWARM" "$TASKS" "${VORNIK_BENCH_MODEL:-}") \
+    || fail "the bench configs tree differs from this commit's templates (see above)"
+note "configuration: $_cfgsum"
 
 # 4. WORKSPACE STATE. Untracked workflow machinery accumulated across runs and blocked
 #    the merge-to-master step from task 3 onward. The agent had succeeded; the
@@ -843,6 +866,7 @@ print('   task batch $tb:', ', '.join(x['id'] for x in t[$tb*$TBATCH:($tb+1)*$TB
                 --database "$DB" --i-know-this-wipes "$DB" \
                 --tasks "$TBFILE" --task-set-full "$TASKS" --preregistration "$PREREG" \
                 --context-policy "$POLICY" \
+                ${PHASE:+--phase "$PHASE"} \
                 --daemon-binary "$DAEMON_BINARY" --daemon-config "$DAEMON_CONFIG" \
                 ${GOLD:+--gold "$GOLD"} \
                 ${GATE_POLICY:+--gate-policy "$GATE_POLICY"} \
@@ -852,8 +876,21 @@ print('   task batch $tb:', ', '.join(x['id'] for x in t[$tb*$TBATCH:($tb+1)*$TB
                 --journal "$TBJOURNAL" || fail "chunk $c task batch $tb failed. Fix, then
   re-run: completed batches are skipped, so only batch $tb and later are repeated."
             echo "   task batch $tb: journaled"
+            # The blackbox arms' auto mode (GitHub #809): during the warm-up
+            # pass, after every AUTOPILOT_EVERY task batches. VORNIK_API_KEY
+            # must be the bench daemon's admin key.
+            if [ "$AUTOPILOT_EVERY" -gt 0 ] && [ "$PHASE" = warmup ] && [ $(( (tb + 1) % AUTOPILOT_EVERY )) -eq 0 ]; then
+                "$VORNIKCTL" bench agent autopilot --run-dir "$OUTDIR" --tasks "$TASKS" \
+                    --project "$PROJECT" --daemon-config "$DAEMON_CONFIG" \
+                    || fail "the autopilot failed after task batch $tb (see autopilot.json in $OUTDIR)"
+            fi
         done
     else
+        # The autopilot runs only between task batches (GitHub #809): refuse
+        # rather than run a blackbox arm that never calls it.
+        if [ "$AUTOPILOT_EVERY" -gt 0 ]; then
+            fail "--autopilot-every needs task batches (--task-batch N, smaller than the $NTASK tasks): the autopilot runs between them"
+        fi
     "$VORNIKCTL" bench agent run \
         --workspace "$WORKSPACE" \
         --acceptance-image "$AGENT_IMAGE" \
@@ -861,6 +898,7 @@ print('   task batch $tb:', ', '.join(x['id'] for x in t[$tb*$TBATCH:($tb+1)*$TB
         --database "$DB" --i-know-this-wipes "$DB" \
         --tasks "$TASKS" --preregistration "$PREREG" \
         --context-policy "$POLICY" \
+        ${PHASE:+--phase "$PHASE"} \
         --daemon-binary "$DAEMON_BINARY" --daemon-config "$DAEMON_CONFIG" \
         ${GOLD:+--gold "$GOLD"} \
         ${GATE_POLICY:+--gate-policy "$GATE_POLICY"} \

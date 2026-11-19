@@ -49,36 +49,30 @@ func TestWorker_transientProviderFailureDoesNotConsumeAttempts(t *testing.T) {
 			w := NewWorker(src, erroringPipeline(tc.err), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
 			chunk := persistence.ChunkForExtraction{ID: "c-503", ProjectID: "p1", Content: "names Ada"}
 
-			// Ten uncounted failures: the chunk stays flagged with its counter
-			// untouched, so a provider outage quarantines nothing.
-			for i := 0; i < MaxTransientRetries; i++ {
+			// GitHub #369 item 1 (operator, 2026-11-18): a provider outage never
+			// counts toward quarantine, however long it lasts. Fifteen in a row
+			// is past the old budget of ten plus three.
+			for i := 0; i < 15; i++ {
 				if w.runOne(context.Background(), chunk) {
 					t.Fatal("a failed run must report failure (the breaker still counts it)")
 				}
 			}
 			src.mu.Lock()
-			if got := src.attempts["c-503"]; got != 0 {
-				t.Errorf("after %d transient failures attempts = %d, want 0", MaxTransientRetries, got)
-			}
-			src.mu.Unlock()
-
-			// The bound: once the uncounted budget is spent, failures count
-			// and the chunk reaches quarantine as any other.
-			for i := 0; i < MaxExtractionAttempts; i++ {
-				w.runOne(context.Background(), chunk)
-			}
-			src.mu.Lock()
 			defer src.mu.Unlock()
-			if len(src.quarantined) != 1 {
-				t.Errorf("after the uncounted budget the chunk must reach quarantine, got %v (attempts %d)",
-					src.quarantined, src.attempts["c-503"])
+			if got := src.attempts["c-503"]; got != 0 || len(src.quarantined) != 0 {
+				t.Errorf("after 15 transient failures attempts = %d, quarantined %v; want 0 and none", got, src.quarantined)
+			}
+			if got := src.transient["c-503"]; got != 15 {
+				t.Errorf("the column keeps counting consecutive transient failures: %d, want 15", got)
 			}
 		})
 	}
 }
 
 // Not transient: these can be caused by the chunk itself and must reach
-// quarantine on the ordinary three attempts.
+// quarantine on the ordinary three attempts. A deadline is one: a chunk too
+// big for its per-chunk timeout fails that way every time (#369 item 1
+// keeps it counting).
 func TestWorker_nonTransientFailuresStillCount(t *testing.T) {
 	cases := []struct {
 		name string
@@ -94,49 +88,37 @@ func TestWorker_nonTransientFailuresStillCount(t *testing.T) {
 			src := &fakeChunkSource{}
 			w := NewWorker(src, erroringPipeline(tc.err), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
 			chunk := persistence.ChunkForExtraction{ID: "c-x", ProjectID: "p1", Content: "names Ada"}
-			w.runOne(context.Background(), chunk)
+			for i := 0; i < MaxExtractionAttempts; i++ {
+				w.runOne(context.Background(), chunk)
+			}
 			src.mu.Lock()
 			defer src.mu.Unlock()
-			if got := src.attempts["c-x"]; got != 1 {
-				t.Errorf("attempts = %d, want 1: a non-transient failure is counted", got)
+			if len(src.quarantined) != 1 {
+				t.Errorf("after %d non-transient failures the chunk must be quarantined, got %v", MaxExtractionAttempts, src.quarantined)
 			}
 		})
 	}
 }
 
-// The budget is given back on quarantine and on a non-transient failure (the
-// store holds it since #493, LLD §3.3d), and a store that cannot answer
-// counts the failure: the bounded direction.
-func TestWorker_transientBudgetIsForgottenOnQuarantineAndReset(t *testing.T) {
+// The transient count is reset by a non-transient failure (the chunk reached
+// the model, so the provider was up), and a store that cannot record a
+// transient failure counts it: the bounded direction.
+func TestWorker_transientCountResetsAndAnUnrecordableOneCounts(t *testing.T) {
+	chunk := persistence.ChunkForExtraction{ID: "c-503", ProjectID: "p1", Content: "names Ada"}
 	src := &fakeChunkSource{}
 	w := NewWorker(src, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
-	chunk := persistence.ChunkForExtraction{ID: "c-503", ProjectID: "p1", Content: "names Ada"}
-	for i := 0; i < MaxTransientRetries+MaxExtractionAttempts; i++ {
+	for i := 0; i < 12; i++ {
 		w.runOne(context.Background(), chunk)
 	}
+	w.pipeline = erroringPipeline(errors.New("permanent: fake LLM down"))
+	w.runOne(context.Background(), chunk)
 	src.mu.Lock()
-	left := src.transient["c-503"]
+	n := src.transient["c-503"]
 	src.mu.Unlock()
-	if left != 0 {
-		t.Errorf("a quarantined chunk's uncounted budget must be reset, count = %d", left)
-	}
-
-	// A non-transient failure gives the budget back.
-	src2 := &fakeChunkSource{}
-	w2 := NewWorker(src2, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
-	for i := 0; i < MaxTransientRetries; i++ {
-		w2.runOne(context.Background(), chunk)
-	}
-	w2.pipeline = erroringPipeline(errors.New("permanent: fake LLM down"))
-	w2.runOne(context.Background(), chunk)
-	src2.mu.Lock()
-	n := src2.transient["c-503"]
-	src2.mu.Unlock()
 	if n != 0 {
-		t.Errorf("a non-transient failure must reset the uncounted budget, count = %d", n)
+		t.Errorf("a non-transient failure must reset the transient count, count = %d", n)
 	}
 
-	// The store cannot record a transient failure: it is counted.
 	src3 := &fakeChunkSource{transientErr: errors.New("db down")}
 	w3 := NewWorker(src3, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
 	w3.runOne(context.Background(), chunk)
@@ -147,10 +129,9 @@ func TestWorker_transientBudgetIsForgottenOnQuarantineAndReset(t *testing.T) {
 	}
 }
 
-// GitHub #493 (LLD §3.3d): the uncounted budget is the chunk's, not the
-// process's. A restart (a new Worker over the same store) used to grant ten
-// more free retries; now the eleventh transient failure across the restart is
-// counted and the chunk quarantines on the ordinary three.
+// GitHub #493 (LLD §3.3d) kept the count on the chunk row; since #369 it is a
+// count, not a budget, and a restart changes nothing: a new Worker over the
+// same store still counts no transient failure.
 func TestWorker_transientCountSurvivesRestart_493(t *testing.T) {
 	src := &fakeChunkSource{}
 	chunk := persistence.ChunkForExtraction{ID: "c-503", ProjectID: "p1", Content: "names Ada"}
@@ -159,27 +140,12 @@ func TestWorker_transientCountSurvivesRestart_493(t *testing.T) {
 		before.runOne(context.Background(), chunk)
 	}
 	after := NewWorker(src, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
-	for i := 0; i < MaxTransientRetries-6; i++ {
-		after.runOne(context.Background(), chunk)
-	}
-	src.mu.Lock()
-	if got := src.attempts["c-503"]; got != 0 {
-		t.Fatalf("ten transient failures across a restart: attempts = %d, want 0", got)
-	}
-	src.mu.Unlock()
-	after.runOne(context.Background(), chunk)
-	src.mu.Lock()
-	got := src.attempts["c-503"]
-	src.mu.Unlock()
-	if got != 1 {
-		t.Fatalf("the eleventh transient failure, after a restart, must be counted: attempts = %d, want 1", got)
-	}
-	for i := 1; i < MaxExtractionAttempts; i++ {
+	for i := 0; i < 9; i++ {
 		after.runOne(context.Background(), chunk)
 	}
 	src.mu.Lock()
 	defer src.mu.Unlock()
-	if len(src.quarantined) != 1 {
-		t.Fatalf("the chunk must quarantine at 10 + 3 across a restart, quarantined %v", src.quarantined)
+	if got := src.attempts["c-503"]; got != 0 || src.transient["c-503"] != 15 {
+		t.Fatalf("fifteen transient failures across a restart: attempts = %d (want 0), count = %d (want 15)", got, src.transient["c-503"])
 	}
 }

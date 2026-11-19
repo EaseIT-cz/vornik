@@ -64,7 +64,7 @@ func TestNew_BadKeyFile(t *testing.T) {
 // needs auth, rather than proceeding unauthenticated.
 func TestTokenErrorPropagates(t *testing.T) {
 	p := testProvider("http://unused")
-	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey) (string, time.Time, error) {
+	p.mintFn = func(context.Context, *http.Client, string, int64, int64, *rsa.PrivateKey, []string) (string, time.Time, error) {
 		return "", time.Time{}, errors.New("mint boom")
 	}
 	ctx := context.Background()

@@ -741,7 +741,10 @@ func (b *Bot) HandleMessage(ctx context.Context, msg *Message) error {
 	if b.offerSteer(ctx, msg) {
 		return b.sendMessage(ctx, msg.ChatID, "Got it, I'll take that into account.")
 	}
-	go b.handleReceiverTurn(receiver, msg)
+	if !b.admitReceiverTurn(msg.ChatID) {
+		return b.sendMessage(ctx, msg.ChatID, "I'm still working on your earlier messages; send this again when I've answered.")
+	}
+	go b.runReceiverTurn(receiver, msg, true)
 	return nil
 }
 

@@ -46,8 +46,18 @@ type Policy struct {
 	EarningsWindowSessions int
 	CooldownSessions       int
 	MaxEntriesPerDay       int
-	MaxPositionsPerRegion  int
-	CorrelatedGroups       [][]string
+	// MaxEntriesPerWindow entries (opens and adds) in EntryWindowSessions
+	// sessions, today included (#826).
+	MaxEntriesPerWindow int
+	EntryWindowSessions int
+	// MinSPYReturn3 is the lowest SPY return over the last three completed
+	// sessions at which longs may enter (#826).
+	MinSPYReturn3 float64
+	// MinSMA50BufferATR: an open's close is at least this many ATR above
+	// its SMA50, the exit line (#826).
+	MinSMA50BufferATR     float64
+	MaxPositionsPerRegion int
+	CorrelatedGroups      [][]string
 	// BlockLongAtScore: a RISK_OFF region blocks longs at this score or
 	// below; -1 is every RISK_OFF read, -2 only a strong one (GitHub #716).
 	BlockLongAtScore int
@@ -66,6 +76,8 @@ func DefaultPolicy() Policy {
 		MaxNotionalUSD: 2000, MinNotionalUSD: 250,
 		EarningsWindowSessions: 2, CooldownSessions: 3,
 		MaxEntriesPerDay: 4, MaxPositionsPerRegion: 4,
+		MaxEntriesPerWindow: 3, EntryWindowSessions: 3,
+		MinSPYReturn3: -0.015, MinSMA50BufferATR: 0.5,
 		CorrelatedGroups: [][]string{{"ASML", "TSM", "NVDA"}},
 		BlockLongAtScore: -1,
 	}
@@ -88,14 +100,17 @@ func RiskOffBlocksLong(label string, score *int, blockAt int) bool {
 }
 
 // SPYTrendOK is the market filter: SPY's close and SMA50 both above its
-// SMA200.
+// SMA200, and its close above its SMA20 (#826: no entries into a pullback
+// of the market). A NaN fails every comparison, so it blocks.
 func SPYTrendOK(spy Scorecard) bool {
-	return spy.LastClose > spy.SMA200 && spy.SMA50 > spy.SMA200
+	return spy.LastClose > spy.SMA200 && spy.SMA50 > spy.SMA200 && spy.LastClose > spy.SMA20
 }
 
-// DailyWindow checks close above SMA20 and SMA50, RSI14 inside the daily window.
+// DailyWindow checks close above SMA20 and at least MinSMA50BufferATR x
+// ATR14 above SMA50 (#826), RSI14 inside the daily window. Written so a NaN
+// fails.
 func DailyWindow(sc Scorecard, p Policy) string {
-	if sc.LastClose <= sc.SMA20 || sc.LastClose <= sc.SMA50 || !p.DailyRSI.has(sc.RSI14) {
+	if !(sc.LastClose > sc.SMA20 && sc.LastClose > sc.SMA50 && sc.LastClose >= sc.SMA50+p.MinSMA50BufferATR*sc.ATR14) || !p.DailyRSI.has(sc.RSI14) {
 		return "daily_trend"
 	}
 	return ""

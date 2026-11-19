@@ -69,6 +69,9 @@ type MCPUseData struct {
 	Servers     []string
 	Pending     []mcpToolsPending
 	Flash       string
+	// OAuth is the chosen server's sign-in row (#765), nil when the server
+	// is not OAuth-mode or the caller lacks mcp_oauth_connect.
+	OAuth *mcpToolsOAuth
 }
 
 // mcpQualified is a tool's name as role allowlists hold it.

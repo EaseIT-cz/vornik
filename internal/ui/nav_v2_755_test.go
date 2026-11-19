@@ -24,27 +24,29 @@ type todayDest struct {
 }
 
 var todayDests = map[string]todayDest{
-	"live":                {href: "/ui/live"},
-	"inbox":               {href: "/ui/inbox"},
-	"tasks":               {href: "/ui/tasks"},
-	"projects":            {href: "/ui/projects"},
-	"swarms":              {href: "/ui/swarms", adminOnly: true},
-	"workflows":           {href: "/ui/workflows", adminOnly: true},
-	"executions":          {href: "/ui/executions"},
-	"memory":              {href: "/ui/memory"},
-	"reminders":           {href: "/ui/reminders"},
-	"spend":               {href: "/ui/spend"},
-	"trends":              {href: "/ui/insights/trends"},
-	"quality":             {href: "/ui/insights/quality"},
-	"insights":            {href: "/ui/insights/tool-budget"},
-	"adoption":            {href: "/ui/insights/adoption"},
-	"trading":             {href: "/ui/trading", cap: "trading"},
-	"audit":               {href: "/ui/audit", adminOnly: true},
-	"admin":               {href: "/ui/admin/", ownerHref: "/ui/admin/", adminArea: true}, // #789
-	"my-account":          {href: "/ui/account", ownerHref: "/ui/account", adminArea: true},
-	"operator":            {href: "/ui/operator/accounts", adminOnly: true, adminArea: true},
-	"regulatory":          {href: "/ui/operator/regulatory", adminOnly: true, adminArea: true},
-	"admin-skills":        {href: "/ui/admin/skills", ownerHref: "/ui/admin/skills", adminArea: true},
+	"live":         {href: "/ui/live"},
+	"inbox":        {href: "/ui/inbox"},
+	"tasks":        {href: "/ui/tasks"},
+	"projects":     {href: "/ui/projects"},
+	"swarms":       {href: "/ui/swarms", adminOnly: true},
+	"workflows":    {href: "/ui/workflows", adminOnly: true},
+	"executions":   {href: "/ui/executions"},
+	"memory":       {href: "/ui/memory"},
+	"reminders":    {href: "/ui/reminders"},
+	"spend":        {href: "/ui/spend"},
+	"trends":       {href: "/ui/insights/trends"},
+	"quality":      {href: "/ui/insights/quality"},
+	"insights":     {href: "/ui/insights/tool-budget"},
+	"adoption":     {href: "/ui/insights/adoption"},
+	"trading":      {href: "/ui/trading", cap: "trading"},
+	"audit":        {href: "/ui/audit", adminOnly: true},
+	"admin":        {href: "/ui/admin/", ownerHref: "/ui/admin/", adminArea: true}, // #789
+	"my-account":   {href: "/ui/account", ownerHref: "/ui/account", adminArea: true},
+	"operator":     {href: "/ui/operator/accounts", adminOnly: true, adminArea: true},
+	"regulatory":   {href: "/ui/operator/regulatory", adminOnly: true, adminArea: true},
+	"admin-skills": {href: "/ui/admin/skills", ownerHref: "/ui/admin/skills", adminArea: true},
+	// #833 (design §21): new in Manage, for the audience the page admits.
+	"approvers":           {href: "/ui/settings/approvers", adminOnly: true, ownerHref: "/ui/settings/approvers"},
 	"admin-control-plane": {href: "/ui/admin/control-plane", ownerHref: "/ui/admin/control-plane", adminArea: true},
 	"integrations":        {href: "/ui/integrations", adminArea: true},
 	"admin-keys":          {href: "/ui/admin/keys", ownerHref: "/ui/credentials", adminArea: true},
@@ -171,7 +173,7 @@ func TestNavV2_EveryAudienceKeepsItsNav_755(t *testing.T) {
 	// my_account_test requires; the old admin-only area hid it.
 	projectUser := []string{"adoption", "diagnostics-overview", "executions", "insights", "live", "manage-overview", "memory", "my-account", "projects", "quality", "reminders", "results", "spend", "tasks", "trading", "trends"}
 	// #789: the console pages the owner reads since #787.
-	owner := append(append([]string{}, projectUser...), "admin-keys", "admin", "admin-control-plane", "admin-skills", "admin-agents")
+	owner := append(append([]string{}, projectUser...), "admin-keys", "admin", "admin-control-plane", "admin-skills", "admin-agents", "approvers")
 	var admin []string
 	for k := range todayDests {
 		if k != "inbox" {

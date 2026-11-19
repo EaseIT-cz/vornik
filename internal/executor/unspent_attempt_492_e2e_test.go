@@ -92,7 +92,10 @@ func TestHeldRetries492_RejectedAttemptsKeepTheirBudget(t *testing.T) {
 			}
 		}
 		return true
-	}, 10*time.Second, 2*time.Millisecond, "the first attempts never finished")
+		// 60 s, as the hold wait below: under the 2026-11-18 release gate (a
+		// bench and lint runs alongside) 10 s ran out with the attempts still
+		// in flight; alone the test takes about 0.35 s.
+	}, 60*time.Second, 2*time.Millisecond, "the first attempts never finished")
 	// A poll whose exclusion list was read before a task's hold was taken can
 	// lease that task and put it straight back QUEUED (scheduler leaseNext,
 	// permanent-failure design §8.8 D3): a transient LEASED, by design. Wait

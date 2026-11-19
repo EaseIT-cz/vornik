@@ -122,6 +122,13 @@ type AgentApprovalRequestRow struct {
 	// the withdrawal time; DecidedByDevice stays empty (design §9.2d).
 	WithdrawnBy    string
 	WithdrawReason string
+	// DismissedAt and DismissedBy hide a failed apply from the phone and
+	// the console (GitHub #806, design 22 §22.2.16d); the row stays the
+	// record. RetriedAt and RetriedBy name the last retry of a given-up row.
+	DismissedAt *time.Time
+	DismissedBy string
+	RetriedAt   *time.Time
+	RetriedBy   string
 }
 
 // ErrBadWithdrawal refuses a withdrawal with no actor or a reason that is
@@ -286,6 +293,22 @@ type ApproverDeviceRepository interface {
 	// before since), so the (status, created_at) index serves it (design 22
 	// §22.2.16b, GitHub #669 item 5).
 	ListApplyFailedSince(ctx context.Context, since time.Time, limit int) ([]AgentApprovalRequestRow, error)
+	// DismissApplyFailed hides a failed apply (approved, failed, not yet
+	// dismissed) as one compare-and-set. Dismissing an already-dismissed row
+	// is nil and keeps the first dismissal; any other row is
+	// ErrApprovalNoTransition (GitHub #806).
+	DismissApplyFailed(ctx context.Context, id, actor string, now time.Time) error
+	// ResetForRetry makes a given-up failure approved-unapplied again: the
+	// row must be approved, failed with a reason starting reasonPrefix, not
+	// dismissed, unexpired at now and not under a live lease. Otherwise
+	// ErrApprovalNoTransition (GitHub #806, §22.2.16d item 3).
+	ResetForRetry(ctx context.Context, id, reasonPrefix, actor string, now time.Time) error
+	// AckNotice records an acknowledged notice key; a repeat is nil.
+	AckNotice(ctx context.Context, key, actor string, now time.Time) error
+	// ListNoticeAcks returns every acknowledged notice key.
+	ListNoticeAcks(ctx context.Context) (map[string]bool, error)
+	// PruneNoticeAcks deletes the acks whose key is not in live.
+	PruneNoticeAcks(ctx context.Context, live []string) error
 	// ListRecentByNamespace returns a namespace's requests created at or
 	// after since, newest first (an exact namespace match).
 	ListRecentByNamespace(ctx context.Context, namespace string, since time.Time) ([]AgentApprovalRequestRow, error)

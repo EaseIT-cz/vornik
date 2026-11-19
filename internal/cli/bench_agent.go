@@ -34,22 +34,27 @@ import (
 // so it can gate every commit.
 
 var (
-	benchAgentProject            string
-	benchAgentBenchProject       string
-	benchAgentSwarm              string
-	benchAgentDatabase           string
-	benchAgentConfirmWipe        string
-	benchAgentRuns               int
-	benchAgentTaskSetHash        string
-	benchAgentGoldPath           string
-	benchAgentPreRegPath         string
-	benchAgentTaskSetPath        string
-	benchAgentTaskSetFull        string
-	benchAgentTasks              string
-	benchAgentWorkspace          string
-	benchAgentAcceptanceImage    string
-	benchAgentJournalPath        string
-	benchAgentRunID              string
+	benchAgentProject         string
+	benchAgentBenchProject    string
+	benchAgentSwarm           string
+	benchAgentDatabase        string
+	benchAgentConfirmWipe     string
+	benchAgentRuns            int
+	benchAgentTaskSetHash     string
+	benchAgentGoldPath        string
+	benchAgentPreRegPath      string
+	benchAgentTaskSetPath     string
+	benchAgentTaskSetFull     string
+	benchAgentTasks           string
+	benchAgentWorkspace       string
+	benchAgentAcceptanceImage string
+	benchAgentJournalPath     string
+	benchAgentRunID           string
+	// benchAgentPhase and benchAgentIncludeWarmup: a learning study's warm-up
+	// journal is labelled and kept out of scoring (GitHub #809).
+	benchAgentPhase              string
+	benchAgentPublishedTaskSet   bool
+	benchAgentIncludeWarmup      bool
 	benchAgentArm                string
 	benchAgentRepeats            int
 	benchAgentRepeatOffset       int
@@ -233,6 +238,11 @@ func init() {
 	benchAgentRunCmd.Flags().StringVar(&benchAgentJournalPath, "journal", "journal.json",
 		"where to write the run journal")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentRunID, "run-id", "", "identifier for this run")
+	benchAgentRunCmd.Flags().BoolVar(&benchAgentPublishedTaskSet, "published-task-set", false,
+		"run a release gate on a published task set (outside tasksets/unreleased/); the journal records it (#790)")
+	benchAgentRunCmd.Flags().StringVar(&benchAgentPhase, "phase", "",
+		"\"warmup\" for a learning study's warm-up pass: journaled, and refused by every scoring reader "+
+			"unless --include-warmup (GitHub #809)")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentArm, "arm", "",
 		"name of the arm being run; must be one the pre-registration declares")
 	benchAgentRunCmd.Flags().IntVar(&benchAgentRepeats, "repeats", 1,
@@ -273,6 +283,8 @@ func init() {
 		c.Flags().BoolVar(&benchAgentJSON, "json", false, "emit JSON instead of a table")
 	}
 
+	benchAgentCmd.PersistentFlags().BoolVar(&benchAgentIncludeWarmup, "include-warmup", false,
+		"read a learning study's warm-up journal (refused by default: a warm-up pass is not scored; GitHub #809)")
 	benchAgentCmd.AddCommand(benchAgentGoldCmd, benchAgentRunCmd, benchAgentReportCmd,
 		benchAgentRollupCmd, benchAgentCompareCmd, benchAgentTaskSetHashCmd,
 		benchAgentGoldMergeCmd, benchAgentRescoreCmd, benchAgentCalibrateCmd,
@@ -430,7 +442,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 		// Runner.Run); its manifest carries the provenance (§12.23).
 		manifest.WorkspaceReset = agentbench.WorkspaceResetNoWorkspace
 		if workspace != nil {
-			manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsStateAndHistory
+			manifest.WorkspaceReset = agentbench.WorkspaceResetBaseline
 		}
 	}
 	if err != nil {
@@ -683,17 +695,22 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 	if grader != nil {
 		r.Grader = grader
 	}
+	if benchAgentPhase != "" && benchAgentPhase != agentbench.PhaseWarmup {
+		return fmt.Errorf("--phase %q: the only phase is %q", benchAgentPhase, agentbench.PhaseWarmup)
+	}
 	journal, err := r.Run(cmd.Context(), agentbench.RunConfig{
-		RunID:           benchAgentRunID,
-		Arm:             arm,
-		Scope:           agentRunScope(),
-		PreRegistration: preReg,
-		Power:           power,
-		Tasks:           agentbench.SortTasks(tasks),
-		Gold:            gold,
-		Repeats:         benchAgentRepeats,
-		RepeatOffset:    benchAgentRepeatOffset,
-		DaemonBuild:     agentbench.BinaryBuild(benchAgentDaemonBinary),
+		Phase:            benchAgentPhase,
+		TaskSetPublished: benchAgentPublishedTaskSet && preReg.ReleaseGateEnabled(),
+		RunID:            benchAgentRunID,
+		Arm:              arm,
+		Scope:            agentRunScope(),
+		PreRegistration:  preReg,
+		Power:            power,
+		Tasks:            agentbench.SortTasks(tasks),
+		Gold:             gold,
+		Repeats:          benchAgentRepeats,
+		RepeatOffset:     benchAgentRepeatOffset,
+		DaemonBuild:      agentbench.BinaryBuild(benchAgentDaemonBinary),
 	})
 	if err != nil {
 		return err
@@ -895,11 +912,17 @@ func buildArmOver(tasks, axisTasks []agentbench.TaskSpec, gold *agentbench.GoldM
 		arm.BinarySHA256 = h
 	}
 	if benchAgentDaemonConfig != "" {
-		h, err := sha256File(benchAgentDaemonConfig)
+		// The canonical config without the learning switches, and the
+		// learning axis they set (GitHub #809, harness 13).
+		raw, err := os.ReadFile(benchAgentDaemonConfig)
+		if err != nil {
+			return agentbench.ArmFields{}, fmt.Errorf("read daemon config: %w", err)
+		}
+		h, learning, err := agentbench.ArmConfigIdentity(raw)
 		if err != nil {
 			return agentbench.ArmFields{}, fmt.Errorf("hash daemon config: %w", err)
 		}
-		arm.ConfigSHA256 = h
+		arm.ConfigSHA256, arm.Learning = h, learning
 	}
 	return arm, nil
 }
@@ -1054,7 +1077,9 @@ func openBenchDB() (*sql.DB, error) {
 func workspaceLine(j agentbench.Journal) string {
 	caveat := ""
 	switch j.Manifest.WorkspaceReset {
+	case agentbench.WorkspaceResetBaseline:
 	case agentbench.WorkspaceResetTargetsStateAndHistory:
+		caveat = "; earlier tasks' committed files carried over between tasks (harness 11, §12.33)"
 	case agentbench.WorkspaceResetTargetsAndState:
 		caveat = "; earlier tasks' work readable in the git history (harness 10, §12.30)"
 	case agentbench.WorkspaceResetTargets:
@@ -1567,6 +1592,9 @@ func runBenchAgentGate(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\nscore delta %.4f (floor %.4f, %d paired gate tasks)\n",
 			decision.Status, decision.Reason, decision.GateScore.MeanDelta,
 			decision.GateScore.ResolvableFloor, decision.GateScore.PairCount)
+		if decision.TaskSetPublished {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "on a published task set: a model trained after its publication may have seen it")
+		}
 	}
 	if decision.Status != agentbench.GateStatusPass {
 		return fmt.Errorf("release gate %s: %s", decision.Status, decision.Reason)
@@ -1605,10 +1633,16 @@ func validateReleaseRunInputs(pre agentbench.PreRegistration, arm agentbench.Arm
 		if pathsPresent {
 			return fmt.Errorf("release artifacts were supplied but the pre-registration does not pin them")
 		}
+		if benchAgentPublishedTaskSet {
+			return fmt.Errorf("--published-task-set applies only to a release-gate run, and this pre-registration is not one")
+		}
 		return nil
 	}
 	if benchAgentCalibrationPath == "" || benchAgentNoiseFloorPath == "" || benchAgentGatePolicyPath == "" {
 		return fmt.Errorf("release pre-registration requires --calibration, --noise-floor, and --gate-policy")
+	}
+	if err := releaseTaskSetsUnreleased(benchAgentPublishedTaskSet, benchAgentTaskSetPath, benchAgentTaskSetFull); err != nil {
+		return err
 	}
 	calibration, noise, policy, err := loadReleaseArtifacts()
 	if err != nil {
@@ -1713,7 +1747,17 @@ func loadJournal(path string) (agentbench.Journal, error) {
 		return agentbench.Journal{}, fmt.Errorf("open journal: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	return agentbench.ReadJournal(f)
+	j, err := agentbench.ReadJournal(f)
+	if err != nil {
+		return j, err
+	}
+	// A learning study's warm-up pass is kept, never scored (GitHub #809):
+	// every reader comes through here, so the refusal is in one place.
+	if j.Manifest.Phase == agentbench.PhaseWarmup && !benchAgentIncludeWarmup {
+		return agentbench.Journal{}, fmt.Errorf("%s is a warm-up journal (phase %q): it is not scored; "+
+			"pass --include-warmup to read it anyway", path, j.Manifest.Phase)
+	}
+	return j, nil
 }
 
 // loadGoldIfPresent returns nil when nothing is pinned yet, which is what makes
@@ -2001,6 +2045,24 @@ func verifyModelWindow(ctx context.Context, cmd *cobra.Command) error {
 		cmd.PrintErrf("  ok  model window: %s\n", v.Message)
 	default:
 		cmd.PrintErrf("  !!  model window: %s\n", v.Message)
+	}
+	return nil
+}
+
+// releaseTaskSetsUnreleased refuses a release-gate run whose task files are
+// published, that is outside tasksets/unreleased/ (GitHub #790), unless
+// --published-task-set, which stamps the journal instead.
+func releaseTaskSetsUnreleased(publishedOK bool, paths ...string) error {
+	if publishedOK {
+		return nil
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" || agentbench.IsUnreleasedTaskSet(p) {
+			continue
+		}
+		return fmt.Errorf("release gate refused: %s is a published task set (outside tasksets/unreleased/), "+
+			"and a model trained after it was published may have seen it; run on an unreleased set, "+
+			"or pass --published-task-set to run anyway and record that in the journal", p)
 	}
 	return nil
 }

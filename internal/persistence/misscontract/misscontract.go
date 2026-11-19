@@ -86,7 +86,10 @@ var Contract = map[string]MissBehavior{
 	// case, and callers read it as "never reviewed, nothing in flight" — the
 	// fail-toward-more-review direction. ErrNotFound here would make every
 	// first push look like a failure at the one moment it is most normal.
-	"ForgePRReviewStateRepository.Get":               MissNilNil,      // *ForgePRReviewState
+	"ForgePRReviewStateRepository.Get": MissNilNil, // *ForgePRReviewState
+	// GitHub #800: a repository with no binding row is an ordinary first
+	// event, and the transition table takes nil as "no row".
+	"GitHubAppTxStore.GetRepo":                       MissNilNil,      // *GitHubAppRepo
 	"ExecutionQualityScoreRepository.GetByExecution": MissErrNotFound, // *ExecutionQualityScore
 	"ExecutionRatingRepository.Get":                  MissErrNotFound, // *ExecutionRating
 	"ExecutionRepository.GetByTaskID":                MissErrNotFound, // *Execution

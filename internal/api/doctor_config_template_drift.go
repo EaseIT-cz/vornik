@@ -64,7 +64,11 @@ func (h *DoctorHandlers) checkConfigTemplateDrift() DoctorCheck {
 	for _, ff := range r.Files {
 		if ff.Class == configdrift.Canonical && ff.CanonicalDiverged {
 			k, _ := ff.CanonicalKey()
-			rd.add(&rd.hard, ff.Rel, k, canonicalItem(ff.Rel, r.Baseline, current))
+			item := canonicalItem(ff.Rel, r.Baseline, current)
+			if ff.Rel == "pricing.yaml" {
+				item += pricingRowsNote(h.configDir) // #776: name the shipped rows it lacks
+			}
+			rd.add(&rd.hard, ff.Rel, k, item)
 		}
 	}
 	for _, rm := range r.Removed {

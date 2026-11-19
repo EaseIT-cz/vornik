@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -12,7 +13,17 @@ import (
 // dropped the field. The backfill repairs filled/partial rows from their own
 // trading_fills when the sum is positive and <= qty, and leaves every row it
 // cannot vouch for at 0 rather than guessing.
+//
+// Migration 258 (GitHub #823, Amendment 2026-11-18) is the same repair for
+// rows written after 198 whose broker row carried no count; it must meet the
+// same cases.
 func TestMigration198_BackfillsFilledQtyOnlyWhereTheFillsVouchForIt(t *testing.T) {
+	for _, v := range []int{198, 258} {
+		t.Run(fmt.Sprintf("migration_%d", v), func(t *testing.T) { backfillFilledQtyCases(t, v) })
+	}
+}
+
+func backfillFilledQtyCases(t *testing.T, version int) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
 	exec := func(q string, args ...any) {
@@ -22,7 +33,7 @@ func TestMigration198_BackfillsFilledQtyOnlyWhereTheFillsVouchForIt(t *testing.T
 		}
 	}
 	// Per-run ids: the integration database persists between runs.
-	run := uniqueSuffix("m198")
+	run := uniqueSuffix(fmt.Sprintf("m%d", version))
 	order := func(id, status string, qty, filled float64) {
 		id = run + "-" + id
 		exec(`INSERT INTO trading_orders (id, project_id, idempotency_key, mode, symbol, action, order_type, qty, status, filled_qty)
@@ -46,7 +57,7 @@ func TestMigration198_BackfillsFilledQtyOnlyWhereTheFillsVouchForIt(t *testing.T
 	order("already", "filled", 3, 3)
 	fill("f-already", "already", 2)
 
-	up := migrationUpSQL(t, 198)
+	up := migrationUpSQL(t, version)
 	for i := 0; i < 2; i++ { // idempotent: a second run changes nothing
 		exec(up)
 	}

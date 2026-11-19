@@ -506,6 +506,8 @@ type ReleaseGateDecision struct {
 	GateScore   GateScoreResult   `json:"gateScore"`
 	StepHealth  GateStepResult    `json:"stepHealth"`
 	Exploratory *ExploratoryScore `json:"exploratory,omitempty"`
+	// TaskSetPublished: either journal ran on a published task set (#790).
+	TaskSetPublished bool `json:"taskSetPublished,omitempty"`
 }
 
 // BuildReleasePreRegistration turns reviewed artifacts into the exact commit
@@ -670,6 +672,12 @@ const ungroundedNumeratorRefusal = "pinned_case_validation cannot decide a relea
 // and then REFUSES rather than returning a scored verdict. See
 // ungroundedNumeratorRefusal.
 func EvaluateReleaseGate(baseline, candidate Journal, calibration CalibrationManifest, noise NoiseFloorManifest, policy ReleaseGatePolicy) ReleaseGateDecision {
+	d := evaluateReleaseGate(baseline, candidate, calibration, noise, policy)
+	d.TaskSetPublished = baseline.Manifest.TaskSetPublished || candidate.Manifest.TaskSetPublished
+	return d
+}
+
+func evaluateReleaseGate(baseline, candidate Journal, calibration CalibrationManifest, noise NoiseFloorManifest, policy ReleaseGatePolicy) ReleaseGateDecision {
 	tiers, err := validateReleaseJournalPair(baseline, candidate, calibration, noise, policy)
 	if err != nil {
 		return ReleaseGateDecision{Status: GateStatusRefused, Reason: err.Error()}

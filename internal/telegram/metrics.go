@@ -1,6 +1,10 @@
 package telegram
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"fmt"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // Metrics holds Prometheus metrics for the Telegram bot.
 type Metrics struct {
@@ -8,8 +12,11 @@ type Metrics struct {
 	MessagesSent     *prometheus.CounterVec
 	ToolCallsTotal   *prometheus.CounterVec
 	RateLimitsHit    prometheus.Counter
-	ActiveSessions   prometheus.Gauge
-	MessageLatency   *prometheus.HistogramVec
+	// TurnsRefused counts messages answered "still working" because their
+	// chat already had maxWaitingTurns turns waiting (GitHub #369).
+	TurnsRefused   prometheus.Counter
+	ActiveSessions prometheus.Gauge
+	MessageLatency *prometheus.HistogramVec
 }
 
 // NewMetrics creates and registers Telegram metrics.
@@ -39,6 +46,12 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name:      "rate_limits_hit_total",
 			Help:      "Total messages rejected due to rate limiting.",
 		}),
+		TurnsRefused: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "telegram",
+			Name:      "turns_refused_total",
+			Help:      fmt.Sprintf("Messages refused because their chat already had %d turns waiting (GitHub #369).", maxWaitingTurns),
+		}),
 		ActiveSessions: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "vornik",
 			Subsystem: "telegram",
@@ -54,6 +67,6 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 		}, []string{"user_id"}),
 	}
 	reg.MustRegister(m.MessagesReceived, m.MessagesSent, m.ToolCallsTotal,
-		m.RateLimitsHit, m.ActiveSessions, m.MessageLatency)
+		m.RateLimitsHit, m.TurnsRefused, m.ActiveSessions, m.MessageLatency)
 	return m
 }

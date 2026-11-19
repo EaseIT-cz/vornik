@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -137,7 +138,12 @@ func (c *Channel) getInstallationToken(ctx context.Context, inst *installation) 
 		return inst.token, nil
 	}
 
-	token, expires, err := MintInstallationToken(ctx, c.httpClient, c.apiBaseURL, inst.appID, inst.installationID, inst.privateKey)
+	// #820: the instance-key guard at every mint, and the token scoped to
+	// the installation's repository allowlist.
+	if err := GuardKey(inst.keyHash, inst.registered); err != nil {
+		return "", err
+	}
+	token, expires, err := MintInstallationToken(ctx, c.httpClient, c.apiBaseURL, inst.appID, inst.installationID, inst.privateKey, inst.repoAllowlistRaw)
 	if err != nil {
 		return "", err
 	}
@@ -153,9 +159,19 @@ func (c *Channel) getInstallationToken(ctx context.Context, inst *installation) 
 // without constructing a channel or its token cache. Returns the token and its
 // expiry. Returns ErrOutboundNotConfigured when any of appID / installationID /
 // key is missing.
-func MintInstallationToken(ctx context.Context, httpClient *http.Client, apiBaseURL string, appID, installationID int64, key *rsa.PrivateKey) (string, time.Time, error) {
+//
+// repositories (GitHub #820) scopes the token: each entry is "owner/name",
+// all of one owner, and the token then reaches only those repositories. An
+// empty list mints an installation-wide token, as before. A repository the
+// installation does not cover is GitHub's 422, returned as the mint error;
+// callers never fall back to a wider token.
+func MintInstallationToken(ctx context.Context, httpClient *http.Client, apiBaseURL string, appID, installationID int64, key *rsa.PrivateKey, repositories []string) (string, time.Time, error) {
 	if appID == 0 || key == nil || installationID == 0 {
 		return "", time.Time{}, ErrOutboundNotConfigured
+	}
+	reqBody, err := scopeBody(repositories)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 	jwt, err := signJWT(appID, key, time.Now())
 	if err != nil {
@@ -163,7 +179,7 @@ func MintInstallationToken(ctx context.Context, httpClient *http.Client, apiBase
 	}
 
 	url := apiBaseURL + fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reqBody)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("github-app: build installation-token request: %w", err)
 	}
@@ -409,4 +425,49 @@ func truncateErrorBody(s string) string {
 		return s[:errorBodyExcerpt] + "..."
 	}
 	return s
+}
+
+// scopeBody is the access_tokens request body for repositories (#820): nil
+// for none, else {"repositories": [<name>, …]}. Every entry must be
+// "owner/name" of one owner; anything else is refused before a request.
+func scopeBody(repositories []string) (io.Reader, error) {
+	if len(repositories) == 0 {
+		return nil, nil
+	}
+	owner := ""
+	names := make([]string, 0, len(repositories))
+	for _, full := range repositories {
+		o, n, ok := strings.Cut(strings.TrimSpace(full), "/")
+		if !ok || o == "" || n == "" || strings.Contains(n, "/") {
+			return nil, fmt.Errorf("github-app: token scope %q is not owner/name", full)
+		}
+		if owner == "" {
+			owner = o
+		} else if !strings.EqualFold(owner, o) {
+			return nil, fmt.Errorf("github-app: token scope mixes owners %q and %q; one installation covers one account", owner, o)
+		}
+		names = append(names, n)
+	}
+	b, err := json.Marshal(map[string][]string{"repositories": names})
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(b), nil
+}
+
+// ScopeKey is a token scope's cache key (#820): the entries lower-cased,
+// de-duplicated, sorted and joined with a newline, which a repository name
+// cannot contain. An empty scope keys as "".
+func ScopeKey(repositories []string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range repositories {
+		r = strings.ToLower(strings.TrimSpace(r))
+		if r != "" && !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\n")
 }

@@ -77,6 +77,14 @@ type Export struct {
 	Limitations []string `json:"limitations"`
 	// RetainedCategories names data NOT produced or erased, with its ground.
 	RetainedCategories map[string]string `json:"retained_categories,omitempty"`
+	// Purposes, Recipients and Retention answer Art 15(1)(a), (c) and (d)
+	// (GitHub #470, GDPR design §4.22). BuildExport fills the purposes from
+	// the ROPA mirror and states recipients and retention as unknown; the
+	// caller that has the configuration replaces them with SetRecipients and
+	// SetRetention.
+	Purposes   []ProcessingActivity `json:"purposes"`
+	Recipients []Recipient          `json:"recipients"`
+	Retention  RetentionStatement   `json:"retention"`
 }
 
 // SetIdentifiers records the subject's identifiers on the report, in the
@@ -128,6 +136,9 @@ func BuildExport(req Request, items []Item, methodsRun []string) (*Export, error
 		RequestID:  req.ID,
 		Kind:       string(req.Kind),
 		MethodsRun: dedupeSorted(methodsRun),
+		Purposes:   ropaPurposes(),
+		Recipients: append([]Recipient{noProviderRead}, StaticRecipients()...),
+		Retention:  unknownRetention(),
 		RetainedCategories: map[string]string{
 			"tool_audit_log":         UncoveredTable["tool_audit_log"],
 			"admin_audit":            UncoveredTable["admin_audit"],

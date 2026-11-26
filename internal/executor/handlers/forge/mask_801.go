@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"regexp"
-	"sort"
 
 	"vornik.io/vornik/internal/secrets"
 )
@@ -32,30 +31,35 @@ func onIndexLine(text []byte, at int) bool {
 	return indexLineRE.Match(line)
 }
 
-// diffFindings is d's findings, without entropy findings on an exact index
-// line. The mask and its proof use the same rule.
+// keepDiffFinding reports whether f counts for the diff: every finding but an
+// entropy one on an exact index line. The mask and its proof use the same rule.
+func keepDiffFinding(text []byte, f secrets.Finding) bool {
+	return f.Type != secrets.FindingTypeEntropy || !onIndexLine(text, f.Start)
+}
+
+// diffFindings is d's findings in text that count for the diff, in the
+// detector's order: its one caller (diff_part_serve_814.go) only asks whether
+// there are any; masking sorts its own (secrets.MaskProven).
 func diffFindings(d secrets.Detector, text []byte) []secrets.Finding {
 	var out []secrets.Finding
 	for _, f := range d.Scan(text) {
-		if f.Type == secrets.FindingTypeEntropy && onIndexLine(text, f.Start) {
-			continue
+		if keepDiffFinding(text, f) {
+			out = append(out, f)
 		}
-		out = append(out, f)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
 	return out
 }
 
 // maskDiff returns the masked diff and the count per finding type, or an
-// error when there is no detector or the rescan still finds something.
+// error when there is no detector or the rescan still finds something. It is
+// secrets.MaskProven with the index-line exemption (CI outcomes design §19.2).
 func maskDiff(d secrets.Detector, diff []byte) ([]byte, map[string]int, error) {
 	if d == nil {
 		return nil, nil, errNoDetector
 	}
-	found := diffFindings(d, diff)
-	masked := secrets.Redact(diff, found)
-	if left := diffFindings(d, masked); len(left) > 0 {
+	masked, counts, err := secrets.MaskProven(d, diff, keepDiffFinding)
+	if errors.Is(err, secrets.ErrMaskNotProven) {
 		return nil, nil, errors.New("forge.fetch_diff: the mask did not hold: the rescan still finds secret-shaped values; the diff was not handed on")
 	}
-	return masked, secrets.CountByType(found), nil
+	return masked, counts, err
 }

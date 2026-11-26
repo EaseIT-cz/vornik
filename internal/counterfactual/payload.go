@@ -20,7 +20,23 @@ import (
 // payload. The zero value (all fields nil/empty) is the expected shape for
 // non-counterfactual tasks, so call sites can read unconditionally and branch
 // on whether a specific field is populated.
+// Provenance links a replay task to the task it replays (GitHub #912). The
+// counterfactual engine writes it into context.counterfactual.provenance
+// when it creates the replay; the executor stamps it on each execution row
+// it creates for the task.
+type Provenance struct {
+	OriginalTaskID string
+	Variable       string
+	Label          string
+}
+
+// Known reports whether the provenance names its original task and the
+// variable changed: the two the execution columns cannot do without.
+func (p Provenance) Known() bool { return p.OriginalTaskID != "" && p.Variable != "" }
+
 type Payload struct {
+	// Provenance names the replayed task, variable and label (#912).
+	Provenance Provenance
 	// IsReplay records whether the task carries a context.counterfactual block
 	// at all. True even when the block is empty — used by the MCP handler to
 	// gate side-effect enforcement on replay tasks regardless of which variable
@@ -189,6 +205,11 @@ func ExtractPayload(payload json.RawMessage) Payload {
 	// Presence of the counterfactual block flags the task as a replay
 	// regardless of which (if any) variable was mutated.
 	out.IsReplay = true
+	if pv, ok := cf["provenance"].(map[string]any); ok {
+		out.Provenance.OriginalTaskID, _ = pv["original_task_id"].(string)
+		out.Provenance.Variable, _ = pv["variable"].(string)
+		out.Provenance.Label, _ = pv["label"].(string)
+	}
 	if v, ok := cf["model_override_all_roles"].(string); ok {
 		out.RouterLevelModel = v
 	}

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"vornik.io/vornik/internal/modelcheck"
 	"vornik.io/vornik/internal/telemetryclient"
 	"vornik.io/vornik/internal/templates"
 )
@@ -263,6 +265,13 @@ func (s *Server) CreateProjectFromTemplate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// GitHub #881: check every model the rendered swarms name before any
+	// file is written.
+	if refusal := s.checkTemplateModels(r.Context(), rendered); refusal != "" {
+		respondError(w, http.StatusConflict, "MODEL_UNREACHABLE", refusal)
+		return
+	}
+
 	written, err := templates.WriteRenderedFilesExclusive(s.configsDir, rendered)
 	if err != nil {
 		var exists *templates.ExistingTargetError
@@ -351,4 +360,32 @@ func lastValue(v []string) string {
 		return ""
 	}
 	return v[len(v)-1]
+}
+
+// checkTemplateModels checks the models a rendered template's swarms name,
+// returning a refusal or "". A model only warns when it answers without the
+// tool call; template creation reports refusals only.
+func (s *Server) checkTemplateModels(ctx context.Context, rendered map[string]string) string {
+	models := modelcheck.RenderedModels(rendered)
+	if len(models) == 0 {
+		return ""
+	}
+	if s.managedCatalogue != nil {
+		cat := s.managedCatalogue()
+		for _, m := range models {
+			if !slices.Contains(cat, m) {
+				return m + " is not in this instance's model catalogue; nothing was created"
+			}
+		}
+	}
+	if s.modelChecker == nil {
+		return ""
+	}
+	res := s.modelChecker.CheckAll(ctx, models)
+	for _, m := range models {
+		if r, ok := res[m]; ok && !r.OK {
+			return r.Reason + "; nothing was created"
+		}
+	}
+	return ""
 }

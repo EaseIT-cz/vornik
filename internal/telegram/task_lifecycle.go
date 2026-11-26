@@ -376,7 +376,8 @@ func (b *Bot) renderInbox(ctx context.Context, userID int64) (string, error) {
 		if t.CurrentPhase != nil && *t.CurrentPhase != "" {
 			phase = " — " + *t.CurrentPhase
 		}
-		fmt.Fprintf(&sb, "• %s%s\n  /task %s\n\n", title, phase, t.ID)
+		// /status shows the task; there is no /task command (#916 item 1).
+		fmt.Fprintf(&sb, "• %s%s\n  /status %s\n\n", title, phase, t.ID)
 	}
 	return sb.String(), nil
 }
@@ -439,7 +440,7 @@ func (b *Bot) handleTasksCmd(ctx context.Context, userID int64, parts []string) 
 	tasks, err := b.taskRepo.List(ctx, filter)
 	if err != nil {
 		b.logger.Error().Err(err).Msg("/tasks: list failed")
-		return "Failed to list tasks: " + err.Error()
+		return msgListUnavailable // never the error text (#916 item 3)
 	}
 	if len(tasks) == 0 {
 		return "📭 No recent tasks."
@@ -537,7 +538,7 @@ func (b *Bot) cancelScopedTask(ctx context.Context, t *persistence.Task) string 
 	outcome, err := taskcancel.Cancel(ctx, b.taskRepo, b.taskTeardown, t.ID, from)
 	if err != nil {
 		b.logger.Error().Err(err).Str("task_id", t.ID).Msg("/cancel: transition failed")
-		return "Failed to cancel: " + err.Error()
+		return msgCancelUnavailable
 	}
 	if !outcome.Transitioned {
 		// Phrased from a re-read, not the snapshot loaded above, which is
@@ -569,7 +570,7 @@ func (b *Bot) handleRetryCmd(ctx context.Context, userID int64, parts []string) 
 	ok, err := b.taskRepo.RequeueTerminalTask(ctx, t.ID, 1, t.MaxAttempts)
 	if err != nil {
 		b.logger.Error().Err(err).Str("task_id", t.ID).Msg("/retry: requeue failed")
-		return "Failed to retry: " + err.Error()
+		return msgRetryUnavailable
 	}
 	if !ok {
 		return fmt.Sprintf("Task %s can't be retried in status %s (only failed / cancelled / completed tasks).", t.ID, t.Status)
@@ -579,3 +580,12 @@ func (b *Bot) handleRetryCmd(ctx context.Context, userID int64, parts []string) 
 	}
 	return fmt.Sprintf("🔁 Re-queued task %s.", t.ID)
 }
+
+// The task-control replies for a store failure: fixed sentences, the error
+// only in the log (Telegram task-control design, Amendment 2026-11-25,
+// #916 item 3). The chat model's tools use the same words.
+const (
+	msgListUnavailable   = "Could not list tasks right now. Try again in a moment."
+	msgCancelUnavailable = "Could not cancel the task right now. Try again in a moment."
+	msgRetryUnavailable  = "Could not retry the task right now. Try again in a moment."
+)

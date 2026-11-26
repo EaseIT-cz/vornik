@@ -65,6 +65,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkLegacyImageNames":        "",
 	"checkLeaderLocksHealth":       "",
 	"checkModelCallsLive":          "",
+	"checkHealingJudgeFamily":      "",
 	"checkModelCircuits":           "",
 	"checkModelHealth":             "",
 	"checkModelRouteCoverage":      "",
@@ -92,6 +93,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkToolAuditRedaction":      "",
 	"checkRedactionSeams":          "",
 	"checkUnclassifiedShare":       "",
+	"checkUndeclaredConfigKeys":    "",
+	"checkStartHeld":               "",
 	"checkMemoryTextDamage":        "",
 	"checkWebWritesInsecure":       "",
 	"checkSecretStoreKey":          "",
@@ -100,6 +103,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkAgentNamespaceBudget":    "",
 	"checkAgentRefusalBurst":       "",
 	"checkA2ACorpusWalk":           "",
+	"checkRemindersUndelivered":    "",
+	"checkRestoreReload":           "",
 	"checkMemorySensitivityCap":    "",
 	"checkAgentChangeStaysApplied": "",
 	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
@@ -108,6 +113,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkBrokerAuditChannel":      "", // a running broker's /health, not deployed config content
 	"checkMCPProjectConnections":   "",
 	"checkAgentReadRejudge":        "",
+	"checkAgentCGNATConnections":   "", // approved agent connections' resolved addresses, not a deployed config file
+	"checkAgentPrivateHostsUnused": "", // agent_admin.private_api_hosts against approved agent connections, not a deployed config file
 	"checkWorkspaceCanonical":      "",
 }
 

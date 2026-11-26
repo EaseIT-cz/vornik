@@ -34,6 +34,9 @@ func (f *fakeRetrievalAudit) FeedbackStats(_ context.Context, _ string, _ time.T
 func (*fakeRetrievalAudit) A2AChunksByCallerKey(context.Context, time.Time) ([]persistence.A2AKeyRetrieval, error) {
 	return nil, nil
 }
+func (*fakeRetrievalAudit) StepRecallChunks(context.Context, string) ([]persistence.StepRecallChunk, error) {
+	return nil, nil
+}
 
 func (f *fakeRetrievalAudit) UnretrievedChunkIDs(_ context.Context, _ string, _ time.Time, _ int) ([]string, error) {
 	return nil, nil

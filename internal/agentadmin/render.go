@@ -234,6 +234,7 @@ type projectData struct {
 	Namespace, ID, DisplayName, Purpose, SwarmID, DefaultWorkflowID string
 	MonthlyUSD                                                      string
 	MaxConcurrentTasks                                              int
+	SharedMemory                                                    bool
 	Servers                                                         []ServerState
 	APIs                                                            []APIState
 	Secrets                                                         []string
@@ -250,7 +251,7 @@ func (r *Renderer) renderProject(ns string, p *ProjectState) (string, error) {
 		Namespace: ns, ID: p.ID, DisplayName: p.DisplayName, Purpose: p.Purpose,
 		SwarmID: p.Swarm.ID, DefaultWorkflowID: p.DefaultWorkflowID,
 		MonthlyUSD: formatUSD(p.MonthlyUSD), MaxConcurrentTasks: p.MaxConcurrentTasks,
-		Servers: servers, APIs: apis, Secrets: secrets,
+		Servers: servers, APIs: apis, Secrets: secrets, SharedMemory: p.SharedMemory,
 	})
 }
 

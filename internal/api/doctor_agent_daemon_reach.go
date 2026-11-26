@@ -2,8 +2,8 @@ package api
 
 import (
 	"fmt"
-	"net"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -83,15 +83,7 @@ func agentDaemonReach(listen, socket, defaultNetwork string, roleNetworks []stri
 
 // listensOnlyOnLoopback reports whether a listen address binds only a
 // loopback interface: a loopback IP, or localhost. An empty host, 0.0.0.0 or
-// :: listens everywhere.
+// :: listens everywhere. It is dialguard.IsLoopbackHost, the one rule (#168).
 func listensOnlyOnLoopback(listen string) bool {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil {
-		host = listen
-	}
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return dialguard.IsLoopbackHost(listen)
 }

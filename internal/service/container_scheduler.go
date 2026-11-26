@@ -34,6 +34,7 @@ import (
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/ratelimit"
+	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/runtime"
 	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/scheduler"
@@ -319,9 +320,18 @@ func (c *Container) initScheduler() error {
 		if len(llm.ModelLimits) > 0 {
 			executorConfig.ModelLimits = make(map[string]executor.ModelLimit, len(llm.ModelLimits))
 			for model, limit := range llm.ModelLimits {
+				reasoning := limit.Reasoning
+				if !registry.ValidReasoningLevel(reasoning) {
+					// Ignored, not fatal: the model keeps its default, as
+					// an unknown level on a request does (GitHub #869).
+					c.Logger.Warn().Str("model", model).Str("reasoning", reasoning).
+						Msg("agent_llm.model_limits reasoning is not one of off, low, medium, high; ignored")
+					reasoning = ""
+				}
 				executorConfig.ModelLimits[model] = executor.ModelLimit{
 					MaxTokens:   limit.MaxTokens,
 					ContextSize: limit.ContextSize,
+					Reasoning:   reasoning,
 				}
 			}
 		}
@@ -330,6 +340,11 @@ func (c *Container) initScheduler() error {
 	// operator-set size; 0 = unbounded (see MediaConfig).
 	// see LLD § https://docs.vornik.io §4.2
 	executorConfig.MediaStageMaxBytes = c.Config.Media.StageMaxBytes
+	// GitHub #881 C3: a managed instance refuses an off-catalogue model at
+	// dispatch, before the container starts.
+	if c.Config.Hosting.Managed() {
+		executorConfig.ManagedModelCatalogue = c.Config.AgentAdmin.ModelIDs()
+	}
 	if executorConfig.AgentLLMEnv == nil {
 		executorConfig.AgentLLMEnv = make(map[string]string)
 	}
@@ -396,6 +411,14 @@ func (c *Container) initScheduler() error {
 	}
 
 	executorOpts := []executor.Option{}
+	// GitHub #912: stamp a replay's provenance once its execution row exists
+	// (Postgres only; the columns do not exist on SQLite).
+	// Wired only for an explicit Postgres driver (review-20261125-f555 F4).
+	if c.providers.CounterfactualStamperFactory != nil && c.DB != nil && c.Config != nil && c.Config.Database.Driver == "postgres" {
+		if st := c.providers.CounterfactualStamperFactory(c.DB); st != nil {
+			executorOpts = append(executorOpts, executor.WithCounterfactualStamper(st))
+		}
+	}
 	// Inject the shared per-project workspace lock so the executor's
 	// repo-mutation sites + startup prune serialise with the UI
 	// artifact-delete path and the git-over-HTTPS handler (same
@@ -415,6 +438,11 @@ func (c *Container) initScheduler() error {
 		// interface would make the handler's nil-check miss and
 		// crash on dereference.
 		executorOpts = append(executorOpts, executor.WithProjectTemplateCatalog(spawnCatalog))
+		check := c.saveModelCheck()
+		executorOpts = append(executorOpts, executor.WithSpawnModelCheck(func(ctx context.Context, models []string) error {
+			_, err := check(ctx, models)
+			return err
+		}))
 	}
 	if schemaReg != nil {
 		// Same typed-nil pitfall: only pass the registry when
@@ -448,6 +476,9 @@ func (c *Container) initScheduler() error {
 		executor.WithBudgetReservationRepository(c.repos.BudgetReservations),
 		executor.WithSteeringNotifier(c.combinedSteeringNotifier()),
 		executor.WithStepOutcomeRepository(c.repos.StepOutcomes),
+		// GitHub #858: the distiller judges a memory_search step by the
+		// chunks its recalls returned.
+		executor.WithStepRecallReader(c.repos.MemoryRetrievalAudit),
 		executor.WithStepPromptRepository(c.repos.StepPrompts),
 		// Per-task scoped API keys: mint on container start, revoke on
 		// teardown. Wired whenever the API-key repo is available —
@@ -768,7 +799,8 @@ func (c *Container) initScheduler() error {
 		sysHandlers.Register(forgeh.NewPostReviewHandler(forgeResolver, c.AIDisclosure).
 			WithReviewState(forgeReviewState).
 			WithCIGate(forgeCIOutcomes, blocksApproval).
-			WithSecretsDetector(c.secretsDetector)) // GitHub #801 C
+			WithSecretsDetector(c.secretsDetector). // GitHub #801 C
+			WithCanaryFloors(c.canaryFloors))       // GitHub #873
 		// GitHub #801 B: a mask_secrets step masks with the executor's
 		// detector (nil when secrets.enabled is false: the step then fails).
 		sysHandlers.Register(forgeh.NewFetchDiffHandler(forgeResolver).WithReviewState(forgeReviewState).
@@ -839,6 +871,8 @@ func (c *Container) initScheduler() error {
 				return p != nil && p.Retention.MemoryRequireApproval
 			})
 			executorOpts = append(executorOpts, executor.WithMemoryIndexer(mgr.Indexer))
+			// Part 24 §24.2 (#920): an agent namespace's jobs share one memory.
+			executorOpts = append(executorOpts, executor.WithMemoryProjectResolver(c.memoryProjectFor))
 
 			// B-7: wire the document-ingest workflow's system
 			// handlers. Both depend on the extractor pipeline +
@@ -1500,6 +1534,9 @@ func (c *Container) initScheduler() error {
 	if agentHealthReg != nil {
 		executorOpts = append(executorOpts, executor.WithAgentHealth(agentHealthReg))
 	}
+
+	// Part 24 §24.3 (#920): a completed agent job may start the next.
+	executorOpts = append(executorOpts, executor.WithHandOverFirer(handOverFirer{c: c}))
 
 	c.Executor = executor.NewWithOptions(
 		runtimeManager,

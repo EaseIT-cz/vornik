@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -51,7 +52,11 @@ type ConsolidateWorker struct {
 	// chunk on their basis. See instinct_hygiene.go.
 	Hygiene *RetrievalHygiene
 
-	stopped chan struct{}
+	// stopped is created once, by whichever of Run and Stopped comes first
+	// (stoppedOnce): unsynchronised lazy creation let a Stopped() caller
+	// hold a channel Run never closed (CI VM gate, 2026-11-26).
+	stopped     chan struct{}
+	stoppedOnce sync.Once
 }
 
 // Run drives the periodic loop. Blocks until ctx is cancelled.
@@ -66,10 +71,7 @@ func (w *ConsolidateWorker) Run(ctx context.Context) {
 			Msg("memory consolidate worker disabled by config")
 		return
 	}
-	if w.stopped == nil {
-		w.stopped = make(chan struct{})
-	}
-	defer close(w.stopped)
+	defer close(w.stoppedChan())
 
 	w.Logger.Info().Dur("interval", w.Interval).Int("scan_limit", w.ScanLimit).
 		Msg("memory consolidate worker started")
@@ -97,9 +99,12 @@ func (w *ConsolidateWorker) Run(ctx context.Context) {
 // Stopped returns a channel closed when Run exits. Tests use it to
 // synchronise without polling.
 func (w *ConsolidateWorker) Stopped() <-chan struct{} {
-	if w.stopped == nil {
-		w.stopped = make(chan struct{})
-	}
+	return w.stoppedChan()
+}
+
+// stoppedChan returns the one stopped channel, creating it on first use.
+func (w *ConsolidateWorker) stoppedChan() chan struct{} {
+	w.stoppedOnce.Do(func() { w.stopped = make(chan struct{}) })
 	return w.stopped
 }
 

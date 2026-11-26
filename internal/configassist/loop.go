@@ -116,6 +116,9 @@ func RunLoop(ctx context.Context, provider chat.Provider, system, intent string,
 		extra[x.Def.Function.Name] = x.Handle
 	}
 	declared := map[string]bool{}
+	// retriedAt is the lower reasoning level a cut-off reply was retried at
+	// (#922); "" until then. One retry per request.
+	retriedAt := ""
 	for {
 		if ctx.Err() != nil {
 			return res, &Refusal{Code: RefuseBudget, Message: "request deadline exceeded before the assistant finished"}, nil
@@ -141,6 +144,25 @@ func RunLoop(ctx context.Context, provider chat.Provider, system, intent string,
 			for _, f := range files {
 				declared[f] = true
 			}
+		}
+		if len(msg.ToolCalls) == 0 && resp.Choices[0].FinishReason == "length" {
+			// Cut off before it answered: not a final answer (GitHub #911).
+			// A reasoning model spent its output budget thinking; ask again,
+			// once, with one level less reasoning, which holds for the rest of
+			// the request (GitHub #922). The cut-off reply is not appended to
+			// msgs, so the retry sends the same conversation again.
+			if lower, ok := lowerReasoning(chat.ReasoningEffortFromContext(ctx)); ok && retriedAt == "" {
+				retriedAt = lower
+				ctx = chat.WithReasoningEffort(ctx, lower)
+				continue
+			}
+			advice := " A reasoning model spends that budget thinking first: set config_assistant.reasoning to low or medium"
+			if retriedAt != "" {
+				advice = " It was retried at reasoning " + retriedAt + " and cut off again: raise the model's max_tokens or choose a model that answers within it"
+			}
+			return res, &Refusal{Code: RefuseTruncated, Message: fmt.Sprintf(
+				"the assistant's reply was cut off at the model's output-token limit (%d completion tokens) before it answered, so nothing was decided.%s",
+				resp.Usage.CompletionTokens, advice)}, nil
 		}
 		if len(msg.ToolCalls) == 0 {
 			res.Summary = strings.TrimSpace(planRe.ReplaceAllString(msg.Content, ""))
@@ -225,4 +247,21 @@ func (r *LoopResult) ReadPaths() []string {
 		out = append(out, c.Path)
 	}
 	return out
+}
+
+// lowerReasoning is the next level down for a retry after a cut-off reply
+// (GitHub #922): high to medium, medium to low, low to off, and the model's
+// default ("") to low. Off has nothing below it.
+func lowerReasoning(effort string) (string, bool) {
+	switch effort {
+	case chat.ReasoningEffortHigh:
+		return chat.ReasoningEffortMedium, true
+	case chat.ReasoningEffortMedium:
+		return chat.ReasoningEffortLow, true
+	case chat.ReasoningEffortLow:
+		return chat.ReasoningEffortOff, true
+	case "":
+		return chat.ReasoningEffortLow, true
+	}
+	return "", false
 }

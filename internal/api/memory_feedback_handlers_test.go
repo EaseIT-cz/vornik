@@ -38,6 +38,9 @@ func (s *stubMemoryAuditRepo) FeedbackStats(ctx context.Context, projectID strin
 func (*stubMemoryAuditRepo) A2AChunksByCallerKey(context.Context, time.Time) ([]persistence.A2AKeyRetrieval, error) {
 	return nil, nil
 }
+func (*stubMemoryAuditRepo) StepRecallChunks(context.Context, string) ([]persistence.StepRecallChunk, error) {
+	return nil, nil
+}
 
 func (s *stubMemoryAuditRepo) UnretrievedChunkIDs(ctx context.Context, projectID string, since time.Time, limit int) ([]string, error) {
 	s.gotSampleLimit = limit

@@ -10,6 +10,8 @@ import (
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/brokerschedule"
 	"vornik.io/vornik/internal/leaderelection"
+	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 )
 
 // BrokerScheduleSubsystem runs agent broker workflows on their approved
@@ -102,6 +104,20 @@ func (s scheduleSource) Scheduled(ctx context.Context) ([]brokerschedule.Entry, 
 // during boot and replaces it, so a server captured at Build would be the
 // discarded first one.
 type scheduleFirer struct{ c *Container }
+
+// handOverFirer is the executor's hand_over firer (agent-administered design
+// part 24 §24.3, #920), bound late: the executor is built before the API
+// server.
+type handOverFirer struct{ c *Container }
+
+// FireHandover implements executor.HandOverFirer.
+func (f handOverFirer) FireHandover(ctx context.Context, source *persistence.Task, execution *persistence.Execution, wf *registry.Workflow) (string, error) {
+	srv := f.c.apiServer
+	if srv == nil {
+		return "", errors.New("the API server is not running")
+	}
+	return srv.FireHandover(ctx, source, execution, wf)
+}
 
 // FireScheduledBroker implements brokerschedule.Firer.
 func (f scheduleFirer) FireScheduledBroker(ctx context.Context, workflowID, key string) (string, error) {

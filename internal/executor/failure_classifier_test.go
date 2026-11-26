@@ -153,3 +153,123 @@ func TestContainsAny_DirectEdgesHelper(t *testing.T) {
 	assert.False(t, containsAny("hello world", "missing", "absent"))
 	assert.False(t, containsAny("hello", "WORLD"), "containsAny is case-sensitive; caller must lower first")
 }
+
+// GitHub #863: an output-cap failure that reaches the text switch (the agent
+// reported FAILED with the message, no recorded output_cap stop) was classed
+// WORKFLOW_ROLE_MISSING, because the role rule matches "role " and the message
+// says "the role's maxTokens". Five companion-architectural-review tasks,
+// 2026-11-20 (task_20261120201147_6fd59aa56227e9cc), showed the role playbook.
+//
+// Found at: production (operator report, task_explain on the failed tasks).
+// Regression test at: unit. Lower because: the class is decided here; the
+// task row and the playbook only quote it.
+func TestClassifyExecutionFailure_OutputCapIsNotARole_863(t *testing.T) {
+	msg := "Architectural review failed (last step: review, reason: agent reported FAILED status: " +
+		"Output cap: the model's response was cut off at its output token limit 3 times in this step " +
+		"(the last after 8192 output tokens), so it never produced a complete answer. Raise the output " +
+		"token limit the model actually runs under (the smaller of the role's maxTokens and the route's " +
+		"cap, chat.router.<route>.max_tokens else chat.max_tokens: raise the role's value, and the route's " +
+		"cap too if the role is already at it; codex-subscription sends no cap), or use a model that...)"
+	// Text alone does not produce OUTPUT_CAP (only a recorded output_cap stop
+	// does, permanent-failure design K2), and it must not produce the role
+	// class either.
+	if got := ClassifyExecutionFailure(errors.New(msg), ""); got == persistence.TaskFailureClassWorkflowRole {
+		t.Fatalf("an output-cap message was classed %q", got)
+	}
+	// The role rule still catches every missing-role message the code emits.
+	for _, m := range []string{
+		`workflow dev step plan requires role "planner" not present in swarm s1 (project p)`,
+		`swarm role coder not found in swarm s1`,
+		`workflow "w" step "s" requires role "r" not in swarm "s1"`,
+		`Workflow "w" step "s" requires role "r" not present in the project's swarm.`,
+	} {
+		if got := ClassifyExecutionFailure(errors.New(m), ""); got != persistence.TaskFailureClassWorkflowRole {
+			t.Errorf("missing role %q classed %q", m, got)
+		}
+	}
+}
+
+// GitHub #878, the census #863 left open: three bare-word rules in the text
+// switch matched a word inside another word, and each misclassed a message
+// the code produces (permanent-failure design, "Amendment 2026-11-23").
+//
+//   - "429" (RATE_LIMITED) matched a token count: the agent's output-cap
+//     message "cut off ... after 14290 output tokens" was classed
+//     RATE_LIMITED, a class the circuit breaker skips.
+//   - "gate " (GATE_FAILED) matched "investigate ", "delegate ",
+//     "aggregate ": the agent's malformed-path missing-prerequisite message
+//     ("do not investigate the producing step") was classed GATE_FAILED.
+//   - "exec" (TOOL_ERROR) matched "execution", "executor", "executed": the
+//     wall-clock stop's fix advice ("scheduler.execution_timeout") classed a
+//     timeout TOOL_ERROR when the text arrives without its error chain.
+//
+// Found at: unit (census of #863's rule class). Regression test at: unit.
+// Lower because: the class is decided here; the task row and the playbook
+// only quote it.
+func TestClassifyExecutionFailure_BareWordRules_878(t *testing.T) {
+	const agentFailed = "Review failed (last step: review, reason: agent reported FAILED status: "
+	misclassed := []struct {
+		name, text, wrong, want string
+	}{
+		{
+			"429_in_a_token_count",
+			agentFailed + "Output cap: the model's response was cut off at its output token limit 3 times in this step " +
+				"(the last after 14290 output tokens; reasoning: 900 bytes of text, tokens 210), so it never produced " +
+				"a complete answer. Raise the output token limit the model actually runs under (the smaller of the " +
+				"role's maxTokens and the route's cap, chat.router.<route>.max_tokens else chat.max_tokens: raise the " +
+				"role's value, and the route's cap too if the role is already at it; codex-subscription sends no cap), " +
+				"or use a model that spends less of its output on reasoning.)",
+			persistence.TaskFailureClassRateLimited, persistence.TaskFailureClassUnknown,
+		},
+		{
+			"gate_inside_delegate",
+			agentFailed + "the reviewer could not delegate the summary to a second pass)",
+			persistence.TaskFailureClassGateFailed, persistence.TaskFailureClassUnknown,
+		},
+		{
+			"gate_inside_investigate_malformed_path",
+			agentFailed + `Missing prerequisite: file_read of "/app/workspace/app/workspace/plan.md" returned not-found ` +
+				`twice. That path is MALFORMED — it repeats the container prefix /app/workspace, so no such file could ` +
+				`ever exist. This is a prompt path-rewrite defect on the daemon side, NOT a missing artifact: do not ` +
+				`investigate the producing step. The intended path is "/app/workspace/plan.md".)`,
+			// Still TOOL_ERROR by the "container" rule, which is left as a
+			// follow-up; this case pins only that "gate " no longer fires.
+			persistence.TaskFailureClassGateFailed, persistence.TaskFailureClassToolError,
+		},
+		{
+			"exec_inside_execution_timeout_advice",
+			"step fetch was stopped because the execution's wall-clock cap (30m0s, from workflow) ran out " +
+				"(raise the workflow's maxWallClock or scheduler.execution_timeout, not the step's timeout)",
+			persistence.TaskFailureClassToolError, persistence.TaskFailureClassTimeout,
+		},
+		{
+			"exec_inside_executor",
+			"executor is shutting down; not starting new task task_1",
+			persistence.TaskFailureClassToolError, persistence.TaskFailureClassUnknown,
+		},
+	}
+	for _, c := range misclassed {
+		t.Run(c.name, func(t *testing.T) {
+			got := ClassifyExecutionFailure(errors.New(c.text), "")
+			if got == c.wrong {
+				t.Fatalf("classed %q, the #878 misclassification", got)
+			}
+			assert.Equal(t, c.want, got)
+		})
+	}
+
+	// The narrowed rules still catch the messages they exist for.
+	kept := []struct{ text, want string }{
+		{"provider returned 429", persistence.TaskFailureClassRateLimited},
+		{"status 429: slow down", persistence.TaskFailureClassRateLimited},
+		{"gate step has no gates", persistence.TaskFailureClassGateFailed},
+		{"gate evaluation failed for step review: boom", persistence.TaskFailureClassGateFailed},
+		{"failed to parse gate input as JSON: eof", persistence.TaskFailureClassGateFailed},
+		{"gate did not pass: has_approvals == true", persistence.TaskFailureClassGateFailed},
+		{`exec: "git": executable file not found in $PATH`, persistence.TaskFailureClassToolError},
+		{"fork/exec /usr/bin/python3: no such file or directory", persistence.TaskFailureClassToolError},
+	}
+	for _, k := range kept {
+		assert.Equal(t, k.want, ClassifyExecutionFailure(errors.New(k.text), ""), "text=%q", k.text)
+	}
+}

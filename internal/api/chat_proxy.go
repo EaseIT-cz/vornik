@@ -228,6 +228,16 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if req.MaxTokens > 0 {
 		ctx = chat.WithRequestMaxTokens(ctx, req.MaxTokens)
 	}
+	// The role's reasoning level (GitHub #869, reasoning control design B3).
+	// The agent writes off as "none", the OpenAI-compatible spelling; the
+	// proxy owns that seam and stamps it as off. Any other unknown value is
+	// dropped by WithReasoningEffort, so the model keeps its default.
+	if effort := req.ReasoningEffort; effort != "" {
+		if effort == "none" {
+			effort = chat.ReasoningEffortOff
+		}
+		ctx = chat.WithReasoningEffort(ctx, effort)
+	}
 	if req.CacheStrategy != nil && req.CacheStrategy.Mode != "" && req.CacheStrategy.Mode != chat.CacheModeOff {
 		ctx = chat.WithRequestCacheStrategy(ctx, req.CacheStrategy)
 	} else if s.cachingEnabled() {
@@ -392,6 +402,13 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// MUST run before encode (mutates the response body).
 	if resp.ID == "" {
 		resp.ID = fmt.Sprintf("chatcmpl-vornik-%d", time.Now().UnixNano())
+	}
+	// How much the model wrote as reasoning, for the agent's output-cap
+	// report (GitHub #869): a call that spent its cap thinking otherwise
+	// reads as an empty answer. Provider-neutral: any provider that fills
+	// ReasoningContent is measured.
+	if len(resp.Choices) > 0 {
+		resp.Usage.ReasoningBytes = len(resp.Choices[0].Message.ReasoningContent)
 	}
 	if resp.Object == "" {
 		resp.Object = "chat.completion"

@@ -9,12 +9,8 @@ rolePrelude: |
     URL in your output.
 
 roles:
-    # 2026-07-20: ALL roles flipped to Bedrock-PRIMARY + Ollama-fallback
-    # (Ollama session-limit exhaustion — ~24% of the weekly limit burned in a
-    # day by deep-research fan-outs). The per-role comments below describe the
-    # PRIOR Ollama-primary rationale and are now INVERTED — the model /
-    # modelFallback VALUES are authoritative, not the prose.
     - name: "lead"
+      modelTier: "complex"
       description: "Plans research and writing tasks"
       count: 1
       # 2026-05-13: forced ephemeral. Warm containers bind-mounted the
@@ -23,36 +19,6 @@ roles:
       # blocked ephemeral tasks' worktree merges. Fixed since: warm
       # containers get no project mount at all (S6-D5, 04072e055).
       runtimePolicy: "ephemeral"
-      # Strategic planning + adaptive routing + recovery-mode
-      # checkpoint proposals. 2026-05-26: switched to zai.glm-5
-      # — gemma-4-26b under-performed on this combined load
-      # (planning + routing + recovery checkpoint branches +
-      # phase markers + scratchpad); operator-observed degradation.
-      # glm-5 is the open-weight flagship in the Bedrock catalog
-      # and was the dev-swarm lead / analyst / reviewer primary
-      # before the 2026-05-25 codex flip — proven on heavy multi-
-      # role coordination. Fallback to moonshotai.kimi-k2.5 for
-      # cross-vendor diversity (different vendor from the primary).
-      # Historical context:
-      #   2026-05-23: gemma-4-26b — taken because qwen3-235b is
-      #     geo-restricted in EU. Adequate on simple turns,
-      #     under-powered on combined lead load.
-      #   pre-2026-05-23: qwen.qwen3-235b-a22b-2507-v1:0 — strong
-      #     but geo-blocked.
-      #   2026-05-18: gpt-oss-120b — too light; family "config
-      #     missing" fabrication on glm-4.7-flash same day.
-      # gpt-6-luna (codex connector, plan-billed) remains the escape
-      # hatch if both glm-5 and kimi-k2.5 misbehave.
-      # 2026-06-02: flipped to codex-subscription primary to cut Bedrock
-      # spend (codex is plan-billed/prepaid). Current primary glm-5 is now
-      # the fallback; the executor retries on it if codex errors (retry.go).
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
       maxTokens: 4096
       runtime:
         image: "ghcr.io/easeit-cz/vornik-agent:latest"
@@ -74,6 +40,7 @@ roles:
         autonomousTaskCreation: true
         maxDelegations: 12
     - name: "researcher"
+      modelTier: "complex"
       description: "Gathers sourced facts and writes artifacts/out/research.md"
       aliases:
         - "scout"
@@ -82,19 +49,7 @@ roles:
         - "fact_finder"
       count: 1
       runtimePolicy: "ephemeral"
-      # Source gathering + summary writing — MiniMax M2.5 via
-      # Bedrock. Rank 9 on the open-LLM leaderboard, ultra-long
-      # context (1M tokens) at $0.30/$1.20 — perfect for research
-      # where the prompt grows large. Fallback to GPT-5.4-mini via
-      # codex-subscription (plan-billed).
-      # 2026-07-07: glm-4.7 Bedrock Converse hanging (see config.yaml chat.model); -> glm-5.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
+      # Source gathering + summary writing; the prompt grows large.
       maxTokens: 8192
       # NO inline systemPrompt on purpose — this role is body-canonical
       # (see '### researcher' under '## Role prompts').
@@ -164,6 +119,7 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "read_many_files", "grep", "glob", "memory_search", "current_time", "query_api", "list_apis", "mcp__scraper__web_fetch", "mcp__scraper__web_search", "mcp__scraper__ical_events", "mcp__scraper__encode_image", "mcp__vornik__document_read_section", "mcp__vornik__document_get_outline", "mcp__vornik__document_get_metadata", "mcp__swarmd__document_read_section", "mcp__swarmd__document_get_outline", "mcp__swarmd__document_get_metadata"]
         delegationAllowed: false
     - name: "planner"
+      modelTier: "complex"
       description: "Turns research.md into a structured plan or itinerary at artifacts/out/plan.md (times, durations, costs, logistics, booking requirements)"
       # Aliases catch lead-side hallucinations from training-data
       # bias — itinerary / scheduling / project-plan pipelines lean
@@ -176,20 +132,6 @@ roles:
         - "plan_author"
       count: 1
       runtimePolicy: "ephemeral"
-      # Structured plan composition — MiniMax M2.5 via Bedrock.
-      # 1M context lets the planner ingest all of research.md plus
-      # USER_GUIDANCE without summarisation. $0.30/$1.20. Matches
-      # the researcher/writer cost profile since this role is the
-      # third leg of the same pipeline. Fallback to GPT-5.4-mini
-      # via codex-subscription (plan-billed).
-      # 2026-07-07: glm-4.7 Bedrock Converse hanging (see config.yaml chat.model); -> glm-5.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
       maxTokens: 8192
       # Mirrors the writer's contract: written/path/summary on
       # success, reason on failure; produced_files verified by the
@@ -245,6 +187,7 @@ roles:
         allowedTools: ["file_read", "file_write", "read_many_files", "grep", "glob", "current_time"]
         delegationAllowed: false
     - name: "writer"
+      modelTier: "complex"
       description: "Turns research into a polished deliverable"
       # Aliases catch lead-side hallucinations from training data
       # bias. task_20260504230533 / task_20260504230429 both
@@ -259,18 +202,6 @@ roles:
         - "copy_editor"
       count: 1
       runtimePolicy: "ephemeral"
-      # Polished prose composition — MiniMax M2.5 via Bedrock.
-      # Rank 9, 1M context lets the writer see the full research
-      # context without summarisation. $0.30/$1.20. Fallback to
-      # GPT-5.4-mini via codex-subscription (plan-billed).
-      # 2026-07-07: glm-4.7 Bedrock Converse hanging (see config.yaml chat.model); -> glm-5.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
       maxTokens: 8192
       # outputSchema is the single source of truth for this role's
       # result.json shape. The executor derives requiredOutputKeys +
@@ -344,30 +275,13 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "read_many_files", "grep", "glob", "current_time"]
         delegationAllowed: false
     - name: "vision"
+      modelTier: "vision"
       description: "Analyses image attachments — text recognition (OCR), object detection, scene description, and basic image manipulation."
       count: 1
       # Ephemeral so the model field below is honored per-step. Warm
       # containers key the pool by (project, role, image) and would
       # outlive a model change without restarting.
       runtimePolicy: "ephemeral"
-      # Image analysis — Gemma 4 26B (Vertex MaaS, "google/" prefix
-      # routes to vertex). Multimodal, open-weight, priced at
-      # $0.15/$0.60. Vertex is the only vendor available alongside
-      # Bedrock in this deployment, so vision lives here for the
-      # primary/fallback diversity the rest of the swarm gets via
-      # bedrock+codex. Fallback to GPT-5.4 via codex-subscription
-      # — top-tier vision quality at plan-billed cost when Gemma
-      # struggles with dense OCR.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — gemma4:31b (newer
-      # multimodal Gemma release, subscription capacity) primary;
-      # Bedrock google.gemma-3-27b-it (pay-per-token, the proven prior
-      # primary) is the fallback. NOTE: image input over the Ollama
-      # Cloud OpenAI-compat path is unproven in this deployment — if
-      # vision tasks start failing, the automatic fallback restores the
-      # prior Bedrock Gemma 3 behavior; pixtral-large remains a manual
-      # escape hatch for dense-OCR quality misses.
-      model: "google.gemma-3-27b-it"
-      modelFallback: "gemma4:31b"
       # This role's prompt tells the agent it can see the image directly.
       # Declaring the requirement makes config load REFUSE a model (or
       # fallback) that cannot, instead of the mismatch surfacing as a
@@ -398,25 +312,16 @@ roles:
     # workspace → reads the fresh deliverable). Also runnable standalone via the
     # `publish` workflow to publish explicit content.
     - name: "publisher"
+      modelTier: "standard"
       description: "Renders finished research into a self-contained Vornik-themed HTML page and publishes it via PageDrop, returning a shareable link"
       aliases:
         - "renderer"
         - "html_publisher"
       count: 1
       runtimePolicy: "ephemeral"
-      # Fast open-weight primary: zai.glm-4.7 runs 247-564s/call (config note),
-      # past the agent LLM timeout, which caused the publish-step retry storm
-      # on task 8011 (2026-07-05). minimax.minimax-m2.5 is fast and succeeded
-      # there. Fallback moonshotai.kimi-k2.5 (a reliable tool-caller) — was
-      # zai.glm-4.7-flash, but that hallucinated <function=...> tool-call syntax
-      # on task afb57207. Both open-weight. (agent_llm.timeout was also raised
-      # to 200s so rendering a large page in one call doesn't time out.)
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — minimax-m2.7 (newer
-      # point release of the model proven fast here on task 8011,
-      # subscription capacity) primary; Bedrock minimax.minimax-m2.5
-      # (pay-per-token, the proven prior primary) is the fallback.
-      model: "minimax.minimax-m2.5"
-      modelFallback: "minimax-m2.7"
+      # The publish step renders a large page in one call: a model slower
+      # than the agent LLM timeout causes a retry storm (task 8011,
+      # 2026-07-05), so agent_llm.timeout was raised to 200s.
       # HTML output is larger than prose — a full styled report can run long.
       maxTokens: 16384
       injectSchemaIntoPrompt: true
@@ -558,20 +463,13 @@ roles:
     # and clearly labelled. Shared by assistant + family; used by the `ingest`
     # workflow, to which the dispatcher routes ingestion-intent requests.
     - name: "ingestor"
+      modelTier: "complex"
       description: "Structures a provided document into clean notes and stores them in memory (no web research)"
       aliases:
         - "memory_ingest"
         - "document_ingest"
       count: 1
       runtimePolicy: "ephemeral"
-      # 2026-07-07: glm-4.7 Bedrock Converse hanging (see config.yaml chat.model); -> glm-5.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
       maxTokens: 8192
       injectSchemaIntoPrompt: true
       systemPrompt: |
@@ -630,22 +528,6 @@ roles:
         delegationAllowed: false
     # added by `vornikctl doctor --fix`: dispatcher cost attribution stub (telegram bot doesn't run as a container)
     - name: dispatcher
-      # Mirrors chat.model in config.yaml so dispatcher LLM-usage
-      # rows tag the right (role=dispatcher, model=...) pair on the
-      # quality dashboard. Update both in lockstep.
-      # 2026-05-26: aligned with chat.model = google/gemini-3.1-pro-preview
-      # (gemma-4-26b under-performed; see chat.model rationale in config.yaml).
-      # 2026-05-30: switched to minimax.minimax-m2 in lockstep with
-      # chat.model — Vertex trial 429s were making the dispatcher flaky.
-      # 2026-07-07: glm-4.7 Bedrock Converse hung (see config.yaml chat.model);
-      # swapped to zai.glm-5 in lockstep with chat.model.
-      # 2026-07-15: Bedrock→Ollama Cloud cutover — glm-5.2 (newer GLM
-      # release, subscription capacity / session limits) is primary;
-      # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
-      # becomes the modelFallback so a session-limit hit or Ollama
-      # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "glm-5.2"
       runtime:
         image: noop:dispatcher
 ---

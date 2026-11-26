@@ -55,12 +55,9 @@ func (c *Container) initRelayIngress() (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/internal/v1/webhook-relay", c.apiServer.RelayWebhook)
-	mux.HandleFunc("/internal/v1/node-heartbeat", c.apiServer.NodeHeartbeat)
 	return &http.Server{
 		Addr:      ri.Addr,
-		Handler:   mux,
+		Handler:   c.relayIngressHandler(),
 		TLSConfig: tlsCfg,
 		// ReadHeaderTimeout only: this is a single short-lived internal mTLS POST
 		// from the DMZ relay node; the handler context bounds the rest of the
@@ -70,4 +67,15 @@ func (c *Container) initRelayIngress() (*http.Server, error) {
 		// by the per-request context that RelayWebhook inherits.
 		ReadHeaderTimeout: 10 * time.Second,
 	}, nil
+}
+
+// relayIngressHandler is the relay ingress's handler: its two routes behind
+// the hold gate, which refuses both while held (GitHub #586, §13.8 item 3).
+// Only the relay route and the heartbeat: no other route leaks onto the
+// mTLS listener.
+func (c *Container) relayIngressHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/v1/webhook-relay", c.apiServer.RelayWebhook)
+	mux.HandleFunc("/internal/v1/node-heartbeat", c.apiServer.NodeHeartbeat)
+	return c.holdGate(false)(mux)
 }

@@ -1,0 +1,21 @@
+# Provider profile: Amazon Bedrock (GitHub #880, project and swarm registry
+# design §11.2 R5). Every ID here ran in this repository's shipped swarms
+# before #880 and was probed live before it shipped. Apply it with
+#   vornikctl models profile apply bedrock
+# which copies tiers and roles into runtime.agent_llm. After that they are
+# your instance's config: edit them there, and upgrades never rewrite them.
+# A tier left out uses the setup model. vision is left out: the probe on
+# 2026-11-22 got no tool call from google.gemma-3-27b-it, and the vision
+# role works through tools.
+description: "Amazon Bedrock: GLM-5 for planning, Kimi K2.5 for code, GLM-4.7 for cheap gates."
+endpoint_hosts:
+  - "bedrock-runtime.*.amazonaws.com"
+tiers:
+  complex:  {model: "zai.glm-5", fallback: "moonshotai.kimi-k2.5"}
+  coding:   {model: "moonshotai.kimi-k2.5", fallback: "zai.glm-5"}
+  standard: {model: "minimax.minimax-m2.5"}
+  trivial:  {model: "zai.glm-4.7", fallback: "deepseek.v3.2"}
+roles:
+  # GLM proposed sub-floor opens on the strategize step, which the scorecard
+  # floor rejected, failing the tick (2026-07-25). Keep the strategist off GLM.
+  trading-swarm/strategist: {model: "moonshotai.kimi-k2.5"}

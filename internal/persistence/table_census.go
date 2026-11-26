@@ -44,6 +44,7 @@ var TableCensus = map[string]TableCensusEntry{
 	"agent_secrets":                    {SecretMaterial, "sealed secret-store values"},
 	"agent_workflow_approvals":         {OwnerData, ""},
 	"api_keys":                         {SecretMaterial, "API key hashes (credential verifiers)"},
+	"companion_key_oidc_trusts":        {SecretMaterial, "GitHub Actions trusts binding a CI identity to a companion key (GitHub #792); with api_keys, outside the export"},
 	"approver_devices":                 {SecretMaterial, "paired devices' token hashes and rotation nonces"},
 	"approver_push_subscriptions":      {SecretMaterial, "approver devices' Web Push endpoints and message keys"},
 	"approver_notice_acks":             {OwnerData, "acknowledged approver notices: a notice hash, when and by whom (GitHub #806)"},

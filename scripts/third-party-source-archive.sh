@@ -12,16 +12,23 @@
 # the licence texts. Uncompressed: every member is already gzip.
 #
 # Usage: scripts/third-party-source-archive.sh [--out DIR]
+#        scripts/third-party-source-archive.sh --print-name
+#   --print-name               print the archive's file name and exit 0
 #   THIRD_PARTY_SRC_CACHE=DIR  use <name>-<commit>.tar.gz from DIR when present
 #                              instead of downloading it
+#   THIRD_PARTY_SRC_PRIOR=FILE a previously published archive: each row's
+#                              member is taken from it when present, checked
+#                              against sources.tsv like a download (#851)
 #   CONTAINERFILE=FILE         the Containerfile whose PIPER_RELEASE must match
 #                              (default images/vornik-agent/Containerfile)
 #   THIRD_PARTY_MANIFEST=FILE  another sources.tsv (tests)
 #
-# Exit: 0 written; 2 usage; 3 a download failed or a checksum differs; 4 the
-# manifest was not written for the Containerfile's PIPER_RELEASE; 5 the
-# bundle's espeak-ng data is not the manifest's espeak-ng commit. Nothing is
-# written unless the exit is 0.
+# Exit: 0 written (or the name printed); 2 usage, including both
+# THIRD_PARTY_SRC_PRIOR and THIRD_PARTY_SRC_CACHE set; 3 a download failed, a
+# checksum differs, the prior archive cannot be listed, or its member is not a
+# regular file; 4 the manifest was not written for the Containerfile's
+# PIPER_RELEASE; 5 the bundle's espeak-ng data is not the manifest's espeak-ng
+# commit. Nothing is written unless the exit is 0.
 #
 # A GitHub archive's bytes are not promised stable. A mismatch is therefore
 # refused, never re-pinned automatically: re-check the archive's tree against
@@ -36,20 +43,31 @@ TP="$ROOT/images/vornik-agent/third-party"
 MANIFEST="${THIRD_PARTY_MANIFEST:-$TP/sources.tsv}"
 CONTAINERFILE="${CONTAINERFILE:-$ROOT/images/vornik-agent/Containerfile}"
 OUT="$PWD"
+PRINT_NAME=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) [ $# -ge 2 ] || { echo "usage: $0 [--out DIR]" >&2; exit 2; }; OUT="$2"; shift 2 ;;
-        -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+        --print-name) PRINT_NAME=1; shift ;;
+        -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
         *) echo "usage: $0 [--out DIR]" >&2; exit 2 ;;
     esac
 done
-mkdir -p "$OUT"
-OUT="$(cd "$OUT" && pwd)"
+if [ -n "${THIRD_PARTY_SRC_PRIOR:-}" ] && [ -n "${THIRD_PARTY_SRC_CACHE:-}" ]; then
+    echo "usage: set THIRD_PARTY_SRC_PRIOR or THIRD_PARTY_SRC_CACHE, not both" >&2
+    exit 2
+fi
 
 # sed -n '/re/{…;p;q;}' rather than | head -1: under pipefail an early-closing head
 # can surface sed's SIGPIPE as a failure (review 6bbe N3).
 rel="$(sed -n '/^ARG PIPER_RELEASE=/{s/^ARG PIPER_RELEASE=//;p;q;}' "$CONTAINERFILE")"
+if [ "$PRINT_NAME" = 1 ]; then
+    [ -n "$rel" ] || { echo "error: cannot read PIPER_RELEASE from $CONTAINERFILE" >&2; exit 4; }
+    echo "vornik-agent-third-party-source-piper-$rel.tar"
+    exit 0
+fi
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 mrel="$(sed -n '/^# piper-release:/{s/^# piper-release: *//;p;q;}' "$MANIFEST")"
 bsum="$(sed -n '/amd64).*sum=[0-9a-f]\{64\}/{s/.*sum=\([0-9a-f]\{64\}\).*/\1/;p;q;}' "$CONTAINERFILE")"
 espeak_commit="$(awk -F'\t' '$1=="espeak-ng"{print $4}' "$MANIFEST")"
@@ -74,12 +92,33 @@ trap 'rm -rf "$work"' EXIT
 stage="$work/$name_base"
 mkdir -p "$stage/sources"
 
+# A prior archive (#851): list its names once; each row's member is extracted
+# below by a name this script builds, so nothing else in the tar is touched.
+if [ -n "${THIRD_PARTY_SRC_PRIOR:-}" ]; then
+    if ! tar -tf "$THIRD_PARTY_SRC_PRIOR" > "$work/prior.lst" 2>/dev/null; then
+        echo "error: the prior archive $THIRD_PARTY_SRC_PRIOR cannot be listed as a tar" >&2
+        exit 3
+    fi
+    mkdir -p "$work/prior-x" "$work/prior-cache"
+    THIRD_PARTY_SRC_CACHE="$work/prior-cache"
+fi
+
 n=0
 while IFS=$'\t' read -r name repo ref commit sum; do
     case "$name" in ''|'#'*) continue ;; esac
     n=$((n+1))
     file="$name-$commit.tar.gz"
     dest="$stage/sources/$file"
+    member="$name_base/sources/$file"
+    if [ -n "${THIRD_PARTY_SRC_PRIOR:-}" ] && grep -Fxq "$member" "$work/prior.lst"; then
+        tar -xf "$THIRD_PARTY_SRC_PRIOR" -C "$work/prior-x" "$member" 2>/dev/null || {
+            echo "error: cannot extract $member from the prior archive" >&2; exit 3; }
+        if [ ! -f "$work/prior-x/$member" ] || [ -L "$work/prior-x/$member" ]; then
+            echo "error: $member in the prior archive is not a regular file" >&2
+            exit 3
+        fi
+        mv "$work/prior-x/$member" "$THIRD_PARTY_SRC_CACHE/$file"
+    fi
     if [ -n "${THIRD_PARTY_SRC_CACHE:-}" ] && [ -f "$THIRD_PARTY_SRC_CACHE/$file" ]; then
         cp "$THIRD_PARTY_SRC_CACHE/$file" "$dest" || { echo "error: cannot copy $file from the cache" >&2; exit 3; }
     else

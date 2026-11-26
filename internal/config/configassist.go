@@ -50,8 +50,17 @@ type AssistantConfig struct {
 	// MaxToolTurns caps the loop's tool-call iterations per request (R8).
 	MaxToolTurns int `yaml:"max_tool_turns" doc:"Per-request cap on tool-call turns in the editing loop (default 40)."`
 
-	// RequestTimeout is the per-request wall-clock deadline (R8).
-	RequestTimeout string `yaml:"request_timeout" doc:"Per-request deadline as a duration string (default 5m)."`
+	// RequestTimeout is the per-request wall-clock deadline (R8). It also
+	// sizes a healing candidate generation: HealingGenerateBudget is this
+	// plus HealingGenerateMargin (GitHub #908).
+	// Reasoning is the reasoning level asked of the assistant model on every
+	// call: off, low, medium or high; empty leaves the model's default. A
+	// reasoning model can spend its whole output budget thinking and answer
+	// nothing (GitHub #911; the graph extractor's measured precedent,
+	// MemoryGraphConfig).
+	Reasoning string `yaml:"reasoning" doc:"Reasoning level asked of the assistant model on every call: off, low, medium or high (empty = the model's default). Lower it when assistant replies are cut off at the output-token limit."`
+
+	RequestTimeout string `yaml:"request_timeout" doc:"Per-request deadline as a duration string (default 5m). A healing candidate generation may take this plus 2m."`
 
 	// MaxConcurrentPerProject bounds admission per project (R8).
 	MaxConcurrentPerProject int `yaml:"max_concurrent_per_project" doc:"Concurrent assistant requests admitted per project (default 1)."`
@@ -172,6 +181,30 @@ func (c AssistantConfig) EffectiveRequestTimeout() time.Duration {
 	return parseDurationOr(c.RequestTimeout, 5*time.Minute)
 }
 
+// HealingGenerateMargin is the time a healing candidate generation may take
+// past the assistant's loop: the judge's one call and the ledger writes
+// (GitHub #908). It assumes the judge answers within it; the judge's own
+// bound is chat.timeout.
+const HealingGenerateMargin = 2 * time.Minute
+
+// DefaultHealingGenerateBudget is HealingGenerateBudget at the shipped
+// request_timeout, for a client that cannot read the daemon's config.
+const DefaultHealingGenerateBudget = 5*time.Minute + HealingGenerateMargin
+
+// HealingGenerateWriteSlack is how far past the generate budget a generate
+// handler sets its response write deadline, so the answer to a generation
+// that used its whole budget can still be written.
+const HealingGenerateWriteSlack = 30 * time.Second
+
+// HealingGenerateBudget is how long generating one healing candidate may take:
+// the assistant's tool-loop budget (request_timeout) plus HealingGenerateMargin.
+// The generate handlers, the server's per-route write deadline and the CLI
+// clients all derive their deadlines from it, so they nest (GitHub #908: a
+// fixed 60 s handler deadline and a 30 s client cut every bench generation).
+func (c AssistantConfig) HealingGenerateBudget() time.Duration {
+	return c.EffectiveRequestTimeout() + HealingGenerateMargin
+}
+
 // EffectiveTimeout returns the per-consult deadline.
 func (c AssistantConsult) EffectiveTimeout() time.Duration {
 	return parseDurationOr(c.Timeout, 2*time.Minute)
@@ -224,6 +257,13 @@ func (c AssistantConfig) Validate() error {
 				return fmt.Errorf("config_assistant.auto_apply.%s: %q is not one of A|B1|B2", project, cl)
 			}
 		}
+	}
+	// The same levels as registry.ValidReasoningLevel (registry imports this
+	// package, so it cannot be called here; a registry test pins the two).
+	switch c.Reasoning {
+	case "", "off", "low", "medium", "high":
+	default:
+		return fmt.Errorf("config_assistant.reasoning: %q is not one of off|low|medium|high", c.Reasoning)
 	}
 	if v := strings.TrimSpace(c.RequestTimeout); v != "" {
 		if _, err := time.ParseDuration(v); err != nil {

@@ -65,7 +65,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
 	"vornik.io/vornik/internal/benchlearning"
+	"vornik.io/vornik/internal/modelcheck"
+	"vornik.io/vornik/internal/restartgen"
 
 	"vornik.io/vornik/internal/aimark"
 
@@ -384,6 +387,13 @@ type Container struct {
 	// re-deriving the table (model-route-coverage design, 2026-09-24). Nil
 	// when chat.provider is not "router".
 	chatRouter *chat.Router
+	// modelCheckerV is the shared #881 save-time model check (modelChecker).
+	modelCheckerMu sync.Mutex
+	modelCheckerV  *modelcheck.Checker
+	// reloadModelsSeen is every model a reload has already judged, so the
+	// #881 C4 warning fires once per model.
+	reloadModelsMu   sync.Mutex
+	reloadModelsSeen map[string]bool
 	// modelRoutes and modelPrices replace where the live router sends a
 	// model and its pricing entry, for tests of the agent role model
 	// (agent-administered design §18.6 item 2); nil in the daemon.
@@ -856,7 +866,11 @@ type Container struct {
 	// memory ingest) can attach themselves to the same instance
 	// rather than rebuilding the regex set per consumer.
 	secretsDetector secrets.Detector
-	secretsActions  map[string]secrets.Action
+	// cpReloadGuard is the reload state every control-plane apply engine
+	// shares (GitHub #859); built once by controlPlaneReloadGuard.
+	cpReloadGuard     *controlplane.ReloadGuard
+	cpReloadGuardOnce sync.Once
+	secretsActions    map[string]secrets.Action
 	// judgeRunnerWired records whether buildJudgeRunner produced
 	// a runner — set to true when the chat client was available
 	// at executor build time. Used by the startup summary to
@@ -873,6 +887,14 @@ type Container struct {
 	apiKeyLimiter    *ratelimit.APIKeyLimiter
 	rateLimitMetrics *ratelimit.Metrics
 	dryRunMetrics    *api.DryRunMetrics
+	// restartGen is the persisted restart generation, with the value read at
+	// start (GitHub #799, operations-API design §6.13). Nil in tests.
+	restartGen         *restartgen.File
+	restartGenLoaded   int64
+	restartGenLoadedOK bool
+	// artifactFindings counts the artifact scan's findings (GitHub #85);
+	// built once, on the served registry, like dryRunMetrics.
+	artifactFindings artifacts.FindingsCounter
 	// firstValue is the first-value tracker (GitHub #587); see
 	// container_firstvalue.go. firstValueRegistered: its gauges are on the
 	// served registry.
@@ -956,6 +978,11 @@ type Container struct {
 	artifactBackend artifacts.FileBackend
 	retentionCancel context.CancelFunc
 	retentionDone   chan struct{}
+	// retentionPlan is the constructed sweeper startRetention starts
+	// (GitHub #586). Nil when retention is off or skipped.
+	retentionPlan *retentionPlan
+	// heldStart is the held start (GitHub #586, container_held_start.go).
+	heldStart
 	// voiceSTT / voiceTTS hold the local speech-to-text and text-to-
 	// speech providers constructed from config.Voice. Shared across
 	// channel adapters (Telegram, Slack) so a single Whisper or
@@ -2156,7 +2183,7 @@ func (c *Container) serveAgentUnixSocket(errCh chan error) error {
 
 // Run starts the daemon and blocks until shutdown.
 func (c *Container) Run(ctx context.Context) error {
-	errCh := make(chan error, 4) // Buffer for HTTP server, metrics server, relay-ingress and operations-listener errors
+	errCh := make(chan error, 5) // Buffer for HTTP server, metrics server, relay-ingress and operations-listener errors, and a held start's failed release (GitHub #586)
 
 	// GitHub #560 (M1c, review b0fa F1): the outbound boundary of a managed
 	// instance is the process-wide policy NewContainer set; serving a managed
@@ -2172,39 +2199,19 @@ func (c *Container) Run(ctx context.Context) error {
 	// Create a cancellable context for background collector goroutines
 	// so they stop cleanly during shutdown instead of racing with DB close.
 	c.collectorsCtx, c.stopCollectors = context.WithCancel(ctx)
-
-	// Autonomy elector goroutine — the Manager itself was
-	// constructed + Started during NewContainer (init order
-	// requirement: Telegram + project registry must be wired
-	// first). The elector starts here so its renew loop ties to
-	// the daemon lifecycle. BootstrapAcquire runs synchronously
-	// so the per-project tick loops that have been ticking since
-	// boot see an authoritative IsLeader on their first
-	// post-Run-entry tick.
-	if c.autonomyElector != nil {
-		c.autonomyElector.BootstrapAcquire(ctx)
-		go c.autonomyElector.Run(ctx)
+	// A held start is released through the API server; without one it
+	// could never be released, so refuse rather than start work (fail
+	// closed, GitHub #586).
+	if c.holdMarker.Held && c.apiServer == nil {
+		return fmt.Errorf("held start: the marker %s holds this daemon but it has no API server to release it from", c.holdPath)
 	}
 
-	// Broker action worker (broker write-actions design §5.4). Assigned
-	// before the HTTP server starts, so the /inbox approve closure that
-	// reads c.brokerActionWorker never races this write.
-	// The push loop first: the worker's OnChange kicks it.
-	if c.companionPusher = c.newCompanionPusher(); c.companionPusher != nil {
-		if c.Executor != nil {
-			c.Executor.AddCompletionObserver(c.companionPusher)
-		}
-		go c.companionPusher.Run(c.collectorsCtx)
-	}
-	if c.brokerActionWorker = c.newBrokerActionWorker(); c.brokerActionWorker != nil {
-		go c.brokerActionWorker.Run(c.collectorsCtx)
-	}
-	c.startApproverDeviceTicker(c.collectorsCtx)
-	c.startBrokerGrantTicker(c.collectorsCtx)
 	c.startDoctorGauge(c.collectorsCtx)
 	// MCP failed-connect recovery (every node, not leader-gated): retries a
 	// project's MCP server whose dial failed. Before 2026-09-30 such a server
 	// stayed dark until a reload or restart (ibkr-trader's broker, 24 hours).
+	// Not work, so it runs while held too (§12.6, P; the work-start law's
+	// named list): it only re-dials, and no tool call runs while held.
 	c.startMCPReconnector(c.collectorsCtx)
 
 	// Start the agent unix socket BEFORE executor recovery so that any
@@ -2219,58 +2226,78 @@ func (c *Container) Run(ctx context.Context) error {
 		return err
 	}
 
-	if c.capabilities().RunWorkers {
-		// testExecutorRecover is a test hook; nil in production.
-		execRec := c.testExecutorRecover
-		if execRec == nil && c.Executor != nil {
-			execRec = c.Executor
-		}
-		if execRec != nil {
-			if err := execRec.Recover(ctx); err != nil {
-				return fmt.Errorf("failed to recover in-flight executions: %w", err)
-			}
-			c.Logger.Info().Msg("executor recovery completed")
-		}
-	} else {
-		c.Logger.Info().Msg("node profile: run_workers=false; task scheduler + executor recovery skipped")
+	// GitHub #586: a held start serves its listeners behind the hold gate
+	// and starts no work; the release (DELETE /api/v1/daemon/hold) calls
+	// startWork. Unheld, startWork runs here, before the listeners, as the
+	// work always did.
+	// see LLD § https://docs.vornik.io §13
+	if c.held() {
+		c.runCtx, c.holdErrCh = ctx, errCh
+		c.Logger.Warn().Str("hold_id", c.holdMarker.HoldID).Str("reason", c.holdMarker.Reason).
+			Str("marker", c.holdPath).Time("deadline", c.holdMarker.DeadlineAt()).
+			Msg("held start: serving held, no work started; release with `vornikctl daemon release`")
+	} else if err := c.startWork(ctx); err != nil {
+		return err
 	}
 
-	// NL Automation Composer crash recovery (task 1.2b slice ii, design
-	// §5.6 step 4) — before the scheduler starts touching the same live
-	// config tree. See container_composer_recovery.go for the full
-	// rationale; best-effort, never fails boot.
-	c.recoverComposerCommits(ctx)
-
-	// Trading boot reconciliation + equity sampler now owned by
-	// TradingSubsystem (see subsystem_trading.go); their goroutines
-	// launch during c.startSubsystems(ctx).
-
-	// The config-writer lease comes FIRST — before recovery, because recovery
-	// writes files, and before any apply. Without it every write is refused
-	// as "superseded by a newer leader epoch" (re-audit 2026-09-15, CA-19).
-	if err := c.StartConfigWriterLease(ctx); err != nil {
-		c.Logger.Error().Err(err).Msg("config-writer lease could not be started; config applies will refuse until it is")
+	// Bind every listener and run every fallible step, then serve (GitHub
+	// #581 D2a): a start that fails here has served nothing.
+	if err := c.startListeners(ctx, errCh); err != nil {
+		return err
 	}
 
-	// Config apply-journal recovery (LLD 2026-09-13-config-apply-journal §5).
-	// An open journal row means a previous process died mid-apply: finish a
-	// provably complete generation, or restore every pre-image. This runs
-	// BEFORE the scheduler dispatches anything, so no task executes against
-	// a half-applied config bundle. Ambiguous drift is reported and leaves
-	// the row open rather than guessing; boot continues either way, because
-	// refusing to start would take the operator's diagnostic surface down
-	// with it.
-	if err := c.ReconcileConfigApplyJournal(ctx); err != nil {
-		c.Logger.Error().Err(err).Msg("config apply journal reconciliation reported unresolved rows; affected config may be mid-apply — inspect before approving further changes")
+	// Phase 3 judge wiring summary — operators can now see
+	// "judge: enabled, N projects opt in" in the startup log
+	// instead of having to wait for a task to terminate before
+	// learning whether the layer is actually live.
+	c.logJudgeStartupSummary()
+
+	c.Logger.Info().
+		Str("config_path", c.ConfigPath).
+		Str("server_address", c.Config.Server.Address).
+		Msg("vornik started successfully")
+
+	// Notify systemd that the daemon is ready (Type=notify)
+	if err := sdNotifyReady(); err != nil {
+		c.Logger.Warn().Err(err).Msg("sd_notify failed (not running under systemd?)")
+	} else if os.Getenv("NOTIFY_SOCKET") != "" {
+		c.Logger.Info().Msg("notified systemd: READY=1")
 	}
-	// Every DRIFT row has its approver-device card, and a card whose row
-	// was resolved is withdrawn: now, and every five minutes (config-apply
-	// journal design §13.3, GitHub #302).
-	c.StartJournalCardSweep(ctx)
-	// GitHub #800: write each bound repository's review project into this
-	// node's tree, now, after each installation event and every 5 minutes.
-	if c.githubApps != nil {
-		go c.githubApps.run(ctx)
+	if c.held() {
+		// The overdue timer counts from the marker's created_at (§13.6).
+		c.apiServer.ArmHoldDeadline()
+		c.heldServing.Store(true)
+	}
+
+	// Wait for shutdown signal or server error
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("server error: %w", err)
+	case <-ctx.Done():
+		c.beginDrain()
+		return c.shutdown()
+	}
+}
+
+// startWork starts everything that does work (§12.4 of the deploy idle
+// gate design). Its two callers: Run on an unheld start, before the
+// listeners; the release of a held start, after READY=1 (GitHub #586). The
+// order within each starter is the one Run used; the one move is that
+// retention and erasure escalation, which NewContainer used to start, now
+// start right after autonomy. It runs at most once. The work-start law
+// (internal/architecture/work_start_law_586_test.go) keeps every work
+// starter reachable from here.
+func (c *Container) startWork(ctx context.Context) error {
+	if !c.workStarted.CompareAndSwap(false, true) {
+		return nil
+	}
+	// The loops NewContainer constructs: autonomy (#903 order), retention,
+	// erasure escalation.
+	c.startConstructedWork(ctx)
+
+	c.startBrokerLoops()
+	if err := c.recoverAtStart(ctx); err != nil {
+		return err
 	}
 
 	if c.capabilities().RunWorkers {
@@ -2380,39 +2407,88 @@ func (c *Container) Run(ctx context.Context) error {
 	// runs the multi-channel CompletionNotifier wiring + the
 	// per-channel followup-registrar wiring at the tail of its
 	// Start.
+	return nil
+}
 
-	// Bind every listener and run every fallible step, then serve (GitHub
-	// #581 D2a): a start that fails here has served nothing.
-	if err := c.startListeners(ctx, errCh); err != nil {
-		return err
+// startBrokerLoops starts the companion pusher, the broker action worker
+// and the approver-device and standing-grant tickers; part of startWork.
+func (c *Container) startBrokerLoops() {
+	// Broker action worker (broker write-actions design §5.4). Unheld it is
+	// assigned before the HTTP server starts, so the /inbox approve closure
+	// that reads c.brokerActionWorker never races this write. Held, it is
+	// assigned at the release; the hold gate refuses /inbox until the
+	// release stores the hold bit after this returns (GitHub #586, §13.11.2).
+	// The push loop first: the worker's OnChange kicks it.
+	if c.companionPusher = c.newCompanionPusher(); c.companionPusher != nil {
+		if c.Executor != nil {
+			c.Executor.AddCompletionObserver(c.companionPusher)
+		}
+		go c.companionPusher.Run(c.collectorsCtx)
+	}
+	if c.brokerActionWorker = c.newBrokerActionWorker(); c.brokerActionWorker != nil {
+		go c.brokerActionWorker.Run(c.collectorsCtx)
+	}
+	c.startApproverDeviceTicker(c.collectorsCtx)
+	c.startBrokerGrantTicker(c.collectorsCtx)
+}
+
+// recoverAtStart resumes in-flight executions and recovers config state
+// before the scheduler dispatches anything; part of startWork.
+func (c *Container) recoverAtStart(ctx context.Context) error {
+	if c.capabilities().RunWorkers {
+		// testExecutorRecover is a test hook; nil in production.
+		execRec := c.testExecutorRecover
+		if execRec == nil && c.Executor != nil {
+			execRec = c.Executor
+		}
+		if execRec != nil {
+			if err := execRec.Recover(ctx); err != nil {
+				return fmt.Errorf("failed to recover in-flight executions: %w", err)
+			}
+			c.Logger.Info().Msg("executor recovery completed")
+		}
+	} else {
+		c.Logger.Info().Msg("node profile: run_workers=false; task scheduler + executor recovery skipped")
 	}
 
-	// Phase 3 judge wiring summary — operators can now see
-	// "judge: enabled, N projects opt in" in the startup log
-	// instead of having to wait for a task to terminate before
-	// learning whether the layer is actually live.
-	c.logJudgeStartupSummary()
+	// NL Automation Composer crash recovery (task 1.2b slice ii, design
+	// §5.6 step 4) — before the scheduler starts touching the same live
+	// config tree. See container_composer_recovery.go for the full
+	// rationale; best-effort, never fails boot.
+	c.recoverComposerCommits(ctx)
 
-	c.Logger.Info().
-		Str("config_path", c.ConfigPath).
-		Str("server_address", c.Config.Server.Address).
-		Msg("vornik started successfully")
+	// Trading boot reconciliation + equity sampler now owned by
+	// TradingSubsystem (see subsystem_trading.go); their goroutines
+	// launch during c.startSubsystems(ctx).
 
-	// Notify systemd that the daemon is ready (Type=notify)
-	if err := sdNotifyReady(); err != nil {
-		c.Logger.Warn().Err(err).Msg("sd_notify failed (not running under systemd?)")
-	} else if os.Getenv("NOTIFY_SOCKET") != "" {
-		c.Logger.Info().Msg("notified systemd: READY=1")
+	// The config-writer lease comes FIRST — before recovery, because recovery
+	// writes files, and before any apply. Without it every write is refused
+	// as "superseded by a newer leader epoch" (re-audit 2026-09-15, CA-19).
+	if err := c.StartConfigWriterLease(ctx); err != nil {
+		c.Logger.Error().Err(err).Msg("config-writer lease could not be started; config applies will refuse until it is")
 	}
 
-	// Wait for shutdown signal or server error
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("server error: %w", err)
-	case <-ctx.Done():
-		c.beginDrain()
-		return c.shutdown()
+	// Config apply-journal recovery (LLD 2026-09-13-config-apply-journal §5).
+	// An open journal row means a previous process died mid-apply: finish a
+	// provably complete generation, or restore every pre-image. This runs
+	// BEFORE the scheduler dispatches anything, so no task executes against
+	// a half-applied config bundle. Ambiguous drift is reported and leaves
+	// the row open rather than guessing; boot continues either way, because
+	// refusing to start would take the operator's diagnostic surface down
+	// with it.
+	if err := c.ReconcileConfigApplyJournal(ctx); err != nil {
+		c.Logger.Error().Err(err).Msg("config apply journal reconciliation reported unresolved rows; affected config may be mid-apply — inspect before approving further changes")
 	}
+	// Every DRIFT row has its approver-device card, and a card whose row
+	// was resolved is withdrawn: now, and every five minutes (config-apply
+	// journal design §13.3, GitHub #302).
+	c.StartJournalCardSweep(ctx)
+	// GitHub #800: write each bound repository's review project into this
+	// node's tree, now, after each installation event and every 5 minutes.
+	if c.githubApps != nil {
+		go c.githubApps.run(ctx)
+	}
+	return nil
 }
 
 // beginDrain runs the graceful-shutdown pre-step before shutdown()
@@ -2768,6 +2844,11 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 		}
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+	// The restart generation is read before the configuration is parsed,
+	// so every change it counts is in what this process loads (GitHub #799,
+	// operations-API design §6.13 G2).
+	restartGen := restartgen.New(configPath)
+	restartGenLoaded, restartGenOK := restartGen.Read()
 	stored := storedCredentialsForBoot(ctx, boot, configPath, boot.CredentialCandidates())
 	cfg, configPath, bootProv, err := config.LoadWithProvenance(config.WithCredentials(stored.found))
 	if err != nil {
@@ -2788,13 +2869,22 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	// those lines report the community default on an enterprise daemon
 	// (operator report 2026-08-07 — banner said enterprise, four capability
 	// lines said community). Gating was never affected, only the logs.
+	// The start-held marker (GitHub #586), read once, before the container
+	// is built: NewContainer builds the servers the hold gate wraps.
+	holdPath, hold := readStartHold(configPath, time.Now())
+	if hold.Held && hold.Err != nil {
+		fmt.Fprintf(os.Stderr, "vornik: the start-held marker %s is malformed (%v); starting held anyway\n", holdPath, hold.Err)
+	}
 	container, err := NewContainerWithObservability(cfg, configPath, obsCfg,
 		WithBootProvenance(bootProv),
-		WithProviders(providers), WithEdition(edition), WithRestartRequest(requestRestart))
+		WithProviders(providers), WithEdition(edition), WithRestartRequest(requestRestart),
+		WithRestartGeneration(restartGen, restartGenLoaded, restartGenOK),
+		WithStartHold(holdPath, hold))
 	if err != nil {
 		return fmt.Errorf("failed to initialize container: %w", err)
 	}
 	container.logBootCredentials(stored, cfg)
+	container.logUndeclaredConfigKeys(cfg)
 	container.SetVersion(version)
 	container.SetBuildDate(buildDate)
 	container.Logger.Info().
@@ -2808,14 +2898,7 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			if container.ConfigReloader == nil {
-				container.Logger.Warn().Msg("SIGHUP received but config reloader is not wired — ignoring")
-				continue
-			}
-			container.Logger.Info().Msg("SIGHUP received — reloading config")
-			if err := container.ConfigReloader.Reload(); err != nil {
-				container.Logger.Error().Err(err).Msg("SIGHUP reload failed")
-			}
+			container.reloadOnSignal()
 		}
 	}()
 	// signal.Stop stops future deliveries but does not close the channel,
@@ -2840,4 +2923,15 @@ func (c *Container) crossProjectCallRepo() persistence.CrossProjectCallRepositor
 		return nil
 	}
 	return c.repos.CrossProjectCalls
+}
+
+// logUndeclaredConfigKeys warns once per config key the daemon does not
+// declare (GitHub #869, reasoning control design B7). Such a key loads
+// silently and does nothing: chat.thinking_enabled read as "thinking off" for
+// five months after it was removed.
+func (c *Container) logUndeclaredConfigKeys(cfg *config.Config) {
+	for _, key := range cfg.UndeclaredKeys() {
+		c.Logger.Warn().Str("key", key).
+			Msg("config key is not one this daemon reads; it has no effect (removed, misspelt, or for another version). Remove it, or check its spelling")
+	}
 }

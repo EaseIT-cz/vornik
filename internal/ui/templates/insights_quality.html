@@ -111,7 +111,7 @@
                 <div class="px-5 py-3.5 border-b border-surface-600/60"><h2 class="text-sm font-semibold text-ink-200">Needs investigation</h2></div>
                 <div class="divide-y divide-surface-600/60">{{range .View.Attention}}
                     <a href="/ui/executions/{{.ExecutionID}}" class="block px-5 py-3 hover:bg-surface-800/60">
-                        <div class="flex items-center justify-between gap-3"><span class="font-mono text-xs text-brand-400">{{.ExecutionID}}</span><span class="text-xs text-ink-400">{{.Status}}{{if .Score}} · {{scorePercent .Score}}%{{end}}</span></div>
+                        <div class="flex items-center justify-between gap-3"><span class="font-mono text-xs text-brand-400" title="{{.ExecutionID}}">{{shortID .ExecutionID}}</span><span class="text-xs text-ink-400">{{.Status}}{{if .Score}} · {{scorePercent .Score}}%{{end}}</span></div>
                         {{if .Diagnostic}}<p class="mt-1 text-xs font-mono text-rose-700 dark:text-rose-300">{{.Diagnostic}}{{if gt .PinnedCaseCount 0}} · {{.PassedCaseCount}}/{{.PinnedCaseCount}} pinned cases{{end}}</p>{{end}}
                     </a>
                 {{end}}</div>

@@ -226,17 +226,24 @@ func (s *SQLTraceStore) ObservedAgentImages(ctx context.Context, executionIDs []
 	byRole := map[string]map[string]bool{}
 	for _, execID := range executionIDs {
 		rows, err := s.DB.QueryContext(ctx, fmt.Sprintf(`
-			SELECT role, agent_image_id FROM execution_step_outcomes
+			SELECT role, agent_image_id, error_class FROM execution_step_outcomes
 			 WHERE execution_id = %s AND role <> ''`, s.Dialect.arg(1)), execID)
 		if err != nil {
 			return nil, fmt.Errorf("read agent images for %s: %w", execID, err)
 		}
 		for rows.Next() {
 			var role string
-			var imageID sql.NullString
-			if err := rows.Scan(&role, &imageID); err != nil {
+			var imageID, errorClass sql.NullString
+			if err := rows.Scan(&role, &imageID, &errorClass); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf("scan agent image: %w", err)
+			}
+			// The executor classifies a step whose container never ran
+			// container_start_failed from the error's type. No image ran, so
+			// the role was not observed (GitHub #924). Any other row without
+			// an immutable image is still missing provenance.
+			if imageID.String == "" && errorClass.String == classContainerNeverStarted {
+				continue
 			}
 			if !imageID.Valid || !strings.HasPrefix(imageID.String, "sha256:") || len(imageID.String) == len("sha256:") {
 				_ = rows.Close()
@@ -567,3 +574,9 @@ func decodeStrings(blob []byte) ([]string, error) {
 	}
 	return out, nil
 }
+
+// classContainerNeverStarted is stepoutcome.ClassContainerStartFailed, the
+// class the executor gives a step whose container never ran. A literal, not
+// an import, so the scorer-path guard's import set is unchanged;
+// TestClassContainerNeverStarted_MatchesTheExecutor_924 pins the two.
+const classContainerNeverStarted = "container_start_failed"

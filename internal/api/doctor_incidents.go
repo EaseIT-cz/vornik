@@ -5,9 +5,24 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"vornik.io/vornik/internal/persistence/postgres"
 )
+
+// BreachLedger is the one read the Art 33 deadline check needs from the breach
+// ledger. subjectstore.IncidentRepository satisfies it on both drivers
+// (GitHub #475; GDPR design §4.21).
+type BreachLedger interface {
+	CountLiveByDeadline(ctx context.Context, now time.Time) (overdue, soon int, err error)
+}
+
+// SetBreachLedger wires the ledger behind checkBreachDeadlines. The container
+// passes the driver-resolved repository it gives the regulatory page, so the
+// doctor and the page read one ledger. Nil leaves the check SKIPPED.
+func (h *DoctorHandlers) SetBreachLedger(l BreachLedger) {
+	if h == nil {
+		return
+	}
+	h.breachLedger = l
+}
 
 // checkBreachDeadlines surfaces undischarged Art 33 breach notifications.
 //
@@ -26,29 +41,23 @@ import (
 func (h *DoctorHandlers) checkBreachDeadlines(ctx context.Context) DoctorCheck {
 	name := "breach_deadlines"
 
-	if h.db == nil {
-		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no database handle"}
+	if h == nil || h.breachLedger == nil {
+		return DoctorCheck{Name: name, Status: "SKIPPED",
+			Message: "breach ledger not wired into the doctor (no database, or an unsupported driver)"}
 	}
-	repo := postgres.NewIncidentRepository(h.db)
-	overdue, soon, err := repo.CountLiveByDeadline(ctx, time.Now())
+	overdue, soon, err := h.breachLedger.CountLiveByDeadline(ctx, time.Now())
 	if err != nil {
-		// A deployment predating migration 143 has no table; that is not a
-		// finding, and reporting it as one would train operators to ignore this
-		// check.
-		//
-		// Neither is a SQLite deployment: the incident ledger has only a
-		// Postgres repository, so this is the check the portability rule's
-		// escape hatch was written for (doctor design, Extension 2026-09-04
-		// E2). What it must NOT do is paste the driver's error in as its
-		// verdict — "no such column: state" tells an operator nothing and
-		// reads like a defect in the daemon. SKIPPED, with the reason in
-		// operator language; the raw error stays in the check's Items for
-		// anyone diagnosing.
-		msg := "breach ledger not available on this deployment — the Art 33 " +
-			"incident store is Postgres-only, and a deployment predating " +
-			"migration 143 has no table on any driver"
+		// A database predating the ledger's schema (Postgres migration 143, or
+		// a SQLite file from before GitHub #475 that has not migrated) has no
+		// table; that is not a finding, and reporting it as one would train
+		// operators to ignore this check. Nor may the driver's error be the
+		// verdict (doctor design, Extension 2026-09-04 E2): "no such column:
+		// state" tells an operator nothing. SKIPPED, with the reason in
+		// operator language; the raw error stays in Items for diagnosis.
+		msg := "breach ledger not present on this database (it predates the ledger's " +
+			"schema), so no Art 33 deadline was examined"
 		if !isMissingRelation(err) {
-			msg = fmt.Sprintf("breach ledger not queryable (%v)", err)
+			msg = "breach ledger could not be read, so no Art 33 deadline was examined"
 		}
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: msg,
 			Items: []string{fmt.Sprintf("underlying error: %v", err)}}

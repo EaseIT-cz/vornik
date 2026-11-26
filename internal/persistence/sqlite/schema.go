@@ -33,69 +33,7 @@ const schemaSQL = `
 -- ============================================================
 -- tasks
 -- ============================================================
-CREATE TABLE IF NOT EXISTS tasks (
-    id                  TEXT PRIMARY KEY,
-    project_id          TEXT NOT NULL,
-    workflow_id         TEXT,
-    idempotency_key     TEXT,
-    parent_task_id      TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-    creation_source     TEXT NOT NULL DEFAULT 'USER'
-                        CHECK (creation_source IN ('USER', 'DELEGATION', 'AUTONOMOUS', 'ROUTE', 'A2A', 'COMPANION', 'SCHEDULED', 'CHECKPOINT', 'FORK')),
-    delegation_mode     TEXT
-                        CHECK (delegation_mode IS NULL OR delegation_mode IN ('SEQUENTIAL', 'PARALLEL', 'FAN_OUT')),
-    status              TEXT NOT NULL DEFAULT 'QUEUED'
-                        CHECK (status IN ('QUEUED','LEASED','RUNNING','PENDING',
-                                          'COMPLETED','FAILED','CANCELLED',
-                                          'WAITING_FOR_CHILDREN','AWAITING_INPUT',
-                                          'AWAITING_EXTERNAL','CLOSED','PAUSED',
-                                          'AWAITING_APPROVAL')),
-    priority            INTEGER NOT NULL DEFAULT 50,
-    payload             BLOB,
-    dependencies        TEXT NOT NULL DEFAULT '[]', -- JSON array
-    lease_id            TEXT,
-    leased_at           TEXT,
-    leased_by           TEXT,
-    lease_expires_at    TEXT,
-    attempt             INTEGER NOT NULL DEFAULT 0,
-    max_attempts        INTEGER NOT NULL DEFAULT 3,
-    last_error          TEXT,
-    last_error_class    TEXT,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL,
-    -- Phase 23 conversational lifecycle columns:
-    brief_amended_at    TEXT,
-    current_phase       TEXT,
-    expected_by         TEXT,
-    closed_at           TEXT,
-    closed_by           TEXT,
-    -- Migration 161 parity: when the task entered FAILED, as distinct from
-    -- when its row was last written. updated_at cannot answer that — it is
-    -- stamped on any modification, so a sweep touching an old FAILED row made
-    -- it look freshly broken.
-    failed_at           TEXT,
-    message_count       INTEGER NOT NULL DEFAULT 0,
-    open_checkpoint_id  TEXT,
-    -- Migration v46 parity: soft link to the dispatcher turn that
-    -- created this task. See migrations.go for rationale.
-    chat_turn_id        TEXT,
-    -- Migration 133 parity: set by RequeueTerminalTask when an operator
-    -- retries/requeues this terminal task (any surface — inbox/API/chat/
-    -- Telegram/doctor), so the Outcome Inbox keeps it visible as "Retrying…"
-    -- until the re-run terminates. Server-side only (set + filtered, not scanned).
-    retry_requested_at  TEXT,
-    -- Migration 136 parity: per-task lifetime cost governor override
-    -- (LLD 2026-07-24 §3.1). NULL = inherit project default_task_budget_usd;
-    -- when set, always strictly positive (write layer rejects 0).
-    budget_usd          REAL,
-    -- Migration 148 parity: API key that authenticated this task's creation,
-    -- when known (REST POST /tasks or the companion MCP delegate). NULL for
-    -- chat/webhook/autonomy/executor-spawned tasks — there is no key behind
-    -- them. Powers the spend-per-API-key UI.
-    created_by_api_key_id TEXT,
-    created_by_actor TEXT,
-    goal_origin TEXT,
-    UNIQUE (project_id, idempotency_key)
-);
+` + tasksTableSQL + `;
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent     ON tasks(parent_task_id);
@@ -324,7 +262,8 @@ CREATE TABLE IF NOT EXISTS autonomy_evaluations (
     workflow_id TEXT NOT NULL DEFAULT '',
     prompt_hash TEXT NOT NULL DEFAULT '',
     duration_ms INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    proposed_prompt TEXT -- migration 261 (#602): set only on WOULD_START
 );
 CREATE INDEX IF NOT EXISTS idx_autonomy_eval_project_created ON autonomy_evaluations(project_id, created_at DESC);
 
@@ -755,6 +694,27 @@ CREATE TABLE IF NOT EXISTS approver_notice_acks (
     acked_by   TEXT NOT NULL
 );
 
+-- Postgres migration 260: companion keys bound to a GitHub Actions workflow
+-- (GitHub #792, design 27). The claim set is unique; event_names is stored
+-- sorted. Reads join api_keys, since foreign keys are off here.
+CREATE TABLE IF NOT EXISTS companion_key_oidc_trusts (
+    id               TEXT PRIMARY KEY,
+    key_id           TEXT NOT NULL,
+    issuer           TEXT NOT NULL,
+    audience         TEXT NOT NULL,
+    repository_id    INTEGER NOT NULL,
+    repository       TEXT NOT NULL,
+    ref              TEXT NOT NULL,
+    job_workflow_ref TEXT NOT NULL,
+    event_names      TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    created_by       TEXT NOT NULL,
+    last_used_at     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_companion_key_oidc_trusts_claims ON companion_key_oidc_trusts
+    (issuer, audience, repository_id, repository, ref, job_workflow_ref, event_names);
+CREATE INDEX IF NOT EXISTS idx_companion_key_oidc_trusts_key ON companion_key_oidc_trusts (key_id);
+
 -- Postgres migration 256: GitHub App-manifest states (GitHub #802,
 -- github-app-channel design, "One-click App creation", Data).
 CREATE TABLE IF NOT EXISTS github_app_manifest_states (
@@ -1140,6 +1100,38 @@ CREATE TABLE IF NOT EXISTS data_subject_requests (
 CREATE INDEX IF NOT EXISTS idx_ds_requests_live
     ON data_subject_requests(opened_at) WHERE state IN ('open', 'verified');
 CREATE INDEX IF NOT EXISTS idx_ds_requests_subject ON data_subject_requests(subject_id);
+
+-- ============================================================
+-- security_incidents — the GDPR Art 33/34 breach ledger (postgres migration
+-- 143; GitHub #475). Column for column with Postgres; no CHECK, because
+-- Postgres has none (state and the risk answers are validated in
+-- internal/incident). created_at/updated_at carry no default: the repository
+-- binds both in the fixed-width sqliteTime form.
+-- see LLD § https://docs.vornik.io §4.21
+-- ============================================================
+CREATE TABLE IF NOT EXISTS security_incidents (
+    id                    TEXT PRIMARY KEY,
+    state                 TEXT NOT NULL,
+    occurred_at           TEXT,
+    became_aware_at       TEXT NOT NULL,
+    facts                 TEXT NOT NULL DEFAULT '',
+    effects               TEXT NOT NULL DEFAULT '',
+    remedial              TEXT NOT NULL DEFAULT '',
+    authority_risk        TEXT NOT NULL DEFAULT '',
+    authority_risk_reason TEXT NOT NULL DEFAULT '',
+    notified_authority_at TEXT,
+    authority_reference   TEXT NOT NULL DEFAULT '',
+    subject_risk          TEXT NOT NULL DEFAULT '',
+    subject_risk_reason   TEXT NOT NULL DEFAULT '',
+    notified_subjects_at  TEXT,
+    subject_exemption     TEXT NOT NULL DEFAULT '',
+    assessed_by           TEXT NOT NULL DEFAULT '',
+    closed_at             TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_live
+    ON security_incidents(became_aware_at) WHERE state IN ('detected', 'assessed');
 
 -- ============================================================
 -- memory_policy_evaluations — the memory firewall's evaluation audit
@@ -1856,36 +1848,16 @@ CREATE INDEX IF NOT EXISTS idx_execution_hints_task_pending
 -- Parity notes vs the Postgres side:
 --   - trigger_json JSONB → BLOB (raw JSON bytes, parsed on read).
 --   - confidence DOUBLE PRECISION → REAL.
---   - CHECK constraints mirror the models.go domain/status/source/
---     polarity constants — keep them in sync when adding values
---     (the CHECK-parity lesson).
+--   - CHECK constraints mirror the models.go status/source/polarity
+--     constants — keep them in sync when adding values (the
+--     CHECK-parity lesson). NOT domain: it has no CHECK on either driver
+--     (GitHub #887), and persistence.InstinctDomains lists its values.
 --   - idx_instincts_dedup UNIQUE (scope, project_id, trigger_key)
 --     is the upsert atomicity key.
 --   - instinct_evidence PK (instinct_id, outcome_id) makes the
 --     extraction worker idempotent across overlapping windows.
 -- ============================================================
-CREATE TABLE IF NOT EXISTS instincts (
-    id               TEXT PRIMARY KEY,
-    scope            TEXT NOT NULL DEFAULT 'project'
-                     CHECK (scope IN ('project','global')),
-    project_id       TEXT NOT NULL DEFAULT '',
-    domain           TEXT NOT NULL
-                     CHECK (domain IN ('recovery','cost','quality','retrieval','workflow')),
-    trigger_key      TEXT NOT NULL,
-    trigger_json     BLOB,
-    action           TEXT NOT NULL,
-    confidence       REAL NOT NULL DEFAULT 0,
-    support_count    INTEGER NOT NULL DEFAULT 0,
-    contradict_count INTEGER NOT NULL DEFAULT 0,
-    source           TEXT NOT NULL DEFAULT 'observer'
-                     CHECK (source IN ('observer','operator','architect-reject')),
-    status           TEXT NOT NULL DEFAULT 'candidate'
-                     CHECK (status IN ('candidate','active','promoted','retired')),
-    distill_model    TEXT NOT NULL DEFAULT '',
-    created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL,
-    last_seen_at     TEXT NOT NULL
-);
+` + instinctsTableSQL + `;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_instincts_dedup ON instincts(scope, project_id, trigger_key);
 CREATE INDEX IF NOT EXISTS idx_instincts_project_domain ON instincts(project_id, domain);
 CREATE INDEX IF NOT EXISTS idx_instincts_status_confidence ON instincts(status, confidence DESC);
@@ -2753,4 +2725,99 @@ const memoryVerificationEventsTableSQL = `CREATE TABLE IF NOT EXISTS memory_veri
     deverified        INTEGER NOT NULL DEFAULT 0,
     skipped           INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL
+)`
+
+// instinctsTableSQL is shared by schemaSQL and the instincts rebuild in
+// sqliteTableRebuilds (GitHub #887): the domain column has no CHECK, as on
+// Postgres, and the marker comment tells the rebuild an existing table is
+// already current.
+const instinctsTableSQL = `CREATE TABLE IF NOT EXISTS instincts (
+    id               TEXT PRIMARY KEY,
+    scope            TEXT NOT NULL DEFAULT 'project'
+                     CHECK (scope IN ('project','global')),
+    project_id       TEXT NOT NULL DEFAULT '',
+    -- domain: no CHECK (#887). Plain TEXT, as on Postgres: new domains
+    -- land with a code change (persistence.InstinctDomains), not a migration.
+    domain           TEXT NOT NULL,
+    trigger_key      TEXT NOT NULL,
+    trigger_json     BLOB,
+    action           TEXT NOT NULL,
+    confidence       REAL NOT NULL DEFAULT 0,
+    support_count    INTEGER NOT NULL DEFAULT 0,
+    contradict_count INTEGER NOT NULL DEFAULT 0,
+    source           TEXT NOT NULL DEFAULT 'observer'
+                     CHECK (source IN ('observer','operator','architect-reject')),
+    status           TEXT NOT NULL DEFAULT 'candidate'
+                     CHECK (status IN ('candidate','active','promoted','retired')),
+    distill_model    TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    last_seen_at     TEXT NOT NULL
+)`
+
+// tasksTableSQL is the tasks table, shared by schemaSQL and the rebuild that
+// widens creation_source's CHECK on an existing database (Postgres migration
+// 265, HANDOVER: agent-administered design part 24 §24.3, GitHub #920).
+const tasksTableSQL = `CREATE TABLE IF NOT EXISTS tasks (
+    id                  TEXT PRIMARY KEY,
+    project_id          TEXT NOT NULL,
+    workflow_id         TEXT,
+    idempotency_key     TEXT,
+    parent_task_id      TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    creation_source     TEXT NOT NULL DEFAULT 'USER'
+                        CHECK (creation_source IN ('USER', 'DELEGATION', 'AUTONOMOUS', 'ROUTE', 'A2A', 'COMPANION', 'SCHEDULED', 'CHECKPOINT', 'FORK', 'HANDOVER')),
+    delegation_mode     TEXT
+                        CHECK (delegation_mode IS NULL OR delegation_mode IN ('SEQUENTIAL', 'PARALLEL', 'FAN_OUT')),
+    status              TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK (status IN ('QUEUED','LEASED','RUNNING','PENDING',
+                                          'COMPLETED','FAILED','CANCELLED',
+                                          'WAITING_FOR_CHILDREN','AWAITING_INPUT',
+                                          'AWAITING_EXTERNAL','CLOSED','PAUSED',
+                                          'AWAITING_APPROVAL')),
+    priority            INTEGER NOT NULL DEFAULT 50,
+    payload             BLOB,
+    dependencies        TEXT NOT NULL DEFAULT '[]', -- JSON array
+    lease_id            TEXT,
+    leased_at           TEXT,
+    leased_by           TEXT,
+    lease_expires_at    TEXT,
+    attempt             INTEGER NOT NULL DEFAULT 0,
+    max_attempts        INTEGER NOT NULL DEFAULT 3,
+    last_error          TEXT,
+    last_error_class    TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    -- Phase 23 conversational lifecycle columns:
+    brief_amended_at    TEXT,
+    current_phase       TEXT,
+    expected_by         TEXT,
+    closed_at           TEXT,
+    closed_by           TEXT,
+    -- Migration 161 parity: when the task entered FAILED, as distinct from
+    -- when its row was last written. updated_at cannot answer that — it is
+    -- stamped on any modification, so a sweep touching an old FAILED row made
+    -- it look freshly broken.
+    failed_at           TEXT,
+    message_count       INTEGER NOT NULL DEFAULT 0,
+    open_checkpoint_id  TEXT,
+    -- Migration v46 parity: soft link to the dispatcher turn that
+    -- created this task. See migrations.go for rationale.
+    chat_turn_id        TEXT,
+    -- Migration 133 parity: set by RequeueTerminalTask when an operator
+    -- retries/requeues this terminal task (any surface — inbox/API/chat/
+    -- Telegram/doctor), so the Outcome Inbox keeps it visible as "Retrying…"
+    -- until the re-run terminates. Server-side only (set + filtered, not scanned).
+    retry_requested_at  TEXT,
+    -- Migration 136 parity: per-task lifetime cost governor override
+    -- (LLD 2026-07-24 §3.1). NULL = inherit project default_task_budget_usd;
+    -- when set, always strictly positive (write layer rejects 0).
+    budget_usd          REAL,
+    -- Migration 148 parity: API key that authenticated this task's creation,
+    -- when known (REST POST /tasks or the companion MCP delegate). NULL for
+    -- chat/webhook/autonomy/executor-spawned tasks — there is no key behind
+    -- them. Powers the spend-per-API-key UI.
+    created_by_api_key_id TEXT,
+    created_by_actor TEXT,
+    goal_origin TEXT,
+    UNIQUE (project_id, idempotency_key)
 )`

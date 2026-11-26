@@ -72,6 +72,18 @@ claude plugin install vornik-companion@vornik</pre>
                 <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Name</th><th>Client</th><th>Can</th><th>Created</th><th>Last used</th><th></th></tr></thead>
                 <tbody id="companion-keys"></tbody>
             </table>
+
+            <h2 class="text-base font-semibold text-gray-100 pt-2">Companion hints</h2>
+            <p class="text-sm text-gray-400">Hints are short reminders your assistant's plugin shows at the right moment, such as recalling memory before a code dive. This shows each hint's state and how often it was followed. To mute one, list its id under <code class="font-mono">companion.mute</code> in the project's settings.</p>
+            <div id="companion-hints-note" class="text-sm text-gray-400 hidden"></div>
+            <table class="w-full text-sm">
+                <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Hint</th><th>State</th><th>Recent</th><th>All time</th></tr></thead>
+                <tbody id="companion-hints"></tbody>
+            </table>
+            <table class="w-full text-sm">
+                <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Key</th><th>Last catalogue fetch</th><th>Last outcome upload</th></tr></thead>
+                <tbody id="companion-hint-clients"></tbody>
+            </table>
             <div id="companion-root" class="hidden" data-vornik-url="{{.VornikURL}}"></div>
             {{end}}
         </div>

@@ -176,6 +176,9 @@ func discoverWiringSites(t *testing.T, root string) map[string]string {
 			}
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
+			if !regexMayMatch(wiringSitePattern, b) { // #888 pre-filter
+				return nil
+			}
 			for _, line := range strings.Split(string(b), "\n") {
 				if !wiringSitePattern.MatchString(line) {
 					continue

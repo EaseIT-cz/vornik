@@ -46,6 +46,9 @@ maxConcurrentTasks: 3   # independent tasks can run in parallel
 
 autonomy:
   enabled: false
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   # Autonomy mode (llm | cron | backlog). Generic assistants tend
   # to need state-aware picking across per-feed/per-portal
   # cadences — keep `llm` here. Flip to `cron` if you have a

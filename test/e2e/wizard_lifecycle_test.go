@@ -53,6 +53,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	sqliterepo "vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/testutil/testenv"
 )
 
@@ -206,7 +207,28 @@ func runE2E(m *testing.M) (int, error) {
 		}
 		return 1, fmt.Errorf("daemon never became healthy: %w", err)
 	}
-	return m.Run(), nil
+	code := m.Run()
+	if code != 0 {
+		// A failed test leaves the daemon's side of it here, before the work
+		// directory is removed (testing design 19 §17, GitHub #855).
+		printDaemonLogTail(filepath.Join(work, "daemon.log"), 400)
+	}
+	return code, nil
+}
+
+// printDaemonLogTail writes the last n lines of the shared daemon's log to
+// stderr.
+func printDaemonLogTail(path string, n int) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[e2e] daemon log unreadable:", err)
+		return
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	fmt.Fprintf(os.Stderr, "[e2e] a test failed; the daemon log's last %d lines:\n%s\n", len(lines), strings.Join(lines, "\n"))
 }
 
 // --- Scenario 1: create → commit → live → delete via UI ---
@@ -310,7 +332,10 @@ func TestWizardCreateCommitLiveDelete(t *testing.T) {
 	if resp.StatusCode >= 400 {
 		t.Fatalf("archive via UI: HTTP %d, body=%s", resp.StatusCode, ab)
 	}
-	resp, dn := doReq(t, http.MethodPost, "/ui/projects/"+projectID+"/delete-now", "", nil)
+	// delete-now waits up to DefaultDeleteNowWait for the sweeper's outcome,
+	// so its client waits longer than that (testing design 19 §17, #855).
+	resp, dn := doReqTimeout(t, http.MethodPost, "/ui/projects/"+projectID+"/delete-now", "", nil,
+		projectarchive.DefaultDeleteNowWait+10*time.Second)
 	if resp.StatusCode >= 400 {
 		t.Fatalf("delete-now via UI: HTTP %d, body=%s", resp.StatusCode, dn)
 	}
@@ -394,6 +419,11 @@ func seedSession(t *testing.T, s *persistence.ProjectWizardSession) string {
 
 func doReq(t *testing.T, method, path, contentType string, body io.Reader) (*http.Response, string) {
 	t.Helper()
+	return doReqTimeout(t, method, path, contentType, body, 15*time.Second)
+}
+
+func doReqTimeout(t *testing.T, method, path, contentType string, body io.Reader, timeout time.Duration) (*http.Response, string) {
+	t.Helper()
 	req, err := http.NewRequest(method, httpBase+path, body)
 	if err != nil {
 		t.Fatalf("new request %s %s: %v", method, path, err)
@@ -404,7 +434,7 @@ func doReq(t *testing.T, method, path, contentType string, body io.Reader) (*htt
 	// Don't auto-follow redirects — UI POSTs answer 303 and we assert
 	// on the redirect status, not the followed page.
 	client := &http.Client{
-		Timeout:       15 * time.Second,
+		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)

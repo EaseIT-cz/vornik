@@ -147,6 +147,20 @@ func (f *retentionFixture) projectSteps() {
 	retrieval("mra-thr-minus-1h", floor.Add(-time.Hour), false)
 	retrieval("mra-400d", f.daysAgo(400), false)
 
+	// GitHub #870 (2026-11-21): autonomy_evaluations follows the tool-audit
+	// window, floor included (retention design §5b). An observe-mode row's
+	// proposed_prompt is model text that can name a person.
+	tick := func(name string, at time.Time, keep bool) {
+		id := uniqueID(name)
+		f.seed("autonomy_evaluations", "id", id, keep, `INSERT INTO autonomy_evaluations
+			(id, project_id, outcome, proposed_prompt, created_at) VALUES ($1, $2, 'WOULD_START', 'ask the plumber', $3)`,
+			id, project, f.seedTime(at))
+	}
+	tick("ae-29d", f.daysAgo(29), true)
+	tick("ae-thr-plus-1h", floor.Add(time.Hour), true)
+	tick("ae-thr-minus-1h", floor.Add(-time.Hour), false)
+	tick("ae-400d", f.daysAgo(400), false)
+
 	evaluation := func(name, decision string, at time.Time, keep bool) {
 		id := uniqueID(name)
 		f.seed("memory_policy_evaluations", "id", id, keep, `INSERT INTO memory_policy_evaluations
@@ -185,6 +199,7 @@ func (f *retentionFixture) projectSteps() {
 		{"tool_audit_log", preview.ToolAudit, swept.ToolAudit, 3},
 		{"agent_admin_refusals", preview.AgentAdminRefusals, swept.AgentAdminRefusals, 2},
 		{"memory_retrieval_audit", preview.MemoryRetrievalAudit, swept.MemoryRetrievalAudit, 2},
+		{"autonomy_evaluations", preview.AutonomyEvaluations, swept.AutonomyEvaluations, 2},
 		{"allow evaluations", preview.MemoryPolicyEvalAllow, swept.MemoryPolicyEvalAllow, 2},
 		{"block evaluations", preview.MemoryPolicyEvalBlock, swept.MemoryPolicyEvalBlock, 1},
 		{"artifacts", preview.Artifacts, swept.Artifacts, 2},

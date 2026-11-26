@@ -23,12 +23,15 @@ import (
 // Documents is omitted when empty, so a workflow with no document hashes
 // exactly as it did before documents existed.
 type ReachSignature struct {
-	Egress       json.RawMessage           `json:"egress"`
-	Integrations []string                  `json:"integrations"`
-	Credentials  []string                  `json:"credentials"`
-	Proposes     json.RawMessage           `json:"proposes"`
-	Schedule     string                    `json:"schedule"`
-	Documents    []registry.BrokerDocument `json:"documents,omitempty"`
+	Egress       json.RawMessage `json:"egress"`
+	Integrations []string        `json:"integrations"`
+	Credentials  []string        `json:"credentials"`
+	Proposes     json.RawMessage `json:"proposes"`
+	Schedule     string          `json:"schedule"`
+	// HandOver is broker.hand_over's canonical JSON, omitted when none, so a
+	// workflow without one keeps its hash (part 24 §24.3 B4).
+	HandOver  string                    `json:"hand_over,omitempty"`
+	Documents []registry.BrokerDocument `json:"documents,omitempty"`
 	// Accounts maps every integration the workflow reaches (by its roles'
 	// tools or its proposes) to its account label (design §22.2.4; GitHub
 	// #119 item 8). It is filled only when some label is not the default,
@@ -61,6 +64,13 @@ func SignatureOf(p *registry.Project, sw *registry.Swarm, wf *registry.Workflow)
 		return sig, fmt.Errorf("schedule: %w", err)
 	}
 	sig.Schedule = sched
+	if h := wf.Broker.HandOver; h != nil {
+		b, err := canonicalOf(h)
+		if err != nil {
+			return sig, fmt.Errorf("hand_over: %w", err)
+		}
+		sig.HandOver = string(b)
+	}
 	// Sorted by property (registry.WorkflowBroker.Documents).
 	sig.Documents = wf.Broker.Documents()
 

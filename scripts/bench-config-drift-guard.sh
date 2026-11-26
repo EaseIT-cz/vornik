@@ -29,11 +29,21 @@
 # (check 3b refuses only a cross-provider fallback). Messages go to stderr on
 # refusal and to stdout on success.
 bench_assert_config_matches_build() {
-    python3 - "$1" "$2" "$3" "$4" "${5:-}" <<'PY'
-import glob, json, os, sys
+    python3 - "$1" "$2" "$3" "$4" "${5:-}" "${6:-}" <<'PY'
+import glob, hashlib, json, os, sys
 import yaml
 
-cfg, tpl, swarm, tasks, model = sys.argv[1:6]
+cfg, tpl, swarm, tasks, model, promoted_file = sys.argv[1:7]
+
+# GitHub #890 (design §12.37, part 3): during a learning arm's measured pass,
+# a workflow the arm promoted is accepted at its latest promotion's SHA-256
+# ("<workflow> <sha256>" lines; "-" = no readable hash) and at nothing else.
+promoted = {}
+if promoted_file:
+    for line in open(promoted_file, encoding="utf-8"):
+        parts = line.split()
+        if len(parts) == 2:
+            promoted[parts[0]] = parts[1]
 IGNORED = ("model", "modelFallback")  # plus runtime.image, removed below
 
 def load(path):
@@ -78,11 +88,20 @@ if not workflows:
     sys.exit(1)
 
 files = [f"swarms/{swarm}.md"] + [f"workflows/{w}.md" for w in workflows]
-problems = []
+problems, accepted = [], []
 for rel in files:
     mine, theirs = os.path.join(cfg, rel), os.path.join(tpl, rel)
     if not os.path.exists(mine):
         problems.append(f"{rel}: the arm runs it, but the bench configs tree has no such file")
+        continue
+    wid = rel[len("workflows/"):-3] if rel.startswith("workflows/") else None
+    if wid in promoted and os.path.exists(theirs) and open(mine, "rb").read() != open(theirs, "rb").read():
+        have = hashlib.sha256(open(mine, "rb").read()).hexdigest()
+        if promoted[wid] == have:
+            accepted.append(f"{rel} accepted as promoted ({have})")
+        else:
+            problems.append(f"{rel}: differs from this arm's promotion of it "
+                            f"(file {have}, promotion {promoted[wid]}): a hand edit, or a promotion whose bytes cannot be read")
         continue
     if not os.path.exists(theirs):
         problems.append(f"{rel}: the build has no template for it, so it cannot be checked")
@@ -118,6 +137,7 @@ others = len([p for p in glob.glob(os.path.join(cfg, "workflows", "*.md"))
 models = f"every role on {model}" if model else "role models not checked (no arm model named)"
 print(f"{len(files)} file(s) compared with the build ({', '.join(files)}); "
       f"{others} workflow file(s) in the tree no task runs, not compared; "
-      f"ignored per role: model, modelFallback, runtime.image; {models}")
+      f"ignored per role: model, modelFallback, runtime.image; {models}"
+      + "".join(f"; {a}" for a in accepted))
 PY
 }

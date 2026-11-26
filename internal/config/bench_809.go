@@ -51,9 +51,15 @@ func (l BenchLearningConfig) Set() bool { return l != BenchLearningConfig{} }
 
 // validate refuses a bench.learning block on a daemon that is not a bench
 // instance writing an agentbench_ database.
-func (b BenchConfig) validate(databaseName string) error {
+//
+// Since #890 (design §12.37) it also refuses a driver other than Postgres:
+// the freeze names its database by the Postgres OID.
+func (b BenchConfig) validate(databaseName, driver string) error {
 	if !b.Learning.Set() {
 		return nil
+	}
+	if driver != "" && driver != "postgres" {
+		return fmt.Errorf("bench.learning is set, but database.driver is %q: the learning study's freeze names its database by its Postgres OID, so a learning bench runs on postgres", driver)
 	}
 	if !b.Instance || !strings.HasPrefix(databaseName, "agentbench_") {
 		return fmt.Errorf("bench.learning is set, but this daemon is not a benchmark instance "+

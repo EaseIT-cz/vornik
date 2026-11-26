@@ -131,9 +131,8 @@ func TestOpsContract794_RestartFieldsAndMemoryCommit(t *testing.T) {
 		t.Fatal("no v1 document")
 	}
 	doc := string(raw)
-	if !strings.Contains(doc, "  version: 1.4.0") {
-		t.Fatal("the contract is not 1.4.0")
-	}
+	// The version is pinned by the newest contract test
+	// (TestOpsContract799_Generations), as #794 did for #629's.
 	_, rest, _ := strings.Cut(doc, "/api/v1/setup/status:")
 	status, _, _ := strings.Cut(rest, "\n  /api/")
 	for _, f := range []string{"restart_pending:", "restart_reasons:"} {

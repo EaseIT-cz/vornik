@@ -21,7 +21,7 @@ const FailureNoticeEvery = time.Hour
 // within the hour).
 var FailureNotices = promauto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "vornik", Name: "channel_failure_notices_total",
-	Help: "Failure notices for failed chat turns on GitHub and email, by outcome: sent, send_failed, suppressed (GitHub #369).",
+	Help: "Failure notices for failed chat turns on GitHub, email and Slack, by outcome: sent, send_failed, suppressed (GitHub #369, #914).",
 }, []string{"channel", "outcome"})
 
 // NoticeWindow allows one notice per key per FailureNoticeEvery. Entries

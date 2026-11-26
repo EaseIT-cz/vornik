@@ -30,6 +30,9 @@ func censusCount(t *testing.T, re *regexp.Regexp, skip func(string) bool) map[st
 		if err != nil {
 			t.Fatal(err)
 		}
+		if !regexMayMatch(re, b) { // #888 pre-filter
+			continue
+		}
 		if n := len(re.FindAll(b, -1)); n > 0 {
 			got[f] = n
 		}

@@ -61,13 +61,19 @@ type Trace struct {
 
 // Request is one intent (design §3: one-shot, loop inside).
 type Request struct {
-	ProjectID      string
-	Intent         string
-	Entrypoint     string
-	Actor          Actor
-	RequestID      string
-	IdempotencyKey string
-	Trace          *Trace
+	ProjectID  string
+	Intent     string
+	Entrypoint string
+	// healingWorkflowID is the workflow a healing request was asked to repair.
+	// Its file is admitted to the read and write scope, which otherwise hold
+	// only the project's default and autonomy workflows (GitHub #892, design
+	// §6.3.4d). Unexported, so only this package sets it, and only
+	// ProposeForHealing does (the one assembler of the system entrypoint).
+	healingWorkflowID string
+	Actor             Actor
+	RequestID         string
+	IdempotencyKey    string
+	Trace             *Trace
 	// EvidenceRunIDs is the healing initiator's ≥3 run ids (WP9); empty
 	// for operator intents.
 	EvidenceRunIDs []string
@@ -238,9 +244,10 @@ func (e *Engine) Propose(ctx context.Context, req Request) (*Result, error) {
 		return refuse(res, RefuseSubjectDisabled, "workflow "+wf.ID+" opted out (config_assistant_enabled: false)"), nil
 	}
 
-	// Different-family judge on the request path (test 37).
-	if e.Judge != nil && modelfamily.SameFamily(e.assistantModelID(cfg), e.judgeModelID(cfg)) {
-		return refuse(res, RefuseModelFamily, fmt.Sprintf("assistant %q and judge %q are the same provider family (or unclassifiable); refusing rather than self-judging", e.assistantModelID(cfg), e.judgeModelID(cfg))), nil
+	// Different-family judge on the request path (test 37; one rule since
+	// #891, design §7.3a).
+	if p := e.judgePairProblem(cfg); p != "" {
+		return refuse(res, RefuseModelFamily, p+"; refusing rather than self-judging"), nil
 	}
 
 	// Admission (R8): per-project concurrency.
@@ -254,6 +261,11 @@ func (e *Engine) Propose(ctx context.Context, req Request) (*Result, error) {
 	g, err := BuildGrounding(ctx, e.Registry, e.Evidence, req.ProjectID)
 	if err != nil {
 		return nil, err
+	}
+	// A healing request names the one file it may change; that file joins
+	// the scope, nothing else does (#892).
+	if req.healingWorkflowID != "" {
+		g.ProjectFiles = append(g.ProjectFiles, "workflows/"+req.healingWorkflowID+".md")
 	}
 	res.Evidence = g.RenderEvidence()
 	res.HasEvidence = g.HasMeasurement()
@@ -290,7 +302,9 @@ func (e *Engine) Propose(ctx context.Context, req Request) (*Result, error) {
 		}}
 		lcfg.Extra = append(lcfg.Extra, ExtraTool{Def: consultant.Tool(), Handle: consultant.Handle})
 	}
-	loop, refusal, err := RunLoop(ctx, e.assistantProvider(cfg), system, req.Intent, env, lcfg)
+	// config_assistant.reasoning caps a reasoning model's thinking on every
+	// assistant call; empty leaves the model's default (GitHub #911).
+	loop, refusal, err := RunLoop(chat.WithReasoningEffort(ctx, cfg.Reasoning), e.assistantProvider(cfg), system, req.Intent, env, lcfg)
 	// Usage is recorded BEFORE the refusal/error branches. A loop that hit
 	// the tool-turn or output ceiling, timed out, or died on a provider
 	// error still spent the tokens it spent; charging only the successes
@@ -322,6 +336,11 @@ func (e *Engine) Propose(ctx context.Context, req Request) (*Result, error) {
 	}
 	res.Ignored = ignored
 	if len(ops) == 0 {
+		// The assistant's own words are the reason; say so when it gave none
+		// (GitHub #911: an empty reason hid a truncated reply).
+		if loop.Summary == "" {
+			return refuse(res, RefuseNoChange, "the assistant made no change and gave no reason"), nil
+		}
 		return refuse(res, RefuseNoChange, "the assistant made no change: "+loop.Summary), nil
 	}
 	if r := GateWorkspaceContext(req.ProjectID, ops); r != nil {
@@ -459,6 +478,15 @@ func (e *Engine) Propose(ctx context.Context, req Request) (*Result, error) {
 	return res, nil
 }
 
+// RefusalError is a refusal returned as an error, for the healing producer
+// (GitHub #911): the API answers NO_CHANGE as "the producer made nothing"
+// and every other refusal as a producer failure.
+type RefusalError struct{ Refusal Refusal }
+
+func (e *RefusalError) Error() string {
+	return "configassist: healing refused: " + e.Refusal.Code + ": " + e.Refusal.Message
+}
+
 func refuse(res *Result, code, msg string) *Result {
 	res.Refusal = &Refusal{Code: code, Message: msg}
 	return res
@@ -479,6 +507,26 @@ func (e *Engine) assistantModelID(cfg config.AssistantConfig) string {
 		return e.Assistant.Model()
 	}
 	return ""
+}
+
+// JudgePairProblem reports why this engine's judge cannot judge its
+// assistant, as the request path would refuse, or "" when it can or when the
+// engine has no judge client (it then never refuses). The doctor row and the
+// start-up warning read it, so healing's producer is checked by the same
+// rule as a request (GitHub #891, design §7.3a).
+func (e *Engine) JudgePairProblem() string {
+	if e == nil || e.Config == nil {
+		return ""
+	}
+	return e.judgePairProblem(e.Config())
+}
+
+func (e *Engine) judgePairProblem(cfg config.AssistantConfig) string {
+	if e.Judge == nil {
+		return ""
+	}
+	p, _ := modelfamily.PairProblem(e.assistantModelID(cfg), e.judgeModelID(cfg))
+	return p
 }
 
 func (e *Engine) judgeModelID(cfg config.AssistantConfig) string {

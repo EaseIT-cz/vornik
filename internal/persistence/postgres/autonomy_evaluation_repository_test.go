@@ -23,6 +23,7 @@ func autonomyEvaluationRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "project_id", "outcome", "reason", "task_id",
 		"task_type", "workflow_id", "prompt_hash", "duration_ms", "created_at",
+		"proposed_prompt",
 	})
 }
 
@@ -51,6 +52,7 @@ func TestAutonomyEvaluationRepositoryRecord(t *testing.T) {
 		WithArgs(
 			evaluation.ID, evaluation.ProjectID, evaluation.Outcome, evaluation.Reason, sqlmock.AnyArg(),
 			evaluation.TaskType, evaluation.WorkflowID, evaluation.PromptHash, evaluation.DurationMs, sqlmock.AnyArg(),
+			nil, // proposed_prompt: null outside WOULD_START (#602)
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -77,7 +79,7 @@ func TestAutonomyEvaluationRepositoryListFiltersAndScans(t *testing.T) {
 		WithArgs(projectID, outcome, 5, 10).
 		WillReturnRows(autonomyEvaluationRows().AddRow(
 			"eval-1", projectID, outcome, "reason", "task-1",
-			"bugfix", "wf-1", "hash-1", int64(123), created,
+			"bugfix", "wf-1", "hash-1", int64(123), created, nil,
 		))
 
 	got, err := repo.List(context.Background(), persistence.AutonomyEvaluationFilter{

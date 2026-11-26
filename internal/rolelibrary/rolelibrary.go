@@ -42,7 +42,22 @@ const (
 	ModelTierTrivial  = "trivial"
 	ModelTierStandard = "standard"
 	ModelTierComplex  = "complex"
+	// ModelTierCoding is for roles that write and test code; ModelTierVision
+	// for roles that must see images (GitHub #880).
+	ModelTierCoding = "coding"
+	ModelTierVision = "vision"
 )
+
+// ModelTiers lists the model tiers, cheapest first. Messages that name the
+// valid tiers join this list rather than spelling it out.
+var ModelTiers = []string{ModelTierTrivial, ModelTierStandard, ModelTierComplex, ModelTierCoding, ModelTierVision}
+
+// ValidModelTier reports whether tier is one of the modelTier values a role
+// archetype or a swarm role may name. Empty is not a tier.
+func ValidModelTier(tier string) bool { return validModelTiers[tier] }
+
+// ModelTierList is ModelTiers joined for a message: "trivial, standard, ...".
+func ModelTierList() string { return strings.Join(ModelTiers, ", ") }
 
 // ArchetypeRuntime mirrors the subset of a role's runtime the library
 // pins: container sizing + the per-call token ceiling. Values are the

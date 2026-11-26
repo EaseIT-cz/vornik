@@ -147,6 +147,10 @@ const (
 	// scheduled reminder's heartbeat. Distinct from AUTONOMOUS so the
 	// audit/metric attribution separates the two schedulers.
 	TaskCreationSourceScheduled TaskCreationSource = "SCHEDULED"
+	// TaskCreationSourceHandover marks a task an agent job's hand_over
+	// started when that job completed (agent-administered design part 24
+	// §24.3 B2, GitHub #920).
+	TaskCreationSourceHandover TaskCreationSource = "HANDOVER"
 )
 
 // DelegationMode specifies how a parent task waits for child tasks.
@@ -1661,12 +1665,19 @@ type AutonomyEvaluation struct {
 	PromptHash string    `json:"prompt_hash,omitempty"` // SHA-256 of the normalised prompt for correlation
 	DurationMs int64     `json:"duration_ms,omitempty"` // wall-clock duration of the tick
 	CreatedAt  time.Time `json:"created_at"`
+	// ProposedPrompt is the prompt an observe-mode tick would have
+	// submitted; set only on WOULD_START (GitHub #602). It is model text,
+	// stored through the auditredact seam.
+	ProposedPrompt string `json:"proposed_prompt,omitempty"`
 }
 
 // AutonomyOutcome values recorded in autonomy_evaluations.outcome.
 // Kept as plain strings so the enum can grow without a column migration.
 const (
-	AutonomyOutcomeCreated       = "CREATED"
+	AutonomyOutcomeCreated = "CREATED"
+	// AutonomyOutcomeWouldStart: observe mode passed every gate and
+	// started nothing; the row carries the proposed prompt (GitHub #602).
+	AutonomyOutcomeWouldStart    = "WOULD_START"
 	AutonomyOutcomeNoAction      = "NO_ACTION"
 	AutonomyOutcomeRateLimited   = "RATE_LIMITED"
 	AutonomyOutcomeBudgetBlocked = "BUDGET_BLOCKED"
@@ -1743,6 +1754,19 @@ type MemoryRetrievalAudit struct {
 	// "what scope is being searched most" + makes the
 	// retrieval-audit feedback loop scope-aware.
 	RepoScope *string `json:"repo_scope,omitempty"`
+}
+
+// StepRecallChunk is one chunk one recall of a task returned, with the
+// chunk's content class as it is now (taint-lineage design §16, GitHub
+// #858). A recall that returned no chunks yields one entry with an empty
+// ChunkID. Found is false when the chunk has since been deleted. Class is
+// empty when the chunk has none, or when the driver keeps no class (SQLite).
+type StepRecallChunk struct {
+	ExecutionID string
+	StepID      string
+	ChunkID     string
+	Class       string
+	Found       bool
 }
 
 // MemorySearchStage is one per-search stage record persisted to
@@ -3014,6 +3038,15 @@ const (
 	// execution_step_outcomes. See https://docs.vornik.io
 	InstinctDomainBudget = "budget"
 )
+
+// InstinctDomains lists every InstinctDomain* constant. Add a new domain here
+// as well: a test parses this file and fails when one is missing, and the
+// driver tests insert every listed domain, so a domain cannot reach one
+// driver's schema and not the other (GitHub #887).
+func InstinctDomains() []string {
+	return []string{InstinctDomainRecovery, InstinctDomainCost, InstinctDomainQuality,
+		InstinctDomainRetrieval, InstinctDomainWorkflow, InstinctDomainBudget}
+}
 
 // Instinct scope values.
 const (

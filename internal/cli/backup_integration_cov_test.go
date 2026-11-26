@@ -13,7 +13,7 @@ package cli
 // real restore would DROP/replace its schema mid-suite, breaking every
 // other test that shares the database. The restore exec surface is
 // covered indirectly — checkTargetSchemaAbsent / checkTargetEmpty /
-// dropTargetSchema are the gates runRestore calls, and those are
+// cleanTargetSQL are the gates runRestore calls, and those are
 // tested directly here and in backup_schema_gate_integration_test.go.
 
 import (

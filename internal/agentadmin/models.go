@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/netguard"
 )
 
@@ -104,7 +105,13 @@ func destinationOf(r ModelRoute, ok bool) (Destination, ModelRefusal) {
 	}
 	if netguard.IsLocalHostname(host) {
 		d.Local = true
-	} else if ip := net.ParseIP(host); ip != nil && netguard.IsPrivateIP(ip) {
+	} else if ip := net.ParseIP(host); ip != nil && dialguard.AllowPrivateAdmits(ip) && !dialguard.CarriesSharedAddressSpace(ip) {
+		// Local is what the model dial admits (GitHub #907, part 06 §6.13):
+		// loopback or a grantable private address. An embedded or link-local
+		// address the dial refuses is remote, never a local model nobody
+		// approved and nobody can dial. CGNAT is grantable but stays remote
+		// (GitHub #893 option A, §6.11): a model served from a tailnet peer
+		// keeps its per-destination device approval.
 		d.Local = true
 	}
 	return d, ModelRefusal{}

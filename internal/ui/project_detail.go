@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/api"
@@ -19,6 +20,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/textutil"
 )
 
 // ProjectDetailData holds data for the project detail template.
@@ -91,6 +93,13 @@ type ProjectDetailData struct {
 	NextAutonomyTickISO  string // RFC3339 for the client-side ticker
 	LastAutonomyOutcome  string // most-recent eval outcome string
 	LastAutonomyAgoLabel string // "3m 24s ago" — pre-rendered
+	// Observe mode (GitHub #602): the would-starts of the last 7 days and
+	// the latest proposals, so the operator sees what autonomy would do.
+	ObserveWouldStart7d int
+	// ObserveWouldStart7dCapped: the read hit observeSummaryScan inside
+	// the window, so the count is a lower bound ("200+").
+	ObserveWouldStart7dCapped bool
+	ObserveRecent             []ObserveProposal
 
 	// Retention is the effective (resolved) per-project pruning
 	// window — defaults from daemon config + project YAML overrides
@@ -1257,6 +1266,49 @@ func (s *Server) populateProjectHomepageAutonomy(ctx context.Context, project *r
 	data.NextAutonomyTickISO = data.NextAutonomyTickAt.Format(time.RFC3339)
 	data.LastAutonomyOutcome = last.Outcome
 	data.LastAutonomyAgoLabel = humanizeAgo(now.Sub(last.CreatedAt))
+	if project.Autonomy.Observe {
+		s.populateObserveSummary(listCtx, projectID, now, data)
+	}
+}
+
+// ObserveProposal is one observe-mode WOULD_START row on the project page.
+type ObserveProposal struct {
+	AgoLabel string
+	Prompt   string // cut to 160 characters
+}
+
+// observeSummaryScan bounds the WOULD_START rows the page reads. When every
+// row read is inside the window there may be more, and the page says "200+".
+const observeSummaryScan = 200
+
+// populateObserveSummary counts the project's WOULD_START rows of the last
+// 7 days and keeps the latest five (design 11, amendment 2026-11-20, B5).
+// A failed read leaves the summary empty; the page still renders.
+func (s *Server) populateObserveSummary(ctx context.Context, projectID string, now time.Time, data *ProjectDetailData) {
+	outcome := persistence.AutonomyOutcomeWouldStart
+	pid := projectID
+	rows, err := s.autonomyEvalRepo.List(ctx, persistence.AutonomyEvaluationFilter{
+		ProjectID: &pid, Outcome: &outcome, PageSize: observeSummaryScan,
+	})
+	if err != nil {
+		s.logger.Debug().Err(err).Str("project_id", projectID).Msg("project homepage: observe summary lookup failed")
+		return
+	}
+	since := now.Add(-7 * 24 * time.Hour)
+	for _, e := range rows {
+		if e.CreatedAt.Before(since) {
+			continue
+		}
+		data.ObserveWouldStart7d++
+		if len(data.ObserveRecent) < 5 {
+			prompt := e.ProposedPrompt
+			if utf8.RuneCountInString(prompt) > 160 {
+				prompt = textutil.TruncateRunes(prompt, 157) + "..."
+			}
+			data.ObserveRecent = append(data.ObserveRecent, ObserveProposal{AgoLabel: humanizeAgo(now.Sub(e.CreatedAt)), Prompt: prompt})
+		}
+	}
+	data.ObserveWouldStart7dCapped = len(rows) == observeSummaryScan && data.ObserveWouldStart7d == len(rows)
 }
 
 // buildGitAccessPanel constructs the GitAccessPanel for the project-detail

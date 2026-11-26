@@ -542,15 +542,19 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 		verdict *RoutingVerdictWire
 		err     error
 	)
+	// Part 24 §24.2 A2 (#920): authorized on the URL's project above, the
+	// search reads that project's memory project (an agent namespace's
+	// shared memory; every other project's own).
+	memProject := s.memoryProject(projectID)
 	rs, routing := s.memorySearcher.(MemoryRoutingSearcher)
 	switch {
 	case routing:
-		results, verdict, err = rs.SearchRouting(ctx, projectID, q, searchReq)
+		results, verdict, err = rs.SearchRouting(ctx, memProject, q, searchReq)
 	case searchReq.narrows():
 		respondError(w, http.StatusServiceUnavailable, "FILTER_UNSUPPORTED", "this memory searcher cannot apply repo_scope, strict_scope or authority")
 		return
 	default:
-		results, err = s.memorySearcher.Search(ctx, projectID, q, searchReq.Limit)
+		results, err = s.memorySearcher.Search(ctx, memProject, q, searchReq.Limit)
 	}
 	if err != nil {
 		s.logger.Warn().

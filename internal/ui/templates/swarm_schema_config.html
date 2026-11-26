@@ -57,6 +57,7 @@
                 </section>
 
                 <div class="flex items-center justify-end gap-3 pt-1">
+                    <label class="inline-flex items-center gap-2 text-sm text-gray-400" title="Saves without calling the model first. Use it when the provider is briefly down; the save is audited."><input type="checkbox" name="skipModelCheck" value="on" class="rounded border-control bg-dark-900/50"> Save without checking models</label>
                     <a href="/ui/swarms/{{.SwarmID}}/edit" class="text-sm text-gray-400 hover:text-gray-200">Cancel</a>
                     <button type="submit" class="px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-500 text-sm font-medium">Save &amp; reload</button>
                 </div>

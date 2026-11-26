@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcpauth"
 )
@@ -306,15 +307,56 @@ func validateBackupBucket(h HostingConfig, storageRegion string) error {
 	return nil
 }
 
-// validateAgentAdminPrivateAPIHosts checks and folds agent_admin.private_api_hosts
-// (agent-administered design part 06, §6.7, GitHub #734): bare host names,
-// lowercase, no trailing dot.
+// validateAgentAdminPrivateAPIHosts checks agent_admin.private_api_hosts
+// (agent-administered design part 06, §6.7, GitHub #734; §6.12, GitHub #403)
+// and writes each host in its compared form: a folded name or a canonical IP
+// literal, with its port.
 func (c *Config) validateAgentAdminPrivateAPIHosts() error {
 	for i, h := range c.AgentAdmin.PrivateAPIHosts {
-		if err := dialguard.ValidModelHost(h); err != nil {
+		e, err := parsePrivateAPIHost(h)
+		if err != nil {
 			return fmt.Errorf("agent_admin.private_api_hosts: %w", err)
 		}
-		c.AgentAdmin.PrivateAPIHosts[i] = dialguard.FoldHost(h)
+		c.AgentAdmin.PrivateAPIHosts[i].Host = e.HostPort()
 	}
 	return nil
+}
+
+// parsePrivateAPIHost parses one item into the dial guard's entry.
+func parsePrivateAPIHost(h PrivateAPIHost) (dialguard.PrivateHost, error) {
+	e, err := dialguard.ParsePrivateHost(h.Host)
+	if err != nil {
+		return dialguard.PrivateHost{}, err
+	}
+	if len(h.Addresses) > 0 {
+		if _, err := netip.ParseAddr(e.Host); err == nil {
+			return dialguard.PrivateHost{}, fmt.Errorf("%q is an IP literal: its address is already fixed, so it takes no addresses", h.Host)
+		}
+	}
+	for _, a := range h.Addresses {
+		p, err := dialguard.ParsePin(a)
+		if err != nil {
+			return dialguard.PrivateHost{}, err
+		}
+		e.Addresses = append(e.Addresses, p)
+	}
+	for _, p := range h.Projects {
+		if _, agent := agentns.FromID(p); !agent {
+			return dialguard.PrivateHost{}, fmt.Errorf("%q is not an agent project ID (<namespace>--<project>)", p)
+		}
+		e.Projects = append(e.Projects, p)
+	}
+	return e, nil
+}
+
+// PrivateHosts is agent_admin.private_api_hosts parsed, in file order. An
+// item that does not parse is left out (fail closed; the loader refuses it).
+func (a AgentAdminConfig) PrivateHosts() []dialguard.PrivateHost {
+	var out []dialguard.PrivateHost
+	for _, h := range a.PrivateAPIHosts {
+		if e, err := parsePrivateAPIHost(h); err == nil {
+			out = append(out, e)
+		}
+	}
+	return out
 }

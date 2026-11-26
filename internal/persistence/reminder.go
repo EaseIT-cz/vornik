@@ -38,6 +38,26 @@ const (
 	ReminderStatusPaused ReminderStatus = "paused"
 )
 
+// ReminderAttemptKind is what a failed delivery attempt leads to (§11 R5).
+type ReminderAttemptKind string
+
+const (
+	// ReminderAttemptRetry puts the row back to pending at At, count + 1.
+	ReminderAttemptRetry ReminderAttemptKind = "retry"
+	// ReminderAttemptRearm puts the row back to pending at its next
+	// occurrence At, count reset to 0.
+	ReminderAttemptRearm ReminderAttemptKind = "rearm"
+	// ReminderAttemptExpire makes the row expired, count + 1.
+	ReminderAttemptExpire ReminderAttemptKind = "expire"
+)
+
+// ReminderAttemptOutcome is one failed attempt's outcome. At is used by
+// retry and rearm.
+type ReminderAttemptOutcome struct {
+	Kind ReminderAttemptKind
+	At   time.Time
+}
+
 // IsTerminal reports whether the status is end-of-life. The
 // heartbeat skips terminal rows; the cancel surface refuses them.
 func (s ReminderStatus) IsTerminal() bool {
@@ -180,6 +200,13 @@ type ReminderRepository interface {
 	// defensive shape as MarkFired so a double-fire race surfaces
 	// loudly rather than silently corrupting the schedule.
 	Reschedule(ctx context.Context, id string, nextFireAt time.Time) error
+
+	// MarkAttemptFailed records a failed delivery attempt of a firing row
+	// (scheduled-reminders design §11, GitHub #861): retry it at a time,
+	// re-arm it for its next occurrence with the count reset, or expire it.
+	// last_error is set in every case. Only a row still in 'firing' changes,
+	// so a reminder cancelled meanwhile stays cancelled; ErrNotFound then.
+	MarkAttemptFailed(ctx context.Context, id, errorMessage string, outcome ReminderAttemptOutcome) error
 
 	// MarkErrored stamps last_error + increments error_count.
 	// Status stays at 'firing' so v1 can re-lease (when a retry

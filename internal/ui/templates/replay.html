@@ -17,9 +17,9 @@
                     </div>
                     <h1 class="text-xl font-semibold text-gray-100">Failure forensics</h1>
                     <p class="text-gray-500 text-xs font-mono mt-0.5">
-                        <a href="/ui/executions/{{.Timeline.Execution.ID}}" class="hover:text-gray-300">{{.Timeline.Execution.ID}}</a>
+                        <a href="/ui/executions/{{.Timeline.Execution.ID}}" class="hover:text-gray-300" title="{{.Timeline.Execution.ID}}">{{shortID .Timeline.Execution.ID}}</a>
                         <span class="text-gray-700 mx-1">·</span>
-                        <a href="/ui/tasks/{{.Timeline.Task.ID}}" class="hover:text-gray-300">{{.Timeline.Task.ID}}</a>
+                        <a href="/ui/tasks/{{.Timeline.Task.ID}}" class="hover:text-gray-300" title="{{.Timeline.Task.ID}}">{{shortID .Timeline.Task.ID}}</a>
                     </p>
                     {{/* Lineage breadcrumb — older forks left-to-right.
                          Empty when this execution isn't a fork. */}}
@@ -27,7 +27,7 @@
                     <p class="text-xs text-gray-500 mt-1.5 flex items-center gap-1 flex-wrap">
                         <span class="uppercase tracking-wider text-xs text-gray-600">lineage</span>
                         {{range .Timeline.Lineage}}
-                        <a href="{{.URL}}" class="font-mono hover:text-gray-300" title="forked from step {{.ForkedFromStep}}">{{.ExecutionID}}</a>
+                        <a href="{{.URL}}" class="font-mono hover:text-gray-300" title="{{.ExecutionID}}, forked from step {{.ForkedFromStep}}">{{shortID .ExecutionID}}</a>
                         <span class="text-gray-700">→</span>
                         {{end}}
                         <span class="font-mono text-gray-300">you</span>

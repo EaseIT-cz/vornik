@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/telemetryclient"
 	"vornik.io/vornik/internal/templates"
+	"vornik.io/vornik/internal/termcheck"
 )
 
 var (
@@ -249,6 +250,7 @@ func runInitProject(cmd *cobra.Command, args []string) error {
 		MaxConcurrentTasks: 1,
 		Autonomy: registry.ProjectAutonomy{
 			Enabled:         initAutonomy,
+			Observe:         true, // observe first (GitHub #602): nothing starts until the operator sets false
 			Goal:            goal,
 			MaxTasksPerHour: 2,
 			PollInterval:    "5m",
@@ -458,8 +460,7 @@ func promptDefault(cmd *cobra.Command, label, fallback string) string {
 	if cmd.InOrStdin() != os.Stdin {
 		return fallback
 	}
-	info, err := os.Stdin.Stat()
-	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+	if !termcheck.IsTerminal(os.Stdin) { // not /dev/null (GitHub #866)
 		return fallback
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s [%s]: ", label, fallback)

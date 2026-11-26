@@ -43,11 +43,13 @@ func (f Finding) String() string {
 const broadToolThreshold = 8
 
 // validModelTiers is the closed set of modelTier values.
-var validModelTiers = map[string]bool{
-	ModelTierTrivial:  true,
-	ModelTierStandard: true,
-	ModelTierComplex:  true,
-}
+var validModelTiers = func() map[string]bool {
+	m := make(map[string]bool, len(ModelTiers))
+	for _, t := range ModelTiers {
+		m[t] = true
+	}
+	return m
+}()
 
 // CheckLibrary validates every archetype and returns all findings,
 // sorted (errors before flags, then by archetype id). An empty result

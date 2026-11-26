@@ -359,3 +359,7 @@ func TestResolveReminderFireAt_BothMissing(t *testing.T) {
 		t.Errorf("expected error when both fire_at and fire_in_seconds are empty")
 	}
 }
+
+func (s *stubReminderRepo) MarkAttemptFailed(context.Context, string, string, persistence.ReminderAttemptOutcome) error {
+	return nil
+}

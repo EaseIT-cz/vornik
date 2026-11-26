@@ -232,12 +232,18 @@ func TestApprovers763_UnrecordedRevokeIsSaid(t *testing.T) {
 	}
 }
 
+// GitHub #168: the page's own copy accepted only localhost, 127.0.0.1 and
+// ::1, and warned for origins the approver gate admits. It now asks the
+// gate's rule (approverdevice.PlainHTTPNonLoopbackOrigin); the last four
+// rows were warnings before.
 func TestPlainHTTPNonLoopbackOrigin763(t *testing.T) {
 	for origin, want := range map[string]bool{
 		"http://vornik.lan:8080": true, "https://vornik.lan": false,
 		"http://localhost:8080": false, "http://127.0.0.1": false, "http://[::1]:8080": false,
+		"http://127.0.0.2:8080": false, "http://[::ffff:127.0.0.1]:8080": false,
+		"http://LOCALHOST:8080": false, "http://localhost.:8080": false,
 	} {
-		if got := plainHTTPNonLoopbackOrigin(origin); got != want {
+		if got := approverdevice.PlainHTTPNonLoopbackOrigin(origin); got != want {
 			t.Errorf("%s: %v, want %v", origin, got, want)
 		}
 	}

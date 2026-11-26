@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/configlock"
+	"vornik.io/vornik/internal/modelcheck"
 
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
@@ -83,6 +86,9 @@ func newAgentAdminFixtureWith(t *testing.T, adjust func(*config.Config)) *agentA
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These tests exercise agent administration, not the #881 save-time
+	// model check: every model answers here.
+	c.modelCheckerV = &modelcheck.Checker{Provider: passingModelRouter{}}
 	svc := c.agentAdmin()
 	if svc == nil {
 		t.Fatal("the agent admin service is not wired")
@@ -361,4 +367,21 @@ func TestWireReachVerifier_FailsClosedWithoutGrants(t *testing.T) {
 	if err := c.verifyAgentReachOf(ctx, &registry.Project{ID: "assistant"}, nil, agentWF); err == nil {
 		t.Fatal("an agent workflow ran in an operator project")
 	}
+}
+
+// passingModelRouter answers every #881 check with a tool call.
+type passingModelRouter struct{}
+
+func (passingModelRouter) WithModel(m string) modelcheck.Completer { return passingModel{model: m} }
+
+type passingModel struct{ model string }
+
+func (p passingModel) CompleteWithTools(context.Context, []chat.Message, []chat.Tool) (*chat.ChatResponse, error) {
+	r := &chat.ChatResponse{Model: p.model}
+	r.Choices = append(r.Choices, struct {
+		Index        int          `json:"index"`
+		Message      chat.Message `json:"message"`
+		FinishReason string       `json:"finish_reason"`
+	}{Message: chat.Message{Role: "assistant", ToolCalls: []chat.ToolCall{{ID: "1", Type: "function", Function: chat.FunctionCall{Name: "get_time"}}}}})
+	return r, nil
 }

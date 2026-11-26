@@ -54,7 +54,7 @@ were not retained, which is the omission this directory exists to stop repeating
 
 One `agent-*.rollup.json` per arm behind an agent-quality row, the output of
 `vornikctl bench agent rollup --json` over that arm's journals, unmodified
-except for indentation (#609):
+except for indentation:
 
 - `agent-20261031-off.rollup.json` and `agent-20261031-on.rollup.json`: the
   2026-10-31 row (`gemma-4-26b-a4b`, `2026.10.7-94-g3246baad0`), without and

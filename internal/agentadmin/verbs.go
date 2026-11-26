@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -102,6 +103,7 @@ func (r *Renderer) createProject(st *State, raw json.RawMessage) (Change, error)
 		ID: id, DisplayName: in.Slug, Purpose: in.Purpose, MonthlyUSD: st.DefaultBudgetUSD,
 		MaxConcurrentTasks: 1, // as the template's fixed line was (§6.9)
 		DefaultWorkflowID:  wfID, Swarm: SwarmState{ID: id, Roles: []RoleSpec{defaultRole()}},
+		SharedMemory: in.SharedMemory, // part 24 §24.6
 	}
 	projectYAML, err := r.renderProject(ns, p)
 	if err != nil {
@@ -138,7 +140,67 @@ func (r *Renderer) createProject(st *State, raw json.RawMessage) (Change, error)
 		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to create the project %q (%s) with a $%s monthly budget.",
 			ns, id, quoteShort(in.Purpose), formatUSD(p.MonthlyUSD)) + clause
 	}
+	if in.SharedMemory {
+		// Joining the shared memory is widening (part 24 §24.6 S3).
+		if c.Class != Widening {
+			c.Sentence = fmt.Sprintf("Your assistant (%s) wants to create the project %q (%s) with a $%s monthly budget.",
+				ns, id, quoteShort(in.Purpose), formatUSD(p.MonthlyUSD))
+		}
+		c.Class = Widening
+		c.Sentence += sharedMemorySentence(st, id)
+	}
 	return c, nil
+}
+
+// sharedMemorySentence is the approval clause for joining the namespace's
+// shared memory (part 24 §24.6 S3). Vornik cannot tell from a project's
+// configuration whether its data is private, so the sentence shows the
+// combination the person approves: the project's connections and every
+// other shared project with its own (review-20261125-99e0 B2, B3).
+func sharedMemorySentence(st *State, pid string) string {
+	var others []string
+	for _, id := range sortedProjectIDs(st) {
+		p := st.Projects[id]
+		if id == pid || p == nil || !p.SharedMemory {
+			continue
+		}
+		others = append(others, fmt.Sprintf("%q (%s)", id, connectionsPhrase(p)))
+	}
+	with := "no other project yet"
+	if len(others) > 0 {
+		with = strings.Join(others, ", ")
+	}
+	self := "no connections yet"
+	if p := st.Projects[pid]; p != nil {
+		self = connectionsPhrase(p)
+	}
+	return fmt.Sprintf(" The project %q (%s) will share memory with: %s. What each of them stores, the others can read; leaving later does not take back what it stored.", pid, self, with)
+}
+
+// connectionsPhrase names a project's connections for an approval sentence.
+func connectionsPhrase(p *ProjectState) string {
+	var names []string
+	for _, srv := range p.Servers {
+		names = append(names, srv.Name)
+	}
+	for _, a := range p.APIs {
+		names = append(names, a.Name)
+	}
+	if len(names) == 0 {
+		return "no connections"
+	}
+	sort.Strings(names)
+	return "connections: " + strings.Join(names, ", ")
+}
+
+// sortedProjectIDs is the namespace's project IDs in order.
+func sortedProjectIDs(st *State) []string {
+	ids := make([]string, 0, len(st.Projects))
+	for id := range st.Projects {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // placeholderWorkflow is a new project's default workflow: no integrations,
@@ -184,6 +246,8 @@ type workflowData struct {
 	Proposes                                            []proposeData
 	// Schedule is broker.schedule as a JSON flow mapping; "" for none.
 	Schedule string
+	// HandOver is broker.hand_over as a JSON flow mapping; "" for none.
+	HandOver string
 	// Version is the workflow's version; "" renders 1.0.0. A recipe install
 	// marks its recipe in the build metadata (recipeVersionTag).
 	Version string
@@ -488,6 +552,10 @@ func (r *Renderer) defineWorkflow(st *State, raw json.RawMessage) (Change, error
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
+	handOver, why := renderHandOver(st, id, in.HandOver)
+	if why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
 	artifactJSON := ""
 	if len(in.Artifacts) > 0 {
 		b, e := json.Marshal(in.Artifacts)
@@ -503,7 +571,7 @@ func (r *Renderer) defineWorkflow(st *State, raw json.RawMessage) (Change, error
 		Artifacts: artifactJSON,
 		Namespace: ns, ID: id, DisplayName: in.Slug, Description: describe(in.Purpose, "Workflow "+in.Slug+" of "+pid), Entrypoint: steps[0].Name,
 		InputSchema: inputSchema, EgressSchema: string(egressJSON), MaxBytes: egressDocBytes, Steps: steps, Proposes: proposes,
-		Schedule: schedule,
+		Schedule: schedule, HandOver: handOver,
 	}
 	md, err := r.exec(tmplWorkflow, data)
 	if err != nil {
@@ -550,6 +618,7 @@ func workflowChange(st *State, p *ProjectState, wf *registry.Workflow, md string
 		c.Sentence += documentSentence(sig)
 		c.Sentence += proposeSentence(proposePhrases)
 		c.Sentence += scheduleSentence(id, wf.Broker.Schedule, st.Workflows[id])
+		c.Sentence += handOverSentence(st, pid, wf.Broker.HandOver)
 	}
 	return c
 }
@@ -741,7 +810,9 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 			return refuse(verb, ns, "%s", why), nil
 		}
 	}
-	grant := IntegrationGrant{Project: pid, Name: in.Name, Kind: "mcp", URL: in.URL, Write: writes, Account: account}
+	intranet := dialguard.PrivateHostsFor(pid, st.PrivateHosts) // §6.12, #403
+	grant := IntegrationGrant{Project: pid, Name: in.Name, Kind: "mcp", URL: in.URL, Write: writes, Account: account,
+		PrivateReach: privateReach(intranet, in.URL)}
 	if in.Transport == TransportSSE {
 		grant.Transport = TransportSSE
 	}
@@ -777,7 +848,7 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 	}
 	expect(st, c.ReadSet, projectPath(pid))
 	phrase := addPhrase(p, in.Name, in.URL, account)
-	c.Sentence = serverSentence(st, ns, pid, in, credential, grant, phrase, withheld) + sharedCredentialSentence(credential, sharers)
+	c.Sentence = serverSentence(st, ns, pid, in, credential, grant, phrase, withheld) + intranetSentence(intranet, in.URL) + sharedCredentialSentence(credential, sharers)
 	if phrase != "" {
 		c.accounts = map[string]string{in.Name: phrase}
 	}

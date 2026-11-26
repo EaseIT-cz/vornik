@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "vornikctl companion session-start --name default"
+      }
+    ]
+  }
+}

@@ -3,11 +3,11 @@ sources:
     - path: internal/executor/call_project.go
       sha256: 6f16a913e2d39f7fd81a172d191a5a1446b9bf6699b8d0bceba5f4462c636918
     - path: internal/executor/spawn_project.go
-      sha256: 657a54540b0a72fc4a61556982a8fb05c40b532083de853ec4bd3439e7e100ed
+      sha256: fed907c336c2bc4dabdd7e2c2c0b519dff998d51e7a2673694fc79593135c8ed
     - path: internal/executor/a2a_call.go
       sha256: 5343e2603af04b4108b5c0f352dd1a584c662d723a016f2f14464d946a424232
     - path: internal/registry/project.go
-      sha256: b43d6ecb5b4d87b0f6edb23ee01526fc909e37825eed9565a4a5d6f2917bcaec
+      sha256: ced970c52679d03bf42e43a75f38e459596cacaee6e339d50084e157a49d0ed7
 ---
 # Cross-project orchestration & agent federation
 

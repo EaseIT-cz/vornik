@@ -319,6 +319,10 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap exposes the wrapped writer to http.ResponseController, so a
+// handler's per-request write deadline reaches the connection (GitHub #908).
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // Flush forwards to the wrapped writer if it supports the
 // interface. Required for SSE log streaming and the
 // /ui/tasks/<id>/logs/stream endpoint to flush each chunk

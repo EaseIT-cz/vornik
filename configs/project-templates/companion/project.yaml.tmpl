@@ -25,6 +25,9 @@ maxConcurrentTasks: 3
 # check) can flip enabled:true and pick a goal.
 autonomy:
   enabled: false
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   goal: |
     (Autonomy is off for companion projects by default. Enable only
     if you want this project to spawn its own work between host-LLM

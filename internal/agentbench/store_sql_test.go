@@ -36,7 +36,7 @@ func newLedgerDB(t *testing.T) *sql.DB {
 		`CREATE TABLE execution_step_outcomes (
 			execution_id TEXT, step_id TEXT, role TEXT, model TEXT, outcome TEXT,
 			error_class TEXT, effective_tool_budget INTEGER, tool_calls_used INTEGER,
-			duration_ms INTEGER, recorded_at TEXT, agent_image_id TEXT)`,
+			duration_ms INTEGER, recorded_at TEXT, agent_image_id TEXT, container_exit_code INTEGER)`,
 	}
 	for _, stmt := range schema {
 		if _, err := db.Exec(stmt); err != nil {
@@ -75,11 +75,11 @@ func seedLedger(t *testing.T, db *sql.DB) {
 		VALUES ('e1','s1','made_up','{"isError":true,"error":"unknown tool: made_up"}','2026-08-13T10:03:00Z')`)
 
 	exec(`INSERT INTO execution_step_outcomes VALUES
-		('e1','s1','lead','m','schema_violation','shape',20,7,1500,'2026-08-13T10:04:00Z','sha256:aaa')`)
+		('e1','s1','lead','m','schema_violation','shape',20,7,1500,'2026-08-13T10:04:00Z','sha256:aaa',1)`)
 	exec(`INSERT INTO execution_step_outcomes VALUES
-		('e1','s1','lead','m','ok','',20,7,2500,'2026-08-13T10:05:00Z','sha256:aaa')`)
+		('e1','s1','lead','m','ok','',20,7,2500,'2026-08-13T10:05:00Z','sha256:aaa',0)`)
 	exec(`INSERT INTO execution_step_outcomes VALUES
-		('e1','s2','worker','m','ok','',10,2,4000,'2026-08-13T10:06:00Z','sha256:bbb')`)
+		('e1','s2','worker','m','ok','',10,2,4000,'2026-08-13T10:06:00Z','sha256:bbb',0)`)
 }
 
 func assembleFixture(t *testing.T) (ExecutionRecord, []Trace) {

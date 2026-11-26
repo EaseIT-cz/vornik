@@ -93,6 +93,9 @@ type Actionizer struct {
 	// universe (pricing table). Nil → every model refused (fail closed: the
 	// model catalog is the whole point of the check).
 	KnownModel func(model string) bool
+	// ReachableModel checks a model answers before a swarm_role_model change
+	// is rendered (GitHub #881). Nil: not checked.
+	ReachableModel func(model string) error
 	// MaxSuggestedStepTimeout caps a rendered step timeout absolutely
 	// (design §4.5; 0 → 2h).
 	MaxSuggestedStepTimeout time.Duration
@@ -391,6 +394,11 @@ func stepTimeoutSummary(stepID string, current time.Duration, newVal, reason str
 func (a *Actionizer) RenderRoleModel(swarmID, role, model string) (*RenderedChange, error) {
 	if a.KnownModel == nil || !a.KnownModel(model) {
 		return nil, fmt.Errorf("control-plane: model %q is not in the configured model universe", model)
+	}
+	if a.ReachableModel != nil {
+		if err := a.ReachableModel(model); err != nil {
+			return nil, fmt.Errorf("control-plane: model %q was checked and did not answer: %w", model, err)
+		}
 	}
 	rel, err := swarmRel(swarmID)
 	if err != nil {

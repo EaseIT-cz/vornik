@@ -103,6 +103,11 @@ func (r *RetrievalAudit) A2AChunksByCallerKey(ctx context.Context, since time.Ti
 	return r.inner.A2AChunksByCallerKey(ctx, since)
 }
 
+// StepRecallChunks is a read; it passes through (GitHub #858).
+func (r *RetrievalAudit) StepRecallChunks(ctx context.Context, taskID string) ([]persistence.StepRecallChunk, error) {
+	return r.inner.StepRecallChunks(ctx, taskID)
+}
+
 // deref is the task id for the redaction event, or "" for a recall outside a task.
 func deref(s *string) string {
 	if s == nil {

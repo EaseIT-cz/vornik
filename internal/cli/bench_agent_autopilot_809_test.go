@@ -19,13 +19,15 @@ import (
 )
 
 type fakeBench809 struct {
-	mu        sync.Mutex
-	frozen    bool
-	openTrig  bool
-	noCand    bool
-	calls     []string
-	candidate string
-	sha       string
+	mu           sync.Mutex
+	frozen       bool
+	openTrig     bool
+	noCand       bool
+	genStatus    int    // GitHub #908: when set, generate answers this status
+	trialVerdict string // GitHub #921: when set, the candidate's trial status
+	calls        []string
+	candidate    string
+	sha          string
 }
 
 func (f *fakeBench809) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +52,11 @@ func (f *fakeBench809) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"trigger_id": "trg-1"})
 	case strings.HasSuffix(r.URL.Path, "/generate-candidate"):
+		if f.genStatus != 0 {
+			w.WriteHeader(f.genStatus)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "HEALING_PRODUCER_FAILED", "message": "configassist: assistant model: context deadline exceeded"}})
+			return
+		}
 		if f.noCand {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "ASSISTANT_DECLINED", "message": "no change warranted"}})
@@ -64,8 +71,14 @@ func (f *fakeBench809) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "dismissed"})
 	case strings.HasSuffix(r.URL.Path, "/promote"):
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "promoted", "candidate_genome_hash": "g-1"})
+	case strings.HasSuffix(r.URL.Path, "/reject"):
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "rejected"})
 	case r.URL.Path == "/api/v1/admin/workflow-healing/candidates/cand-1":
-		_ = json.NewEncoder(w).Encode(map[string]any{"candidate": map[string]string{"status": "trial_passed"}})
+		v := "trial_passed"
+		if f.trialVerdict != "" {
+			v = f.trialVerdict
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"candidate": map[string]string{"status": v}})
 	default:
 		http.NotFound(w, r)
 	}
@@ -202,5 +215,45 @@ func TestAutopilot809_NoCandidateDismissesTheTrigger(t *testing.T) {
 	}
 	if got := autopilotSteps809(t, runDir); got != "intent:,trigger:,generate:no_candidate,dismiss:dismissed" {
 		t.Fatalf("steps = %s; calls %v", got, f.calls)
+	}
+}
+
+// GitHub #921: a failed trial left its proposal pending and blocked every
+// later candidate for the workflow. The autopilot rejects the failed
+// candidate, which frees the proposal, and journals it.
+//
+// Found at: production (bench arm C, 2026-11-25: "workflow already has a
+// pending proposal" on the next generate).
+// Regression test at: unit (the autopilot against a fake bench daemon; the
+// daemon half in workflowhealing TestReject_FreesThePendingProposal_921).
+// Lower because: the arm needs hours of warm-up to reach a failed trial.
+func TestAutopilot921_AFailedTrialRejectsTheCandidate(t *testing.T) {
+	runDir, f := setupAutopilot809(t)
+	f.trialVerdict = "trial_failed"
+	var out bytes.Buffer
+	benchAgentAutopilotCmd.SetOut(&out)
+	if err := runBenchAgentAutopilot(benchAgentAutopilotCmd, nil); err != nil {
+		t.Fatalf("autopilot: %v\n%s", err, out.String())
+	}
+	var st agentbench.AutopilotState
+	raw, err := os.ReadFile(filepath.Join(runDir, "autopilot.json"))
+	if err != nil || json.Unmarshal(raw, &st) != nil {
+		t.Fatalf("autopilot.json: %v", err)
+	}
+	var steps []string
+	for _, e := range st.Events {
+		steps = append(steps, e.Step+":"+e.Verdict)
+	}
+	if got := strings.Join(steps, ","); got != "intent:,trigger:,generate:,trial:trial_failed,reject:rejected" {
+		t.Fatalf("steps = %s; calls %v", got, f.calls)
+	}
+	rejected := false
+	for _, c := range f.calls {
+		if c == "POST /api/v1/admin/workflow-healing/candidates/cand-1/reject" {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Fatalf("no reject call: %v", f.calls)
 	}
 }

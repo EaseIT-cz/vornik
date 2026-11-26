@@ -1,87 +1,93 @@
 ---
 sources:
     - path: README.md
-      sha256: 7041bef15458b3ada1aa279f3055576f1204f84a217ca59a0dbcbd39c141f0d6
+      sha256: d396d9a5b9ce1c6f9aed484597e3df60ad187e11bf9b09f02afd846569660b47
     - path: deployments/macos/install.sh
-      sha256: 02e6953a8be312d6ca13b296b3750717400a3ba171db77ec659d8c2fcbef1163
+      sha256: 60ac9e590a844f509806d50ff2427d4aec748cbd35b015f9b4f65aad9b29a844
 ---
 # Getting Started
 
-This guide takes you from a fresh machine to a running vornik daemon with
-your first project, then submits and watches a task run end to end. It
-assumes no prior vornik knowledge — if a term is unfamiliar, the
-[Concepts](../concepts/index.md) page explains the vocabulary.
+This page takes you from a fresh machine to a running vornik daemon with a
+first project, then runs one task end to end. It assumes no vornik
+knowledge; [Concepts](../concepts/index.md) explains each term.
 
 ## What vornik does
 
-vornik is an asynchronous orchestration daemon. You define **projects**,
-each backed by a **swarm** of agents and one or more **workflows**. You
-submit **tasks**; vornik queues them, starts the agents in isolated local
-containers, runs them through the workflow, and persists the results. Work
-runs continuously in the background — you submit and walk away, then come
+vornik is an asynchronous orchestration daemon. You define **projects**.
+Each runs on a **swarm** of agents and one or more **workflows**. You submit
+**tasks**: vornik queues them, starts the agents in isolated local
+containers, runs them through the workflow, and keeps the results. Work
+runs continuously in the background: you submit and walk away, then come
 back for the output.
 
-You can drive it from the CLI, the HTTP API, the Web UI, or a connected
-conversation channel (Telegram, Slack, e-mail or web chat), or from another AI
-assistant connected as a companion. Around the core,
-recent releases add operability and resilience features you will meet later
-in the docs — a one-command redacted support bundle, expanded `vornikctl
-doctor` checks, centralised log forwarding, structured recovery for failed
-steps, and a bounded graceful shutdown — plus approvals on a paired phone and
-the controls described in the [security model](../security-model.md). None of that is needed to get started; the
+You drive it from the CLI, the HTTP API, the Web UI, a connected
+conversation channel (Telegram, Slack, e-mail or web chat), or another AI
+assistant connected as a companion. Recent releases add operability and
+resilience features that later pages cover: a one-command redacted support
+bundle, expanded `vornikctl doctor` checks, centralised log forwarding,
+structured recovery for failed steps, a bounded graceful shutdown, approvals
+on a paired phone, and the controls in the
+[security model](../security-model.md). You need none of them to start: the
 defaults are safe and local-first.
 
 ## Prerequisites
 
-- **Go 1.26+** — to build the daemon and CLI from source.
-- **Podman** (rootless recommended) — vornik runs every agent in its own
-  Podman container for isolation. Docker is not used.
-- **PostgreSQL with the [pgvector](https://github.com/pgvector/pgvector)
-  extension** — vornik keeps all durable state (queues, tasks, executions,
-  artifacts, memory) in PostgreSQL so work survives restarts. pgvector backs
-  the memory/RAG semantic search — the recommended `pgvector/pgvector` image
-  ships it, and vornik enables the extension on first boot. SQLite is
-  supported for the orchestration core, but it **cannot do vector search**, so
-  memory/RAG falls back to keyword search only (see [Memory &
-  RAG](../features/memory-rag.md)).
-- **Make** — convenience build targets.
+- **Go 1.26 or later**, to build the daemon and CLI from source.
+- **Podman**, rootless recommended. vornik runs every agent in its own
+  Podman container. Docker is not used.
+- **PostgreSQL with [pgvector](https://github.com/pgvector/pgvector).**
+  vornik keeps all durable state (queues, tasks, executions, artifacts,
+  memory) in PostgreSQL, so work survives restarts. pgvector backs the
+  memory (RAG) semantic search; the `pgvector/pgvector` image ships it, and
+  vornik enables the extension on first boot. SQLite runs the orchestration
+  core but has no vector search, so memory falls back to keyword search only
+  (see
+  [Memory & RAG](../features/memory-rag.md)).
+- **Make**, for the build targets.
 
 !!! note
-    vornik is **local-first**: the daemon and all agent containers run on
+    vornik is **local-first**: the daemon and every agent container run on
     the same host. There is no cloud service to sign up for.
 
 ## A 60-second playground
 
-!!! tip "Preferred: AI-assisted install"
-    If you use a coding agent (Claude Code, Codex, Gemini CLI, …), let it do
-    everything on this page for you — paste this into your agent:
+!!! tip "Preferred: let your coding agent install it"
+    If you use Claude Code, Codex, or a Hermes agent with shell access, paste
+    this into it, and it does everything on this page:
 
     > Set up Vornik for me. Follow the runbook at https://agents.vornik.io
 
-    [AGENTS.md](https://github.com/EaseIT-cz/vornik/blob/main/AGENTS.md) is an
-    agent-executable runbook: install (via the same `get.vornik.io` script
-    below), LLM key setup, a first task, and the agent's own companion
-    project + persistent RAG memory + knowledge-skill store (so it can
-    capture reusable procedures and reuse them across sessions and projects)
-    — with a verifiable check at every step, and your approval required
+    [AGENTS.md](https://github.com/EaseIT-cz/vornik/blob/main/AGENTS.md) is a
+    runbook written for agents. It installs (with the same `get.vornik.io`
+    script as below), sets up your LLM key, runs a first task, and gives the
+    agent its own companion project, with persistent RAG memory and a
+    knowledge-skill store for procedures it captures and reuses across
+    sessions and projects. Every step has a check, and the agent asks you
     before anything privileged.
 
-If you'd rather run it yourself, one command stands up a complete playground
-on a Linux host — on macOS the same command first provisions a small Linux VM
-([below](#macos-inside-a-linux-vm)). On Linux it installs any missing
-prerequisites, builds the daemon + CLI in an ephemeral container (no Go
-toolchain needed), starts PostgreSQL + pgvector in a container, and runs the
-daemon as a rootless `systemctl --user` service that spawns agent containers
-via your rootless Podman:
+    Other agents (Gemini CLI, opencode and others) can use Vornik's memory
+    and delegation once it runs: see
+    [Use Vornik from any agent](../guides/any-agent.md).
+
+To run it yourself, one command sets up a complete playground on a Linux
+host. On macOS it first provisions a small Linux VM
+([below](#macos-inside-a-linux-vm)). On Linux it:
+
+- installs any missing prerequisites;
+- builds the daemon and CLI in a throwaway container (no Go toolchain
+  needed);
+- starts PostgreSQL with pgvector in a container;
+- runs the daemon as a rootless `systemctl --user` service that starts
+  agent containers through your rootless Podman.
 
 ```bash
 curl -fsSL https://get.vornik.io | bash
 ```
 
-This pins the **release tag baked into the script** (not a moving branch); set
-`VORNIK_REF=main` for bleeding-edge. To verify the script against its published
-checksum before piping it to a shell (catches transit/redirect tampering — not
-a signature), fetch both first:
+The script pins its own release tag, not a moving branch; set
+`VORNIK_REF=main` for the latest code. To check the script against its
+published checksum before running it (this catches tampering in transit or
+through a redirect; it is not a signature), fetch both first:
 
 ```bash
 REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
@@ -90,46 +96,49 @@ curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
 
-The daemon creates and migrates its own schema on first boot, so all you supply
-is an empty database — the script provisions it. When it finishes, open
-<http://localhost:8080/ui> and log in with the API key the installer generated
-(`VORNIK_API_KEY` in `~/.config/vornik/secrets/api.env`; every request needs it).
-A first-run **setup guide** walks you through
-connecting an LLM endpoint and key (with a live connection test), optional
-memory/RAG, and creating your first project. To do the same from the terminal,
-set `VORNIK_CHAT_API_KEY` in `~/.config/vornik/vornik.env` and run
-`systemctl --user restart vornik`. See the
+The daemon creates and migrates its own schema on first boot; the script
+provisions the empty database. When it finishes, open
+<http://localhost:8080/ui> and log in with the API key the installer
+generated (`VORNIK_API_KEY` in `~/.config/vornik/secrets/api.env`; every
+request needs it). A first-run **setup guide** walks you through connecting
+an LLM endpoint and key (with a live connection test), optional memory
+(RAG), and your first project.
+From the terminal instead: set `VORNIK_CHAT_API_KEY` in
+`~/.config/vornik/vornik.env` and run `systemctl --user restart vornik`. The
 [Podman deployment notes](https://github.com/EaseIT-cz/vornik/tree/main/deployments/podman)
-for tunables and the runtime model.
+cover the tunables and the runtime model.
 
 ### macOS (inside a Linux VM)
 
-macOS has no native container runtime, and Vornik's zero-egress agent isolation
-depends on a Linux-only mechanism (a network-less container reaching the daemon
-over a bind-mounted unix socket). To preserve that isolation **exactly** as on
-Linux, the installer provisions a lightweight Linux VM
-([Lima](https://lima-vm.io)) and runs the same stack inside it. The one-liner
-above auto-detects macOS and does this for you — there is no macOS variant to
-remember. The installer adds Lima (via Homebrew), creates a `vornik` VM
-(Apple-Silicon-first; Intel is best-effort), runs the standard install inside
-it, and forwards the UI/API to your Mac at <http://localhost:8080/ui>. Manage
-it with the installed `vornikctl` shim, which runs against the VM:
+macOS has no native container runtime, and vornik's zero-egress agent
+isolation needs Linux: a container with no network reaches the daemon over
+a bind-mounted unix socket. To keep that isolation exactly as on Linux, the
+installer runs the same stack in a lightweight [Lima](https://lima-vm.io)
+VM. The one-liner above detects macOS and does it for you; there is no macOS
+variant to remember:
+
+- it installs Lima with Homebrew;
+- creates a `vornik` VM (Apple Silicon first; Intel is best effort);
+- runs the standard install inside it;
+- forwards the UI and API to <http://localhost:8080/ui> on your Mac.
+
+The installed `vornikctl` shim runs against the VM:
 
 ```bash
 vornikctl status          # daemon health inside the VM
 vornikctl logs            # daemon logs
 vornikctl backup out.tar  # snapshot (DB via pg_dump + config) to a Mac path
-vornikctl delete --force  # destroy the VM — run backup first; this erases all data
+vornikctl delete --force  # destroy the VM; run backup first, this erases all data
 ```
 
-Notes: your data (including PostgreSQL) lives **inside the VM** for durability;
-persist across a VM rebuild with `vornikctl backup`/`restore`. Only
-`~/.config/vornik` is shared from the Mac (editable; run `vornikctl reload`
-after editing). The UI port-forward means any local Mac process can reach the
-daemon API — fine for a single-operator install.
+Your data, PostgreSQL included, lives **inside the VM**, for durability; carry it across a
+VM rebuild with `vornikctl backup` and `restore`. Only `~/.config/vornik` is
+shared from the Mac: edit it there, then run `vornikctl reload`. Any local
+Mac process can reach the daemon's API through the port forward, which is
+fine for a single operator.
 
-This is the fastest way to get a working instance; the rest of this page builds
-the same thing by hand so you understand each piece.
+That is the fastest way to a working instance. The rest of this page builds
+the same thing by hand, so you see each piece.
 
 ## Install
 
@@ -143,31 +152,23 @@ go build -o bin/vornik ./cmd/vornik
 go build -o bin/vornikctl ./cmd/vornikctl
 ```
 
-Or use the Make target, which produces the same binaries:
-
-```bash
-make build
-```
-
-Put `bin/` on your `PATH` (or call the binaries by path). The rest of this
-guide assumes `vornik` and `vornikctl` are on your `PATH`.
-
-Confirm the build:
+`make build` produces the same binaries. Put `bin/` on your `PATH` (or call
+the binaries by path); the rest of this page assumes `vornik` and
+`vornikctl` are on it. Confirm the build:
 
 ```bash
 vornik --version
 vornikctl version
 ```
 
-`vornik --version` reports the build you are running; building from the
-latest `main` may report a newer version than the most recent tagged
-release. See the [Release notes](../release-notes/index.md) for what each
+`vornik --version` reports the build you are running. A build from the
+latest `main` can report a newer version than the latest tagged release. The [release notes](../release-notes/index.md) say what each
 release adds.
 
 ## Point vornik at a database
 
-vornik reads its database connection from configuration or environment
-variables. The quickest path is environment variables:
+vornik reads its database connection from its configuration or from
+environment variables. The quickest way is environment variables:
 
 ```bash
 export VORNIK_DATABASE_HOST=localhost
@@ -177,13 +178,11 @@ export VORNIK_DATABASE_USER=vornik
 export VORNIK_DATABASE_PASSWORD=vornik
 ```
 
-vornik creates and migrates its schema on first start, so an empty
-database is all you need — point it at a fresh database and let it migrate;
-do not pre-load a schema dump. Use a PostgreSQL image with **pgvector**
-(e.g. `pgvector/pgvector`) so the memory/RAG vector search works; vornik
-enables the extension during that first-boot migration. For a full list of
-settings and the YAML equivalent, see the
-[Configuration reference](../reference/configuration.md).
+vornik creates and migrates its schema on first start: give it an empty
+database, and do not load a schema dump. Use a PostgreSQL image with
+**pgvector** (for example `pgvector/pgvector`) so memory search works; vornik
+enables the extension during that first migration. Every setting, and its
+YAML form, is in the [configuration reference](../reference/configuration.md).
 
 ## Start the daemon
 
@@ -191,51 +190,43 @@ settings and the YAML equivalent, see the
 vornik
 ```
 
-With no flags, vornik looks for configuration in this order: the `--config`
-flag, the `VORNIK_CONFIG` environment variable, `./vornik.yaml` (or
-`./config.yaml`), `~/.config/vornik/` (XDG user config), then
-`/etc/vornik/vornik.yaml`. To run with an explicit file:
+With no flags, vornik reads its configuration from the first of: the
+`--config` flag, the `VORNIK_CONFIG` variable, `./vornik.yaml` (or
+`./config.yaml`), `~/.config/vornik/`, and `/etc/vornik/vornik.yaml`. To name
+a file:
 
 ```bash
 vornik --config /path/to/vornik.yaml
 ```
 
-Once it is up, the daemon serves a Web UI and an HTTP API (default
-`:8080`). Check it is ready before submitting work:
+The daemon serves the Web UI and the HTTP API, on `:8080` by default. Check
+that it is ready before you submit work:
 
 ```bash
 curl http://localhost:8080/readyz
 # {"status":"ready","checks":[{"name":"database","status":"ok"}]}
 ```
 
-A `200` from `/readyz` means every dependency the daemon needs is
-reachable. A `503` lists which check is failing — see
-[Troubleshooting](../troubleshooting/index.md) if you get one.
+A `200` means every dependency is reachable. A `503` names the failing
+check; [Troubleshooting](../troubleshooting/index.md) covers each.
 
 ## Create your first swarm
 
-A project needs a swarm to run on. The fastest way to get one is to
-generate it from a built-in preset. The `research` preset (a lead plus a
-researcher and a writer) is a good fit for digest, scan, and
-summary-style work:
+A project needs a swarm. The fastest way is a built-in preset. The
+`research` preset (a lead, a researcher and a writer) fits digest, scan and
+summary work:
 
 ```bash
 vornikctl init swarm my-swarm --template research
 ```
 
-To see every preset and a one-line description of each:
-
-```bash
-vornikctl init swarm --list
-```
-
-This writes a `SWARM.md` file into your `configs/swarms/` directory and
-validates it against the registry before saving.
+`vornikctl init swarm --list` lists every preset, one line each. The command
+writes a `SWARM.md` into `configs/swarms/` and checks it against the
+registry before saving.
 
 ## Create your first project
 
-Generate a project that uses the swarm you just created and the built-in
-`adaptive` workflow:
+Create a project on that swarm and the built-in `adaptive` workflow:
 
 ```bash
 vornikctl init project my-project \
@@ -244,44 +235,41 @@ vornikctl init project my-project \
   --workflow adaptive
 ```
 
-Pass `--dry-run` first if you want to preview the generated YAML without
-writing it. The command validates the project against the registry — it
-will refuse to create a project that references a swarm or workflow that
-does not exist.
+Pass `--dry-run` first to preview the generated YAML without writing it. The
+command validates the project against the registry, and refuses one that
+names a swarm or workflow that does not exist.
 
 !!! note
-    You can also create projects without touching the CLI: open the Web UI
-    at `/ui/projects/new` for a gallery of templates, or
-    `/ui/projects/new/wizard` for a conversational wizard that composes a
-    base template with typed add-ons (MCP servers, schedule, secrets,
-    tools, role instructions) and builds the project, swarm, and workflow
-    for you.
+    You can also create projects in the Web UI: `/ui/projects/new` has a
+    gallery of templates, and `/ui/projects/new/wizard` is a conversational
+    wizard. The wizard combines a base template with typed add-ons (MCP
+    servers, a schedule, secrets, tools, role instructions) and builds the
+    project, swarm and workflow for you.
 
-    A project runs **one** autonomy style. If you describe a need with two
-    cadences — say, "ingest my mail every 5 minutes **and** produce a daily
-    digest" — the wizard builds a single scheduled loop whose goal handles
-    both (frequent ingestion each tick; the digest when the day's elapsed),
-    rather than two conflicting schedules. Set `chat.wizard_model` to a
-    capable model (a strong Bedrock chat model works well) if you want
-    higher-quality drafts; the wizard still converges on a valid project
-    regardless of the model.
+    A project runs **one** autonomy style. Describe a need with two
+    cadences, say "ingest my mail every 5 minutes **and** produce a daily
+    digest", and the wizard builds one scheduled loop that does both, rather
+    than two conflicting schedules: it ingests on every tick and produces
+    the digest once the day has passed. Set
+    `chat.wizard_model` to a capable model (a strong Bedrock chat model
+    works well) for better drafts; the wizard reaches a valid project with
+    any model.
 
-Confirm the daemon has loaded your project:
+Confirm the daemon loaded it:
 
 ```bash
 vornikctl project list
 vornikctl project show my-project
 ```
 
-However you created it, every project gets a readiness checklist at
-`/ui/projects/{id}/setup` — config, secrets, MCP reachability, chat model,
-schedule, and an optional smoke test — and the project list flags any
-project with unmet required checks.
+Every project, however you made it, has a readiness checklist at
+`/ui/projects/{id}/setup`: config, secrets, MCP reachability, chat model,
+schedule, and an optional smoke test. The project list flags a project with
+unmet required checks.
 
 ## Submit your first task
 
-Now submit a task. The `--prompt` flag is the simplest way to describe the
-work:
+`--prompt` is the simplest way to describe the work:
 
 ```bash
 vornikctl task submit \
@@ -289,19 +277,14 @@ vornikctl task submit \
   --prompt "Summarise the key themes in the attached notes."
 ```
 
-The command returns a task ID. vornik has queued the task; the scheduler
-will pick it up, start the agents, and run them through the project's
-workflow.
+It returns a task ID: vornik has queued the task. The scheduler picks it up,
+starts the agents and runs them through the project's workflow. Useful options:
 
-Useful options:
-
-- `--priority <0-100>` — lower numbers run first; `0` uses the project
-  default.
-- `--workflow <id>` — run this task on a workflow other than the project
-  default.
-- `--task-type <label>` — a free-form label that shows up in the task list.
-- `--attach <file>` — attach a file as an input; it is snapshotted and
-  extracted into project memory so agents can read it.
+- `--priority <0-100>`: lower runs first; `0` uses the project's default.
+- `--workflow <id>`: run on a workflow other than the project's default.
+- `--task-type <label>`: a free-form label shown in the task list.
+- `--attach <file>`: attach an input file. It is snapshotted and extracted
+  into project memory, so the agents can read it.
 
 ```bash
 vornikctl task submit -p my-project \
@@ -312,44 +295,43 @@ vornikctl task submit -p my-project \
 
 ## Watch it run
 
-List the tasks in your project, optionally filtered by status:
+List a project's tasks, optionally by status:
 
 ```bash
 vornikctl task list --project my-project
 vornikctl task list --project my-project --status RUNNING
 ```
 
-Inspect a single task — its status, workflow, and timestamps:
+Show one task: its status, workflow and timestamps:
 
 ```bash
 vornikctl task get <taskId> --project my-project
 ```
 
-Follow the live logs while it runs, or read the result excerpt once it has
+Follow its logs while it runs, or read the result excerpt once it has
 finished:
 
 ```bash
 vornikctl task tail <taskId> --project my-project --follow
 ```
 
-A task moves through `PENDING` → `QUEUED` → `RUNNING` and ends in
-`COMPLETED`, `FAILED`, or `CANCELLED`. When it completes, any files the
-agents wrote as outputs are persisted as **artifacts** and surfaced through
-the API and Web UI.
+A task moves through `PENDING`, `QUEUED` and `RUNNING`, and ends `COMPLETED`,
+`FAILED` or `CANCELLED`. Files the agents wrote as outputs are kept as
+**artifacts**, shown in the API and the Web UI.
 
 ## Where to go next
 
-- **[Concepts](../concepts/index.md)** — understand projects, swarms,
-  workflows, tasks, delegation, and memory before you customise.
-- **[Guides](../guides/index.md)** — task-focused how-tos, including
+- **[Concepts](../concepts/index.md)**: projects, swarms, workflows, tasks,
+  delegation and memory, before you customise.
+- **[Guides](../guides/index.md)**: how-tos, including
   [workflows and LLM controls](../guides/workflows-and-llm-controls.md) and
   [conversation channels](../guides/conversation-channels.md).
 - **[Companion](../features/companion.md)** and
-  **[Knowledge skills](../features/knowledge-skills.md)** — wire your own
-  coding agent into vornik and teach it reusable procedures that inject into
-  swarm roles (and, when marked global, every project).
+  **[Knowledge skills](../features/knowledge-skills.md)**: connect your own
+  coding agent, and teach it reusable procedures that reach swarm roles (and
+  every project, when marked global).
 - **[Configuration reference](../reference/configuration.md)** and the
-  **[vornikctl reference](../reference/vornikctl.md)** — every setting and
+  **[vornikctl reference](../reference/vornikctl.md)**: every setting and
   command.
-- **[Troubleshooting](../troubleshooting/index.md)** — when something does
+- **[Troubleshooting](../troubleshooting/index.md)**: when something does
   not start or a task gets stuck.

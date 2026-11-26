@@ -63,7 +63,7 @@ func loopbackAgentURL(rawURL string) bool {
 // URL agent_admin.private_api_hosts admits (§6.8 item 5, GitHub #740): the
 // agent picks its path on an intranet host. A variable so a test can treat
 // its loopback server as a public host.
-var probeOutcomeVisible = func(rawURL string, privateHosts []string) bool {
+var probeOutcomeVisible = func(rawURL string, privateHosts []dialguard.PrivateHost) bool {
 	return !loopbackAgentURL(rawURL) && !dialguard.PrivateHostGranted(rawURL, privateHosts)
 }
 
@@ -73,10 +73,10 @@ var probeOutcomeVisible = func(rawURL string, privateHosts []string) bool {
 var agentServerClientFor = dialguard.AgentURLClient
 
 // agentServerClient is the client for an agent project's API or MCP server:
-// the customer-URL guard plus the operator's private_api_hosts grant (§6.7,
-// §6.8), read on every dial (M1c D0).
-func (c *Container) agentServerClient(rawURL string, timeout time.Duration) *http.Client {
-	return agentServerClientFor(rawURL, c.agentPrivateAPIHosts(), timeout)
+// the customer-URL guard plus the operator's private_api_hosts grant for that
+// project (§6.7, §6.8, §6.12), read on every dial (M1c D0).
+func (c *Container) agentServerClient(projectID, rawURL string, timeout time.Duration) *http.Client {
+	return agentServerClientFor(rawURL, c.agentPrivateHostsFor(projectID), timeout)
 }
 
 // uniformLoopbackFailure is the one failure class a loopback listing gets.
@@ -92,7 +92,7 @@ func (c *Container) guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
-	cfg.HTTPClient = c.agentServerClient(cfg.URL, timeout) // live read (M1c D0); #740
+	cfg.HTTPClient = c.agentServerClient(projectID, cfg.URL, timeout) // live read (M1c D0); #740; #403
 }
 
 // toolListing is what one listing advertised: every tool name, and the
@@ -107,7 +107,7 @@ type toolListing struct {
 // judged on each tool's full descriptor (annotations and input schema).
 // Errors name the server, never a header value.
 func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) (toolListing, error) {
-	cfg.HTTPClient = c.agentServerClient(cfg.URL, listToolsTimeout) // live read (M1c D0); #740
+	cfg.HTTPClient = c.agentServerClient(cfg.ProjectID, cfg.URL, listToolsTimeout) // live read (M1c D0); #740; #403
 	cctx, cancel := context.WithTimeout(ctx, listToolsTimeout)
 	defer cancel()
 	cl, err := mcp.Connect(cctx, cfg, c.Logger)
@@ -247,7 +247,7 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 	listed, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")
-		if !probeOutcomeVisible(in.URL, s.c.agentPrivateAPIHosts()) {
+		if !probeOutcomeVisible(in.URL, s.c.agentPrivateHostsFor(cfg.ProjectID)) {
 			return unauthListing{url: in.URL, failed: uniformLoopbackFailure}
 		}
 		if hint := wrongTransportHint(cfg, err); hint != "" {
@@ -435,8 +435,8 @@ func (s *agentAdminService) refileTools(ctx context.Context, w waitingTool) {
 }
 
 // mcpServerConfigFor is a credential-less listing of url for namespace ns.
-func mcpServerConfigFor(ns, url string) mcp.ServerConfig {
-	return mcp.ServerConfig{Name: "recipe", Transport: "streamable-http", URL: url, ProjectID: agentns.ID(ns, "home")}
+func mcpServerConfigFor(projectID, url string) mcp.ServerConfig {
+	return mcp.ServerConfig{Name: "recipe", Transport: "streamable-http", URL: url, ProjectID: projectID}
 }
 
 // doInternal renders and files a daemon-internal verb for ns. A device

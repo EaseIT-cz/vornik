@@ -22,6 +22,7 @@ import (
 	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // Run is what an ingress hands in: the reference a webhook carried.
@@ -110,9 +111,13 @@ func (g *Ingest) Cfg() Config {
 // Config is the resolved per-project CI configuration (design §8).
 // Config is the resolved per-project CI configuration (design §8).
 type Config struct {
-	ArtifactName      string
-	MaxArtifactBytes  int64
-	MaxExcerptBytes   int
+	ArtifactName     string
+	MaxArtifactBytes int64
+	MaxExcerptBytes  int
+	// Detector masks artifact content before it is stored (CI outcomes
+	// design §19.2). Nil withholds the content: a mask that cannot run is
+	// not done.
+	Detector          secrets.Detector
 	ReviewOnFailure   bool
 	SuccessWorkflowID string
 	// SuccessWorkflowNeedsChangeRequest is true when the success workflow's
@@ -309,23 +314,21 @@ func (g *Ingest) attachArtifact(ctx context.Context, out *persistence.ForgeCIOut
 		return
 	}
 
-	excerpt, truncated := capExcerpt(string(data), g.cfg.MaxExcerptBytes)
+	// The bytes are a ZIP: unpack, mask and render them (design §19).
+	text, partial, withheldBy, err := artifactText(data, g.cfg.MaxArtifactBytes, g.cfg.Detector)
+	if err != nil {
+		g.Logger.Warn().Err(err).Str("artifact", name).
+			Msg("github task creator: artifact is not a readable ZIP; recording conclusions only")
+		return
+	}
+	if withheldBy != nil {
+		g.Logger.Warn().Err(withheldBy).Str("artifact", name).
+			Msg("github task creator: artifact content withheld (needs secrets.enabled and a mask the rescan proves)")
+	}
+	excerpt, capped := capText(text, g.cfg.MaxExcerptBytes)
 	out.ArtifactExcerpt = excerpt
 	out.ArtifactBytes = len(excerpt)
-	out.ArtifactTruncated = truncated
-}
-
-// capExcerpt trims to the byte cap, reporting whether it had to.
-//
-// Truncation is RETURNED, never inferred by a caller comparing lengths: a
-// truncated plan that reads as a complete one is a wrong answer presented as a
-// right one, and the flag is what lets the renderer say so.
-// capExcerpt trims to the byte cap.
-func capExcerpt(s string, limit int) (string, bool) {
-	if limit <= 0 || len(s) <= limit {
-		return s, false
-	}
-	return s[:limit], true
+	out.ArtifactTruncated = partial || capped
 }
 
 // Decision is what a completed run does beyond being recorded.

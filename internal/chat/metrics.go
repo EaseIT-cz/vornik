@@ -75,6 +75,11 @@ type Metrics struct {
 	// network call, because the operator switched optional work off for the
 	// model (LLD 2026-07-11-model-health §5.3d).
 	OptionalWorkRefused *prometheus.CounterVec
+	// ReasoningRequests counts requests that carried a reasoning level on
+	// the OpenAI-compatible routes, by what happened (GitHub #869): sent or
+	// refused. Other routes are not counted; the reasoning table declares
+	// what they do.
+	ReasoningRequests *prometheus.CounterVec
 	// ModelFallbackTotal counts router-level non-swarm model fallbacks (the
 	// FallbackProvider retried an unhealthy primary on its configured twin).
 	// Label names mirror vornik_executor_model_fallback_total for cross-source
@@ -100,6 +105,15 @@ func (m *Metrics) RecordSubscriptionTokenRefresh(provider, outcome string) {
 		return
 	}
 	m.SubscriptionTokenRefreshTotal.WithLabelValues(provider, outcome).Inc()
+}
+
+// RecordReasoning counts one request that carried a reasoning level.
+// Nil-safe, like the other recorders.
+func (m *Metrics) RecordReasoning(model, requested string, applied ReasoningSupport) {
+	if m == nil || m.ReasoningRequests == nil || requested == "" {
+		return
+	}
+	m.ReasoningRequests.WithLabelValues(model, requested, string(applied)).Inc()
 }
 
 // RecordModelFallback counts one router-level non-swarm model fallback. Nil-safe
@@ -220,6 +234,12 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name:      "optional_work_refused_total",
 			Help:      "Best-effort calls refused without a network call because optional work is disabled for the model, per (model, call_site).",
 		}, []string{"model", "call_site"}),
+		ReasoningRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "chat",
+			Name:      "reasoning_requests_total",
+			Help:      "Requests that carried a reasoning level, per (model, requested, applied), counted on the OpenAI-compatible routes (http, openrouter, ollama_cloud, vertex): applied = sent | refused.",
+		}, []string{"model", "requested", "applied"}),
 		ModelFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
 			Subsystem: "chat",
@@ -254,7 +274,7 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 		m.CacheCreationTokensTotal, m.CacheReadTokensTotal,
 		m.CacheHitRatio, m.CacheDollarsSavedTotal,
 		m.SubscriptionTokenRefreshTotal,
-		m.ModelHealthState, m.ModelHealthTrips, m.BestEffortDeadlines, m.OptionalWorkRefused, m.ModelFallbackTotal,
+		m.ModelHealthState, m.ModelHealthTrips, m.BestEffortDeadlines, m.OptionalWorkRefused, m.ReasoningRequests, m.ModelFallbackTotal,
 		m.CallsAbandonedTotal, m.AbandonedCallsInFlight,
 	)
 	return m

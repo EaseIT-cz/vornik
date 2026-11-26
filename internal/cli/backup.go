@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -64,8 +66,10 @@ Two safety gates run before the restore proceeds:
   1. Schema-presence gate (B-8): if the target already carries a
      vornik-owned schema (migrations rows OR canonical PG types like
      artifact_class), the restore is refused. Override with --clean
-     (drops the schema first) or --allow-non-empty (proceeds anyway,
-     usually fails on CREATE TYPE collisions).
+     (drops vornik's objects, keeping the schema and its extensions,
+     in the restore's own transaction: a failed restore changes
+     nothing) or --allow-non-empty (proceeds anyway, usually fails on
+     CREATE TYPE collisions).
   2. Row-count gate: refuses targets with non-empty projects/tasks
      tables. Override with --allow-non-empty.
 
@@ -91,7 +95,7 @@ func init() {
 	restoreCmd.Flags().BoolVar(&restoreAllowNonEmpty, "allow-non-empty", false, "permit restore into a DB with existing project/task rows")
 	backupCmd.Flags().BoolVar(&backupRestorable, "restorable", false, "also include the secrets/ directory beside the config file (the secret store's key, the env files), so the archive restores on another host; the archive is then as sensitive as those secrets")
 	backupCmd.Flags().BoolVar(&backupExport, "export", false, "the owner export: no secrets/, the config redacted, and the rows of every secret-material table (keys, tokens, sessions) left out of the dump; restores to an instance whose secrets are set up again")
-	restoreCmd.Flags().BoolVar(&restoreClean, "clean", false, "DROP SCHEMA public CASCADE before restore — wipes any vornik schema already loaded on the target")
+	restoreCmd.Flags().BoolVar(&restoreClean, "clean", false, "drop vornik's objects (not the schema or its extensions) in the restore's own transaction — a failed restore changes nothing")
 	_ = restoreCmd.MarkFlagRequired("from")
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(restoreCmd)
@@ -277,12 +281,12 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	//     errors but the operator chose to try.
 	//   - neither: refuse with a clear error naming both recovery
 	//     paths.
-	if restoreClean {
-		if err := dropTargetSchema(&cfg.Database); err != nil {
-			return fmt.Errorf("--clean: %w", err)
-		}
-		fmt.Println("✔ target schema wiped (--clean)")
-	} else if !restoreAllowNonEmpty {
+	//
+	// --clean drops nothing here. It runs as cleanTargetSQL inside the
+	// replay's own transaction below, so a replay that fails leaves the
+	// target as it was (GitHub #864: a separate, committed drop emptied the
+	// database whenever the replay then failed).
+	if !restoreClean && !restoreAllowNonEmpty {
 		if err := checkTargetSchemaAbsent(&cfg.Database); err != nil {
 			return fmt.Errorf("%w\n\nrecovery paths:\n"+
 				"  - re-run with --clean to drop + recreate the schema, OR\n"+
@@ -301,7 +305,8 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	// > 0 trips the guard. (Migrations / schema_version are
 	// expected; we don't probe them.)
 	//
-	// Skipped after --clean since we just emptied the schema.
+	// Skipped with --clean: the clean empties these tables in the replay's
+	// own transaction.
 	if !restoreAllowNonEmpty && !restoreClean {
 		if err := checkTargetEmpty(&cfg.Database); err != nil {
 			return fmt.Errorf("%w (pass --allow-non-empty to override)", err)
@@ -327,7 +332,13 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	// ON_ERROR_STOP=on aborts on the first error; -1 wraps the
 	// whole file in BEGIN/COMMIT). Atomicity goal from
 	// saas-readiness §3.13.
-	dumpPath := filepath.Join(staging, "db.sql")
+	//
+	// With --clean the transaction runs cleanTargetSQL first, so the clean
+	// and the replay commit together or not at all (GitHub #864).
+	replayPath := filepath.Join(staging, "db.restore.sql")
+	if err := writeRestoreDump(filepath.Join(staging, "db.sql"), replayPath); err != nil {
+		return err
+	}
 	pgpassPath, cleanup, err := writePGPassFile(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("write pgpass: %w", err)
@@ -341,14 +352,30 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		"-d", cfg.Database.Name,
 		"--single-transaction",
 		"--set", "ON_ERROR_STOP=on",
-		"-f", dumpPath,
 	}
+	if restoreClean {
+		cleanPath := filepath.Join(staging, "clean.sql")
+		if err := os.WriteFile(cleanPath, []byte(cleanTargetSQL), 0o600); err != nil {
+			return fmt.Errorf("write the clean step: %w", err)
+		}
+		pgArgs = append(pgArgs, "-f", cleanPath)
+	}
+	pgArgs = append(pgArgs, "-f", replayPath)
 	pgCmd := exec.Command("psql", pgArgs...)
 	pgCmd.Env = pgEnv
 	if out, err := pgCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("psql restore failed: %w\n%s", err, out)
+		hint := ""
+		if strings.Contains(string(out), "permission denied to create extension") {
+			hint = "\nthe database has lost an extension the dump needs, and only a superuser can create it: " +
+				"run CREATE EXTENSION <name> in this database as a superuser (or re-run db-bootstrap), then restore again"
+		}
+		return fmt.Errorf("psql restore failed, the database is unchanged: %w\n%s%s", err, out, hint)
 	}
-	fmt.Println("✔ database restored (single-transaction)")
+	if restoreClean {
+		fmt.Println("✔ target cleaned and database restored (one transaction)")
+	} else {
+		fmt.Println("✔ database restored (single-transaction)")
+	}
 
 	// Restore artifacts.
 	artifactsSrc := filepath.Join(staging, "artifacts")
@@ -574,45 +601,131 @@ func checkTargetSchemaAbsent(db *config.DatabaseConfig) error {
 	return nil
 }
 
-// dropTargetSchema (B-8) wipes the public schema on the target
-// database — the documented "wipe + restore" path triggered by the
-// --clean flag. The drop + recreate runs in one tx so a partial
-// failure leaves either the original schema OR an empty schema,
-// never a half-dropped one. The recreated schema is granted to the
-// configured connection user so the subsequent psql restore can
-// actually populate it.
-func dropTargetSchema(db *config.DatabaseConfig) error {
-	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		db.Host, db.Port, db.User, db.Password, db.Name, fallbackSSLMode(db.SSLMode))
-	conn, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return fmt.Errorf("open target for --clean: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
+// cleanTargetSQL is --clean (B-8, rewritten for GitHub #864). It runs as the
+// first file of the replay's single transaction and drops, with CASCADE, every
+// object in public that is not a member of an extension: tables (plain,
+// partitioned, foreign), views, materialized views, sequences, routines,
+// standalone types and domains, and text-search configurations. The schema
+// and the extensions stay.
+//
+// It used to DROP SCHEMA public CASCADE in a transaction of its own. That also
+// dropped the vector extension, which the superuser creates (db-bootstrap) and
+// the daemon's role cannot recreate, and it committed before the replay ran: a
+// replay that then failed left an empty database. An object here that the
+// role cannot drop now fails the one transaction, and nothing changes.
+const cleanTargetSQL = `DO $vornik_clean$
+DECLARE
+  stmts text[];
+  stmt  text;
+BEGIN
+  -- Every statement is built BEFORE anything is dropped: a name read from
+  -- the catalogue after an earlier CASCADE removed the object prints as its
+  -- OID, which is not a name (GitHub #864 follow-up). IF EXISTS then skips
+  -- what an earlier CASCADE already removed. Order: relations, sequences,
+  -- routines, types, text-search configurations.
+  SELECT coalesce(array_agg(q ORDER BY ord, n), '{}') INTO stmts FROM (
+    SELECT 1 AS ord, c.oid::regclass::text AS n, format('DROP %s IF EXISTS %s CASCADE', CASE c.relkind
+        WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END,
+        c.oid::regclass::text) AS q
+      FROM pg_class c
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p','f','v','m')
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+    UNION ALL
+    SELECT 2, c.oid::regclass::text, format('DROP SEQUENCE IF EXISTS %s CASCADE', c.oid::regclass::text)
+      FROM pg_class c
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'S'
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+    UNION ALL
+    SELECT 3, p.oid::regprocedure::text, format('DROP %s IF EXISTS %s CASCADE', CASE p.prokind
+        WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' ELSE 'FUNCTION' END, p.oid::regprocedure::text)
+      FROM pg_proc p
+     WHERE p.pronamespace = 'public'::regnamespace
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+    UNION ALL
+    SELECT 4, t.oid::regtype::text, format('DROP %s IF EXISTS %s CASCADE', CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END,
+        t.oid::regtype::text)
+      FROM pg_type t
+     WHERE t.typnamespace = 'public'::regnamespace AND t.typtype IN ('e','c','d','r','m')
+       AND (t.typtype <> 'c' OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e')
+    UNION ALL
+    SELECT 5, format('%I.%I', n.nspname, c.cfgname), format('DROP TEXT SEARCH CONFIGURATION IF EXISTS %I.%I CASCADE', n.nspname, c.cfgname)
+      FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+     WHERE c.cfgnamespace = 'public'::regnamespace
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_ts_config'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+  ) AS s;
+  FOREACH stmt IN ARRAY stmts LOOP
+    EXECUTE stmt;
+  END LOOP;
+END
+$vornik_clean$;
+`
 
-	tx, err := conn.Begin()
+// writeRestoreDump copies a pg_dump plain-SQL file to out without the two
+// statements a restore must not replay (GitHub #864):
+//
+//   - COMMENT ON EXTENSION: only the extension's owner may run it, and on a
+//     packaged instance the superuser owns vector, so the daemon's role fails
+//     ("must be owner of extension vector"). The comment is the extension's
+//     own, written again by CREATE EXTENSION; nothing of vornik's is lost.
+//   - SET transaction_timeout = 0: pg_dump 17 and later write it, and a 16
+//     server refuses the parameter. 0 is the default, so dropping it changes
+//     nothing on a server that knows it.
+//
+// The filter runs at restore time, so archives written before it restore.
+// A COMMENT ON EXTENSION is dropped as a whole statement: pg_dump writes the
+// comment's text verbatim, so it can span lines, and the statement ends at
+// the first line that ends with ";" outside a string literal (an even count
+// of single quotes so far; two apostrophes are a quote inside one). A dump
+// that ends inside one refuses the restore before anything runs.
+func writeRestoreDump(in, out string) error {
+	src, err := os.Open(in)
 	if err != nil {
-		return fmt.Errorf("begin --clean tx: %w", err)
+		return fmt.Errorf("open the dump: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec("DROP SCHEMA public CASCADE"); err != nil {
-		return fmt.Errorf("DROP SCHEMA public CASCADE: %w", err)
+	defer func() { _ = src.Close() }()
+	dst, err := os.OpenFile(out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create the replay copy: %w", err)
 	}
-	// The user is interpolated, not parameterised, because PG
-	// AUTHORIZATION accepts an identifier (not a string literal).
-	// Interpolation safety: the user name comes from operator-
-	// authored config, the same source that authenticated the
-	// connection above. If they can inject SQL here they could
-	// already DROP DATABASE.
-	stmt := fmt.Sprintf("CREATE SCHEMA public AUTHORIZATION %s", db.User)
-	if _, err := tx.Exec(stmt); err != nil {
-		return fmt.Errorf("CREATE SCHEMA public AUTHORIZATION %s: %w", db.User, err)
+	r, w := bufio.NewReaderSize(src, 1<<20), bufio.NewWriterSize(dst, 1<<20)
+	inComment, quotes, startLine := false, 0, 0
+	for lineNo := 1; ; lineNo++ {
+		line, readErr := r.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			_ = dst.Close()
+			return fmt.Errorf("read the dump: %w", readErr)
+		}
+		body := strings.TrimRight(line, "\r\n")
+		switch {
+		case inComment || strings.HasPrefix(body, "COMMENT ON EXTENSION "):
+			if !inComment {
+				inComment, quotes, startLine = true, 0, lineNo
+			}
+			quotes += strings.Count(body, "'")
+			if quotes%2 == 0 && strings.HasSuffix(body, ";") {
+				inComment = false
+			}
+		case body == "SET transaction_timeout = 0;":
+		default:
+			if _, err := w.WriteString(line); err != nil {
+				_ = dst.Close()
+				return fmt.Errorf("write the replay copy: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit --clean tx: %w", err)
+	if inComment {
+		_ = dst.Close()
+		return fmt.Errorf("the dump ends inside the COMMENT ON EXTENSION that starts at line %d; refusing to replay it (nothing was changed)", startLine)
 	}
-	return nil
+	if err := w.Flush(); err != nil {
+		_ = dst.Close()
+		return fmt.Errorf("write the replay copy: %w", err)
+	}
+	return dst.Close()
 }
 
 // fallbackSSLMode picks a safe default when the config didn't set

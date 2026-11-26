@@ -10,6 +10,9 @@ maxConcurrentTasks: 1
 
 autonomy:
   enabled: true
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   goal: |
     Track and summarise: {{.topic}}.
 

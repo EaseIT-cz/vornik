@@ -245,7 +245,7 @@ func (c *Container) agentOAuthHTTP(projectID, serverURL string) *http.Client {
 	if _, agent := agentns.FromID(projectID); !agent {
 		return nil
 	}
-	return c.agentServerClient(serverURL, mcpOAuthHTTPTimeout) // live read (#560 M1c D0); the server's own host only (#740)
+	return c.agentServerClient(projectID, serverURL, mcpOAuthHTTPTimeout) // live read (#560 M1c D0); the server's own host only (#740)
 }
 
 // priorSignIn reports whether the server already holds a token row (so a

@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // The typed inputs of the mutating verbs (§6). Decoded strictly: an unknown
@@ -21,6 +21,9 @@ type CreateProjectInput struct {
 	Slug     string `json:"slug"`
 	Purpose  string `json:"purpose"`
 	Template string `json:"template,omitempty"`
+	// SharedMemory joins the namespace's shared memory (part 24 §24.6); an
+	// approval on the phone. Default false: the project's memory is sealed.
+	SharedMemory bool `json:"shared_memory,omitempty"`
 }
 
 // RoleInput is one role of define_swarm.
@@ -66,6 +69,9 @@ type DefineWorkflowInput struct {
 	// Schedule runs the workflow by itself (design §17); nil: on request
 	// only.
 	Schedule *ScheduleInput `json:"schedule,omitempty"`
+	// HandOver starts another workflow of the namespace when this one
+	// completes (part 24 §24.3); nil: none.
+	HandOver *HandOverInput `json:"hand_over,omitempty"`
 }
 
 // ScheduleInput is define_workflow's schedule: a 5-field cron evaluated in
@@ -221,11 +227,7 @@ func checkURL(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		host := u.Hostname()
-		if host == "localhost" {
-			return nil
-		}
-		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if dialguard.IsLoopbackHost(u.Hostname()) { // the one rule (#168)
 			return nil
 		}
 		return fmt.Errorf("%s is not https (plain http is allowed only to this machine)", raw)

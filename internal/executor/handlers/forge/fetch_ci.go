@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
@@ -41,6 +42,11 @@ func (h *FetchCIHandler) Name() string { return "forge.fetch_ci" }
 // afterwards.
 func (h *FetchCIHandler) Execute(ctx context.Context, in executor.SystemStepInput) (executor.SystemStepResult, error) {
 	const name = "forge.fetch_ci"
+	if h != nil && isCanaryTask(in.Task) {
+		// GitHub #873: a canary run has no commit and no CI; say so, look
+		// nothing up.
+		return ciResult("", nil, "a canary run has no CI"), nil
+	}
 	if h == nil || h.outcomes == nil {
 		return executor.SystemStepResult{}, errors.New(name + ": handler is missing required dependencies (outcome store)")
 	}
@@ -144,7 +150,7 @@ func renderCIOutcomes(rows []*persistence.ForgeCIOutcome, note string) string {
 			b.WriteString("\n  output:")
 		}
 		b.WriteString("\n")
-		b.WriteString(untrusted.WrapLabeled("ci_artifact", r.ArtifactExcerpt))
+		b.WriteString(untrusted.WrapLabeled("ci_artifact", shownExcerpt(r.ArtifactExcerpt)))
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -161,4 +167,14 @@ func displayWorkflow(r *persistence.ForgeCIOutcome) string {
 		return r.WorkflowName
 	}
 	return fmt.Sprintf("run %d", r.RunID)
+}
+
+// shownExcerpt is the excerpt a prompt may carry. A row stored before the
+// ingest unpacked artifacts holds ZIP bytes (CI outcomes design §19.5, GitHub
+// #876); binary never goes into a prompt.
+func shownExcerpt(excerpt string) string {
+	if !utf8.ValidString(excerpt) || strings.IndexByte(excerpt, 0) >= 0 {
+		return "[content withheld: stored before #876]"
+	}
+	return excerpt
 }

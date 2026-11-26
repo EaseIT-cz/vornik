@@ -4,7 +4,6 @@ package config
 import (
 	"flag"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"reflect"
@@ -16,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"vornik.io/vornik/internal/datasubject"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -450,7 +450,7 @@ func (c *Config) Validate() error {
 	if err := c.validateDatabase(); err != nil {
 		return err
 	}
-	if err := c.Bench.validate(c.Database.Name); err != nil {
+	if err := c.Bench.validate(c.Database.Name, c.Database.Driver); err != nil {
 		return err
 	}
 	// A doctor threshold outside its range produces a check that can never
@@ -463,6 +463,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateHosting(); err != nil {
+		return err
+	}
+	if err := c.API.RateLimit.CompanionKey.Validate(); err != nil {
 		return err
 	}
 	if err := c.Admin.ValidateOperatorKeyIDs(); err != nil {
@@ -545,7 +548,7 @@ func (c *Config) Validate() error {
 		if err != nil {
 			return fmt.Errorf("gateway.address %q is not a valid URL: %w", c.Gateway.Address, err)
 		}
-		if !isLoopbackHost(gu.Hostname()) {
+		if !dialguard.IsLoopbackHost(gu.Hostname()) { // the one rule (#168)
 			return fmt.Errorf("gateway.address must be a loopback host (127.0.0.1/localhost/::1) when gateway.enabled is true, got %q", c.Gateway.Address)
 		}
 	}
@@ -764,20 +767,6 @@ var ErrVersionRequested = fmt.Errorf("version requested")
 // "operator omitted the key" (pointer stays at the default) apart
 // from "operator wrote enabled: false" (pointer overwritten to false).
 func boolPtr(v bool) *bool { return &v }
-
-// isLoopbackHost reports whether host (a bare URL hostname, no port) is a
-// loopback destination: the literal "localhost" or any IP in the loopback
-// range (127.0.0.0/8, ::1). Used to enforce that gateway.address points at the
-// local gateway sidecar and nowhere else (design §5, C2 / review B1+F1).
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
 
 // validateExternalBaseURL checks that the supplied URL has a http/https
 // scheme, a non-empty host, no path (or only a bare "/"), no query, and

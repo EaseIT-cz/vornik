@@ -1,7 +1,7 @@
 ---
 sources:
     - path: https://docs.vornik.io
-      sha256: 32e8ddfe1b1bec505630c51e6b9e26f45496ba174dc48f7c12edeea4fa8016eb
+      sha256: dd82bb3ba847bda983c736a6025815288b6c819603682f25b65027c914801097
 ---
 # Architecture
 

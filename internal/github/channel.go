@@ -35,7 +35,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -878,24 +877,6 @@ func (c *Channel) turnsParent() (context.Context, context.CancelCauseFunc) {
 	return c.turnsCtx, c.cancelTurns
 }
 
-// replyMarkerKey carries a mention turn's "a reply was posted" flag on its
-// context, so the turn's owner can tell a turn that failed before replying
-// (safe to retry on redelivery) from one that failed after (not safe: a
-// second comment). Send sets it; context values survive the receiver's
-// derived and detached contexts.
-type replyMarkerKey struct{}
-
-func withReplyMarker(ctx context.Context) (context.Context, *atomic.Bool) {
-	flag := &atomic.Bool{}
-	return context.WithValue(ctx, replyMarkerKey{}, flag), flag
-}
-
-func markReplied(ctx context.Context) {
-	if flag, ok := ctx.Value(replyMarkerKey{}).(*atomic.Bool); ok {
-		flag.Store(true)
-	}
-}
-
 // detachedTurnContext builds the context a mention turn runs on: the request's
 // values (trace ids, logger) without its cancellation, cancelled instead when
 // the channel stops or the backstop fires. It carries no deadline, so the
@@ -924,7 +905,7 @@ func (c *Channel) detachedTurnContext(reqCtx context.Context) (context.Context, 
 func (c *Channel) Send(ctx context.Context, msg conversation.ChannelMessage) (string, error) {
 	id, err := c.sendIssueComment(ctx, msg.SessionID, msg.Text)
 	if err == nil {
-		markReplied(ctx)
+		conversation.MarkReplied(ctx)
 	}
 	return id, err
 }
@@ -1487,7 +1468,7 @@ func (c *Channel) handleIssueComment(ctx context.Context, event, delivery string
 	c.inFlight.Add(1)
 	c.recvMu.RUnlock()
 	turnCtx, release := c.detachedTurnContext(ctx)
-	turnCtx, replied := withReplyMarker(turnCtx)
+	turnCtx, replied := conversation.WithReplyMarker(turnCtx)
 	go func() {
 		defer c.inFlight.Done()
 		defer release()

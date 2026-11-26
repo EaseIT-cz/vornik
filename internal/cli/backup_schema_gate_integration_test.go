@@ -193,10 +193,12 @@ func TestSchemaGate_OwnedTypeFails(t *testing.T) {
 	}
 }
 
-// TestSchemaGate_DropTargetSchemaWipes (B-8): --clean must drop
-// the schema AND recreate it with the right owner so the
-// subsequent psql -f actually has a schema to populate.
-func TestSchemaGate_DropTargetSchemaWipes(t *testing.T) {
+// TestSchemaGate_CleanTargetSQLWipes (B-8, GitHub #864): --clean's
+// cleanTargetSQL must leave no vornik object behind, so the replay's
+// CREATE TYPE artifact_class succeeds, and keep the schema writable. It no
+// longer drops the schema (that took the extensions with it); the
+// round trip as a non-superuser is restore_clean_864_integration_test.go.
+func TestSchemaGate_CleanTargetSQLWipes(t *testing.T) {
 	cfg := freshTestDB(t)
 	db := openDB(t, cfg)
 	if _, err := db.Exec(`CREATE TABLE migrations (version INT)`); err != nil {
@@ -209,8 +211,8 @@ func TestSchemaGate_DropTargetSchemaWipes(t *testing.T) {
 	if err := checkTargetSchemaAbsent(cfg); err == nil {
 		t.Fatal("pre-clean: schema gate should fail")
 	}
-	if err := dropTargetSchema(cfg); err != nil {
-		t.Fatalf("dropTargetSchema: %v", err)
+	if _, err := db.Exec(cleanTargetSQL); err != nil {
+		t.Fatalf("cleanTargetSQL: %v", err)
 	}
 	// Post-clean: schema present (so psql can write) but empty.
 	if err := checkTargetSchemaAbsent(cfg); err != nil {
@@ -277,5 +279,37 @@ func TestFreshTestDB_DropsItsDatabase(t *testing.T) {
 	if n != 0 {
 		t.Errorf("test database %s survived its own cleanup — the suite is leaking "+
 			"one database per run", dbName)
+	}
+}
+
+// GitHub #864 follow-up (gate 53c040542, CE lane): cleanTargetSQL read each
+// object's name from the catalogue while it dropped, so a view already
+// removed by its table's CASCADE printed as its OID and the next DROP was a
+// syntax error ("syntax error at or near \"32141638\""). The restore then
+// failed, unchanged. A table created before a view on it reproduces the
+// order deterministically.
+//
+// Found at: integration (the CE export lane of the gate).
+// Regression test at: integration TestSchemaGate_CleanTargetSQLDropsDependentsFirstNamed.
+func TestSchemaGate_CleanTargetSQLDropsDependentsFirstNamed(t *testing.T) {
+	cfg := freshTestDB(t)
+	db := openDB(t, cfg)
+	for _, q := range []string{
+		`CREATE TABLE a864 (id int PRIMARY KEY)`,
+		`CREATE VIEW b864 AS SELECT id FROM a864`,
+		`CREATE VIEW c864 AS SELECT id FROM b864`,
+		`CREATE TYPE d864 AS ENUM ('x')`,
+		`CREATE TABLE e864 (k d864)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := db.Exec(cleanTargetSQL); err != nil {
+		t.Fatalf("cleanTargetSQL over a table, two views on it and a type in use: %v", err)
+	}
+	var left int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE '%864'`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("objects left = %d (err %v), want 0", left, err)
 	}
 }

@@ -273,11 +273,24 @@ vornikctl companion doctor --client claude-desktop   # each failure names its fi
 **Check:** connect prints the key's project; after a Claude Desktop restart a
 `recall` works. Full page: `docs/public/guides/claude-desktop.md`.
 
-**Any other CLI** (Gemini CLI, opencode, …): there is **no** native companion
-plugin — packaging covers Claude Code and Codex only. Skip this step and drive
-the companion over plain HTTP (B4); the `remember` / `recall` / `delegate`
-methods all work as stateless JSON-RPC, so every CLI can use them without a
-plugin.
+**Any other CLI** (Gemini CLI, opencode, …): there is no native plugin, but
+any CLI that speaks MCP works. Mint the key with `--repo-scope` (this CLI
+has no hook to stamp one), then:
+
+```bash
+printf '%s\n' "$VORNIK_COMPANION_TOKEN" | \
+  vornikctl companion connect generic --print --key-stdin --url "$VORNIK_URL"
+vornikctl companion instructions --write AGENTS.md --url "$VORNIK_URL"
+vornikctl companion doctor --client generic --url "$VORNIK_URL"
+```
+
+Paste the printed MCP entry into your CLI's settings. Your CLI prefixes
+Vornik's tool names (`vornik_recall`, `mcp_vornik_recall`). There is no
+session digest: call `recent_memory` when a session starts.
+
+**Check:** the doctor passes, and your CLI lists Vornik as connected. Full
+page, with the Gemini CLI and opencode entries as measured:
+`docs/public/guides/any-agent.md`. B4 below still works over plain HTTP.
 
 ### B4. RAG round-trip smoke test
 

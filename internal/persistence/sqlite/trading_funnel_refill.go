@@ -59,3 +59,18 @@ func (d *DB) applyDataMigrationOnce(ctx context.Context, name string, stmts ...s
 	}
 	return tx.Commit()
 }
+
+// toolSwapRetire is the once-only marker for GitHub #886 S4 (Postgres
+// migration 263's twin): the tool-swap instincts learned before the fix
+// judged a tool error by words in its output, so their evidence is retired
+// and the fixed rule relearns any that hold.
+const toolSwapRetire = "2026-11-23-instinct-tool-swap-retire"
+
+func (d *DB) applyToolSwapRetire(ctx context.Context) error {
+	// The time is Go's, in the one SQLite layout (sqlite time law); it is our
+	// own fixed-format value, so formatting it into the statement is safe.
+	return d.applyDataMigrationOnce(ctx, toolSwapRetire, fmt.Sprintf(
+		`UPDATE instincts SET status = 'retired', updated_at = '%s'
+		  WHERE domain = 'workflow' AND action LIKE 'swapping off tool %%' AND status <> 'retired'`,
+		sqliteTime(time.Now())))
+}

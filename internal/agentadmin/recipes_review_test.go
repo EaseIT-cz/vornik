@@ -49,19 +49,19 @@ func withVar(name, value string) InstallRecipeInput {
 func TestRecipeListTargets_SharesTheInstallsResolution(t *testing.T) {
 	r := rendererWith(t, "", map[string]string{"probe": probeRecipe})
 	ok, _ := json.Marshal(probeInstall(nil))
-	if got := r.RecipeListTargets("hermes", ok); len(got) != 1 || got[0] != probeURL {
+	if project, got := r.RecipeListTargets("hermes", ok); len(got) != 1 || got[0] != probeURL || !strings.HasPrefix(project, "hermes--") {
 		t.Fatalf("control: %v", got)
 	}
 	var m map[string]any
 	_ = json.Unmarshal(ok, &m)
 	m["extra"] = true
 	unknown, _ := json.Marshal(m)
-	if got := r.RecipeListTargets("hermes", unknown); got != nil {
+	if _, got := r.RecipeListTargets("hermes", unknown); got != nil {
 		t.Fatalf("an input the install refuses (unknown field) was listed: %v", got)
 	}
 	m = map[string]any{"recipe": "probe", "project": "Not A Slug", "variables": map[string]string{"server_url": probeURL}}
 	badProject, _ := json.Marshal(m)
-	if got := r.RecipeListTargets("hermes", badProject); got != nil {
+	if _, got := r.RecipeListTargets("hermes", badProject); got != nil {
 		t.Fatalf("an input the install refuses (bad project) was listed: %v", got)
 	}
 }

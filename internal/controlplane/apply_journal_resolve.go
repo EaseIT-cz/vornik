@@ -390,9 +390,8 @@ func (e *ApplyEngine) resolveRestore(ctx context.Context, row *persistence.Confi
 			res.LeftInPlace = append(res.LeftInPlace, ro.op.Path)
 		}
 	}
-	if rerr := e.reload(); rerr != nil {
-		res.ReloadError = rerr.Error()
-		e.Logger.Error().Err(rerr).Str("journal_id", row.ID).Msg("control-plane: reload after a journal restore failed; the pre-images are on disk")
+	if rerr := e.restoreReload(row.ProposalID); rerr != nil {
+		res.ReloadError = rerr.Error() // logged and recorded by restoreReload (#859)
 	}
 	if len(res.LeftInPlace) > 0 {
 		note += "; created files left in place: " + strings.Join(res.LeftInPlace, ", ")

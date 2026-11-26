@@ -1,0 +1,5 @@
+# Editorial corrections of published rows in docs/public/benchmarks/results.md
+# (scripts/check-results-append-only.sh). One line per corrected row:
+# "<sha256 of the published row>  <reason>". Never a number: a changed
+# result is a new row. Reviewed like code.
+11f69c2b92668937136bd0da5064bbbb12e2f8e678522c0f28e1ff4756962c7e  2026.11.3 memory row: "the end-to-end check of GitHub #655" reworded to describe that fix, as public pages cite no enterprise issue numbers (operator 2026-11-25)

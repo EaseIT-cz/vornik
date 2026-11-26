@@ -84,6 +84,9 @@ type WorkflowBroker struct {
 	// Schedule runs the workflow unattended, for agent workflows only
 	// (agent-administered Vornik design §17). nil: on request only.
 	Schedule *BrokerSchedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// HandOver starts another workflow of the namespace when this one
+	// completes (agent-administered design part 24 §24.3). nil: none.
+	HandOver *BrokerHandOver `yaml:"hand_over,omitempty" json:"hand_over,omitempty"`
 }
 
 // BrokerSchedule is when a broker workflow runs by itself, and with what.

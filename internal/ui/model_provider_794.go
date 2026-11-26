@@ -305,6 +305,7 @@ func (s *Server) envLookup() func(string) (string, bool) {
 // (operations-API design §6.12 R1). Only a restart clears it.
 func (s *Server) markModelProviderPending() {
 	s.modelProviderSince.CompareAndSwap(0, time.Now().UnixNano())
+	s.bumpRestartGeneration()
 }
 
 func (s *Server) modelProviderPending() bool {

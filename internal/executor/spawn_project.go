@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/modelcheck"
+
 	"gopkg.in/yaml.v3"
 	"vornik.io/vornik/internal/actor"
 	"vornik.io/vornik/internal/executor/livepubsub"
@@ -193,6 +195,14 @@ func (e *Executor) handleSpawnProjectStep(
 	rendered, err := e.templateCatalog.MaterialiseFiles(manifest, stringParams)
 	if err != nil {
 		return spawnProjectResult{}, fmt.Errorf("spawn_project: render template %q: %w", step.Template, err)
+	}
+	// GitHub #881: the spawned swarms' models answer, or nothing is written.
+	if e.spawnModelCheck != nil {
+		if models := modelcheck.RenderedModels(rendered); len(models) > 0 {
+			if cerr := e.spawnModelCheck(ctx, models); cerr != nil {
+				return spawnProjectResult{}, fmt.Errorf("spawn_project: a model the template names did not pass the check; nothing was written: %w", cerr)
+			}
+		}
 	}
 
 	// Consent-bypass guard (security): a spawned child must NOT start out

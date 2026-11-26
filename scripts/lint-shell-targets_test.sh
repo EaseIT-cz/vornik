@@ -23,7 +23,7 @@ LINT_SHELL_TRACKED="$tmp/tracked" LINT_SHELL_EXCLUDE="$tmp/exclude" bash "$scrip
 
 # A: the derived set is tracked minus excluded, plus the extras, with a denominator.
 out="$(LINT_SHELL_TRACKED="$tmp/tracked" LINT_SHELL_EXCLUDE="$tmp/exclude" bash "$script" "$extra" 2>"$tmp/err")"; rc=$?
-if [ $rc -eq 0 ] && [ "$out" = "$(printf 'a.sh\nc.sh\n%s' "$extra" | sort)" ] && grep -q 'examining 3 of 4 tracked shell file(s); 1 excluded' "$tmp/err"; then
+if [ $rc -eq 0 ] && [ "$out" = "$(printf 'a.sh\nc.sh\n%s' "$extra" | sort)" ] && grep -q 'examining 3 of 4 shell file(s) (0 untracked, not ignored); 1 excluded' "$tmp/err"; then
   ok "tracked minus excluded, plus extras, with the denominator"
 else bad "A: rc=$rc out=[$out] err=[$(cat "$tmp/err")]"; fi
 
@@ -46,5 +46,21 @@ LINT_SHELL_TRACKED="$tmp/tracked" LINT_SHELL_EXCLUDE="$tmp/all" bash "$script" >
 # and fail for an unrelated reason, or, worse, a typo in the path would go unseen).
 LINT_SHELL_TRACKED="$tmp/tracked" LINT_SHELL_EXCLUDE="$tmp/nope" bash "$script" >/dev/null 2>"$tmp/err"; rc=$?
 [ $rc -ne 0 ] && grep -q 'missing' "$tmp/err" && ok "a missing exclusion list fails" || bad "E: rc=$rc err=[$(cat "$tmp/err")]"
+
+# G (#885): an untracked, not-ignored *.sh file is examined; an ignored one is not.
+# Found 2026-11-22: a new, uncommitted test script with an SC1007 passed local
+# `make lint` ("204 file(s) examined") and first failed on the CI VM's lint lane.
+repo="$tmp/repo"; mkdir -p "$repo"
+git -C "$repo" init -q
+printf 'ignored.sh\n' > "$repo/.gitignore"
+printf '#!/bin/sh\necho ok\n' > "$repo/tracked.sh"
+printf '#!/bin/sh\nFOO= bar\n' > "$repo/untracked.sh"
+printf '#!/bin/sh\nFOO= bar\n' > "$repo/ignored.sh"
+git -C "$repo" add .gitignore tracked.sh
+: > "$tmp/no-debt"
+out="$(cd "$repo" && LINT_SHELL_EXCLUDE="$tmp/no-debt" bash "$script" 2>"$tmp/err")"; rc=$?
+if [ $rc -eq 0 ] && [ "$out" = "$(printf 'tracked.sh\nuntracked.sh')" ] && grep -q 'examining 2 of 2 shell file(s) (1 untracked, not ignored)' "$tmp/err"; then
+  ok "untracked shell files are examined, ignored ones are not"
+else bad "G: rc=$rc out=[$out] err=[$(cat "$tmp/err")]"; fi
 
 exit $fail

@@ -30,10 +30,12 @@ func (r *AutonomyEvaluationRepository) Record(ctx context.Context, e *persistenc
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO autonomy_evaluations (
 			id, project_id, outcome, reason, task_id,
-			task_type, workflow_id, prompt_hash, duration_ms, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task_type, workflow_id, prompt_hash, duration_ms, created_at,
+			proposed_prompt
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.ProjectID, e.Outcome, e.Reason, e.TaskID,
 		e.TaskType, e.WorkflowID, e.PromptHash, e.DurationMs, sqliteTime(e.CreatedAt),
+		nullableString(e.ProposedPrompt),
 	)
 	return err
 }
@@ -43,7 +45,8 @@ func (r *AutonomyEvaluationRepository) List(ctx context.Context, filter persiste
 	var b strings.Builder
 	b.WriteString(`
 		SELECT id, project_id, outcome, reason, task_id,
-		       task_type, workflow_id, prompt_hash, duration_ms, created_at
+		       task_type, workflow_id, prompt_hash, duration_ms, created_at,
+		       proposed_prompt
 		FROM autonomy_evaluations WHERE 1=1`)
 	args := make([]any, 0, 4)
 	if filter.ProjectID != nil {
@@ -74,14 +77,17 @@ func (r *AutonomyEvaluationRepository) List(ctx context.Context, filter persiste
 		var (
 			e         persistence.AutonomyEvaluation
 			taskID    sql.NullString
+			proposed  sql.NullString
 			createdAt sqlTime
 		)
 		if err := rows.Scan(
 			&e.ID, &e.ProjectID, &e.Outcome, &e.Reason, &taskID,
 			&e.TaskType, &e.WorkflowID, &e.PromptHash, &e.DurationMs, &createdAt,
+			&proposed,
 		); err != nil {
 			return nil, err
 		}
+		e.ProposedPrompt = proposed.String
 		if taskID.Valid {
 			e.TaskID = &taskID.String
 		}
@@ -98,7 +104,8 @@ func (r *AutonomyEvaluationRepository) List(ctx context.Context, filter persiste
 func (r *AutonomyEvaluationRepository) LatestByProject(ctx context.Context) (map[string]*persistence.AutonomyEvaluation, error) {
 	query := `
 		SELECT ae.id, ae.project_id, ae.outcome, ae.reason, ae.task_id,
-		       ae.task_type, ae.workflow_id, ae.prompt_hash, ae.duration_ms, ae.created_at
+		       ae.task_type, ae.workflow_id, ae.prompt_hash, ae.duration_ms, ae.created_at,
+		       ae.proposed_prompt
 		FROM autonomy_evaluations ae
 		JOIN (
 			SELECT project_id, MAX(created_at) AS mc
@@ -114,11 +121,13 @@ func (r *AutonomyEvaluationRepository) LatestByProject(ctx context.Context) (map
 		var (
 			e         persistence.AutonomyEvaluation
 			taskID    sql.NullString
+			proposed  sql.NullString
 			createdAt sqlTime
 		)
 		if err := rows.Scan(
 			&e.ID, &e.ProjectID, &e.Outcome, &e.Reason, &taskID,
 			&e.TaskType, &e.WorkflowID, &e.PromptHash, &e.DurationMs, &createdAt,
+			&proposed,
 		); err != nil {
 			return nil, err
 		}
@@ -126,6 +135,7 @@ func (r *AutonomyEvaluationRepository) LatestByProject(ctx context.Context) (map
 			e.TaskID = &taskID.String
 		}
 		e.CreatedAt = createdAt.Time
+		e.ProposedPrompt = proposed.String
 		ecopy := e
 		out[e.ProjectID] = &ecopy
 	}

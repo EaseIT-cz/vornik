@@ -73,10 +73,15 @@ func seedPortabilityDB(t *testing.T) *sql.DB {
 			validation_status TEXT NOT NULL DEFAULT 'unverified',
 			lifecycle_state TEXT NOT NULL DEFAULT 'published')`,
 		`INSERT INTO project_memory_chunks (id, project_id, content) VALUES ('chunk-damaged', 'p1', 'x' || char(11) || 'y')`,
+		// GitHub #475: the columns the ledger really has (this fixture used to
+		// carry invented ones, so the check never reached its SQL here), and
+		// one undischarged incident 80 hours past awareness, so
+		// breach_deadlines reads it through the SQLite dialect as overdue.
 		`CREATE TABLE security_incidents (
-			id TEXT PRIMARY KEY, detected_at TIMESTAMP, severity TEXT,
-			authority_notified_at TIMESTAMP, subjects_notified_at TIMESTAMP,
-			status TEXT)`,
+			id TEXT PRIMARY KEY, state TEXT NOT NULL, became_aware_at TEXT NOT NULL,
+			authority_risk TEXT NOT NULL DEFAULT '', subject_risk TEXT NOT NULL DEFAULT '')`,
+		`INSERT INTO security_incidents (id, state, became_aware_at)
+			VALUES ('inc_portable', 'detected', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-80 hours'))`,
 		// The data-subject request ledger (GDPR design §4.20, #115): one
 		// verified request opened 40 days ago, so subject_request_deadlines
 		// reaches its SQL through the SQLite dialect and finds it overdue.
@@ -120,6 +125,7 @@ func TestDoctor_EveryCheckRunsOnSQLite(t *testing.T) {
 	db := seedPortabilityDB(t)
 	h := NewDoctorHandlers(db)
 	h.SetSubjectRequestLedger(sqlite.NewDataSubjectRepository(db))
+	h.SetBreachLedger(sqlite.NewIncidentRepository(db))
 	report := h.RunReportReadOnly(context.Background())
 	require.NotEmpty(t, report.Checks, "the report must contain checks")
 
@@ -143,12 +149,13 @@ func TestDoctor_EveryCheckRunsOnSQLite(t *testing.T) {
 // its SQL ever running, so a Postgres-only query behind that guard would never
 // be exercised and the report-wide test above would go green over an unexamined
 // surface — this design's own "unevaluated check reports OK" failure mode,
-// inside its own test. So the four DB-backed checks are named here and must
+// inside its own test. So the DB-backed checks are named here and must
 // each return a REAL verdict against the seeded rows.
 func TestDoctor_TheDatabaseBackedChecksReachTheirSQL(t *testing.T) {
 	db := seedPortabilityDB(t)
 	h := NewDoctorHandlers(db)
 	h.SetSubjectRequestLedger(sqlite.NewDataSubjectRepository(db))
+	h.SetBreachLedger(sqlite.NewIncidentRepository(db))
 	ctx := context.Background()
 
 	cases := []struct {
@@ -162,6 +169,7 @@ func TestDoctor_TheDatabaseBackedChecksReachTheirSQL(t *testing.T) {
 		{"fallback_rungs", h.checkFallbackRungs(ctx), ""},
 		{"memory_text_damage", h.checkMemoryTextDamage(ctx), "1 of 1 chunks examined"},
 		{"subject_request_deadlines", h.checkSubjectRequestDeadlines(ctx), "past the gdpr art 12(3) response deadline"},
+		{"breach_deadlines", h.checkBreachDeadlines(ctx), "past the art 33(1) 72-hour notification deadline"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

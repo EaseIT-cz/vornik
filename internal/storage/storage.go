@@ -328,6 +328,9 @@ type Repositories struct {
 	// GitHubAppManifestStates holds the console's App-manifest states
 	// (GitHub #802).
 	GitHubAppManifestStates persistence.GitHubAppManifestStateRepository
+	// CompanionOIDCTrusts binds companion keys to GitHub Actions workflows
+	// (GitHub #792, design 27).
+	CompanionOIDCTrusts persistence.CompanionOIDCTrustRepository
 	// GitHubAppBindings holds the App's installation bindings (GitHub #800).
 	GitHubAppBindings persistence.GitHubAppBindingRepository
 	// AgentGrants holds what a device approved for agent namespaces:
@@ -543,6 +546,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
 		GitHubAppManifestStates: sqlite.NewGitHubAppManifestStateRepository(db),
+		CompanionOIDCTrusts:     sqlite.NewCompanionOIDCTrustRepository(db),
 		GitHubAppBindings:       sqlite.NewGitHubAppBindingRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
 		AgentAdminRefusals:      sqlite.NewAgentAdminRefusalRepository(db),
@@ -730,6 +734,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
 		GitHubAppManifestStates:        postgres.NewGitHubAppManifestStateRepository(dbtx),
+		CompanionOIDCTrusts:            postgres.NewCompanionOIDCTrustRepository(dbtx),
 		GitHubAppBindings:              postgres.NewGitHubAppBindingRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),
 		AgentAdminRefusals:             postgres.NewAgentAdminRefusalRepository(dbtx),

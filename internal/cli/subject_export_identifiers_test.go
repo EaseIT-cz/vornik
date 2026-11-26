@@ -42,7 +42,7 @@ func TestSubjectExport_ReportListsTheIdentifiersHeld(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 
-	_, ids, blob, hash, err := assembleSubjectExport(ctx, repo, req)
+	_, ids, blob, hash, err := assembleSubjectExport(ctx, repo, req, nil)
 	if err != nil {
 		t.Fatalf("assembleSubjectExport: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestSubjectExport_SharedRowIsWithheldEndToEnd(t *testing.T) {
 	if err := req.Verify("operator", "authenticated session", now); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	exp, _, blob, _, err := assembleSubjectExport(ctx, repo, req)
+	exp, _, blob, _, err := assembleSubjectExport(ctx, repo, req, nil)
 	if err != nil {
 		t.Fatalf("assembleSubjectExport: %v", err)
 	}

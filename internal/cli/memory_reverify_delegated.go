@@ -340,7 +340,7 @@ var memoryReverifyDelegatedCmd = &cobra.Command{
 	Use:   "reverify-delegated",
 	Short: "Re-verify companion-delegated chunks by provenance; de-verify the rest (dry run by default)",
 	Long: `Chunks an agent role wrote in a companion-delegated task were stamped
-verified by role-of-record before design 22 amendment #482. This verb
+verified by role-of-record before the provenance check (October 2026). This verb
 re-verifies each such artifact by provenance (its stored bytes are the blob
 at an eligible path on origin's default branch in the project's own clone)
 and de-verifies the rest. The default branch is the project's

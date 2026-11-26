@@ -110,6 +110,7 @@ var outboundSites = map[string]outboundRow{
 	"internal/dispatcher deliverRenderedFiles":            {classTransport, 1, "", whyFileSender},
 	"internal/email Channel.sendFailureNotice":            {classDisclosed, 1, "false", ""}, // #369: an interaction notice, not authored content
 	"internal/github Channel.sendFailureNotice":           {classDisclosed, 1, "false", ""}, // #369: an interaction notice, not authored content
+	"internal/slack Channel.afterFailedTurn":              {classDisclosed, 2, "false", ""}, // #914: an interaction notice, not authored content; one post and its one retry
 	"internal/email Channel.sendOutbound":                 {classTransport, 1, "", "SMTP transport under email Channel.Send/SendFile; disclosed by the receiver footer or SendDisclosed / emailFileSender"},
 
 	// --- GitHub #342 rows 4, 9, 10, 17 and the inventory extras (§11.4.1) ---

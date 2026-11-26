@@ -46,6 +46,14 @@ type GuardWarning struct {
 	Redacted bool
 }
 
+// outputGuardWithheld is what the model sees in place of a tool result the
+// guard could not scan (#917).
+const outputGuardWithheld = "[The output guard could not scan this tool result, so it was withheld.]"
+
+// scanToolResult is the guard's scan; a variable so a test can make it
+// panic (#917).
+var scanToolResult = outputguard.ScanWithProvenance
+
 // applyOutputGuard runs the guard on a single tool result and
 // produces (scanned-or-redacted body, optional warning). Empty
 // findings return the body unchanged and a zero-value
@@ -56,10 +64,11 @@ type GuardWarning struct {
 // rules skipped; secret-class rules always run. Unknown/third-party
 // provenance runs the full rule set (fail-safe default).
 //
-// Failure modes are silent — a malformed pattern in the library
-// that panicked would otherwise take down the dispatcher loop.
-// We recover and return the original body so the worst case is
-// "guard didn't fire this turn", not "request 500s".
+// A panic in the scan fails closed (#917, output-guard wiring design,
+// Amendment 2026-11-25): the model gets outputGuardWithheld, never the
+// unscanned body; the warning (kind scan_failed) makes the caller log it,
+// and the panic is counted. The panic value is not kept: it can quote the
+// scanned text.
 //
 // metrics (may be nil) receives one findings_total observation per
 // finding (labelled tool/severity/kind), a redactions_total bump when
@@ -67,14 +76,20 @@ type GuardWarning struct {
 // The scan is always timed — even a no-finding scan exercises the
 // regex set, and operators want the latency floor — so the duration
 // observation rides outside the HasFinding short-circuit.
-func (c *outputGuardConfig) applyOutputGuard(toolName, body string, prov outputguard.Provenance, metrics *Metrics) (string, GuardWarning) {
+func (c *outputGuardConfig) applyOutputGuard(toolName, body string, prov outputguard.Provenance, metrics *Metrics) (guarded string, warning GuardWarning) {
 	if c == nil {
 		return body, GuardWarning{}
 	}
-	defer func() { _ = recover() }()
+	defer func() {
+		if recover() != nil {
+			metrics.observeOutputGuardScanPanic(toolName)
+			guarded = outputGuardWithheld
+			warning = GuardWarning{Tool: toolName, MaxSeverity: outputguard.SeverityHigh, Kinds: []string{"scan_failed"}, Redacted: true}
+		}
+	}()
 
 	start := time.Now()
-	rep := outputguard.ScanWithProvenance(body, prov)
+	rep := scanToolResult(body, prov)
 	metrics.observeOutputGuardScan(toolName, time.Since(start))
 	if !rep.HasFinding() {
 		return body, GuardWarning{}

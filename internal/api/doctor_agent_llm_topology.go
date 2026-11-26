@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // isDaemonProxyEndpoint reports whether endpoint routes agent LLM calls back
@@ -29,10 +31,7 @@ func isDaemonProxyEndpoint(endpoint, unixSocket, listenAddr string) bool {
 		return false
 	}
 	host := u.Hostname()
-	if host == "localhost" || host == "host.containers.internal" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if dialguard.IsLoopbackHost(host) || host == "host.containers.internal" { // the one rule (#168), plus the container's name for the host
 		return true
 	}
 	// Same host as the daemon's own listen address.

@@ -406,13 +406,29 @@ fi
 #     reach the arm. The arm's swarm and its task set's workflows must match
 #     this commit's templates, apart from each role's model, modelFallback and
 #     runtime.image (checked by 0c, 3 and 3b). Refuses; never copies.
+# 3d. LEARNING PHASE (GitHub #890, benchmark LLD §12.37). A warm-up must not
+#     start frozen (a freeze outlived its arm and arm C learned nothing for
+#     7.5 hours), and a learning arm's measured pass must start frozen. The
+#     arm's switches come from --daemon-config; an arm with none on passes.
+#     For a measured pass, the arm's promoted workflows and their file hashes
+#     go to check 3c, which accepts each at exactly that hash.
+learning_phase() { [ "$PHASE" = warmup ] && echo warmup || echo measure; }
+"$VORNIKCTL" bench agent learned-state --check-phase "$(learning_phase)" --daemon-config "$DAEMON_CONFIG" \
+    || fail "the learning state does not fit a $(learning_phase) pass (see above)"
 _cfgguard="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bench-config-drift-guard.sh"
 _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -r "$_cfgguard" ] || fail "cannot read the configuration guard at $_cfgguard"
+# Every pass, warm-up included (#915, §12.37 amendment 2026-11-25): a warm-up
+# promotes by design, and a re-run chunk's preflight must accept the arm's own
+# promotion. An arm with no learning answers 404, the list is empty, and check
+# 3c compares every file with the templates.
+_promoted=$(mktemp)
+"$VORNIKCTL" bench agent learned-state --promoted-files > "$_promoted" 2>/dev/null || : > "$_promoted"
 # shellcheck source=scripts/bench-config-drift-guard.sh
 . "$_cfgguard"
-_cfgsum=$(bench_assert_config_matches_build "$CFGDIR" "$_repo/configs" "$SWARM" "$TASKS" "${VORNIK_BENCH_MODEL:-}") \
-    || fail "the bench configs tree differs from this commit's templates (see above)"
+_cfgsum=$(bench_assert_config_matches_build "$CFGDIR" "$_repo/configs" "$SWARM" "$TASKS" "${VORNIK_BENCH_MODEL:-}" "$_promoted") \
+    || { rm -f "$_promoted"; fail "the bench configs tree differs from this commit's templates (see above)"; }
+rm -f "$_promoted"
 note "configuration: $_cfgsum"
 
 # 4. WORKSPACE STATE. Untracked workflow machinery accumulated across runs and blocked
@@ -784,6 +800,12 @@ NCHUNK=$(( (REPEATS + RBATCH - 1) / RBATCH ))
 JOURNALS=(); DONE_CHUNKS=0
 [ "$NCHUNK" -gt 1 ] && echo ">> $REPEATS repeat(s) in $NCHUNK chunk(s) of $RBATCH; completed chunks are skipped on re-run"
 
+# A journal is usable, and its batch skipped on re-run, only when it reads and
+# its arm key is not PARTIAL. A PARTIAL journal is moved aside and re-run: the
+# closing merge refuses it, and skipping it stopped arm C after the whole
+# warm-up pass (GitHub #924).
+journal_usable() { [ -f "$1" ] && python3 -c 'import json,sys; sys.exit(1 if json.load(open(sys.argv[1])).get("manifest",{}).get("armPartial") else 0)' "$1" 2>/dev/null; }
+set_aside_partial() { [ -f "$1" ] || return 0; local to; to="$1.partial-$(date +%s)"; mv "$1" "$to"; echo "   $2: journal unusable (PARTIAL arm key or unreadable), moved to $to; re-running"; }
 for ((c=0; c<NCHUNK; c++)); do
     # The last chunk carries the remainder, so --repeats 10 --repeat-batch 3
     # is 3+3+3+1 rather than 3+3+3+3 = 12 runs nobody asked for.
@@ -803,11 +825,12 @@ for ((c=0; c<NCHUNK; c++)); do
     NTASK_PRE=$(python3 -c "import json;print(len(json.load(open('$TASKS'))))")
     if ! { [ "$TBATCH" -gt 0 ] 2>/dev/null && [ "$TBATCH" -lt "$NTASK_PRE" ]; }; then
         JOURNALS+=("$JOURNAL")
-        if [ -f "$JOURNAL" ]; then
+        if journal_usable "$JOURNAL"; then
             echo "   chunk $c: already journaled, skipping"
             DONE_CHUNKS=$((DONE_CHUNKS+1))
             continue
         fi
+        set_aside_partial "$JOURNAL" "chunk $c"
     fi
     if [ "$BUDGET" -gt 0 ] 2>/dev/null; then
         SPENT=$(budgetSpent)
@@ -848,10 +871,11 @@ for ((c=0; c<NCHUNK; c++)); do
         for ((tb=0; tb<NTB; tb++)); do
             TBJOURNAL="$OUTDIR/${ARM}-c$c-taskbatch-$tb.json"
             JOURNALS+=("$TBJOURNAL")
-            if [ -f "$TBJOURNAL" ]; then
+            if journal_usable "$TBJOURNAL"; then
                 echo "   task batch $tb: already journaled, skipping"
                 continue
             fi
+            set_aside_partial "$TBJOURNAL" "task batch $tb"
             TBFILE="$OUTDIR/c$c-taskbatch-$tb-tasks.json"
             python3 -c "
 import json
@@ -913,7 +937,12 @@ done
 
 echo
 # Merging is what makes the chunks one experiment; rollup refuses arms that disagree.
-"$VORNIKCTL" bench agent rollup "${JOURNALS[@]}"
+# A warm-up pass's journals are refused by every scoring reader unless named
+# (GitHub #809), so its closing rollup names them; without this the pass exited
+# 1 after its last batch (benchmark LLD §12.36, GitHub #883).
+rollup_flags() { [ "$PHASE" = warmup ] && echo --include-warmup || true; }
+# shellcheck disable=SC2046 # rollup_flags prints at most one flag, never with spaces
+"$VORNIKCTL" bench agent rollup $(rollup_flags) "${JOURNALS[@]}"
 echo
 echo "journal(s): ${JOURNALS[*]}"
 echo

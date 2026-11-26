@@ -1036,6 +1036,17 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 		}
 		return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, why)
 	}
+	// A new destination's intranet grant is re-computed from the live list
+	// (part 06 §6.12, GitHub #403): if it is not the one the approval
+	// recorded, and the device's sentence named, nothing applies.
+	if why := agentadmin.PrivateReachMoved(st, pl.Grant.Integrations); why != "" {
+		if p.Status == persistence.ProposalStatusDraft || p.Status == persistence.ProposalStatusApproved {
+			if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusRejected, actor); err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, why)
+	}
 	ceiling := st.CeilingUSD
 	switch p.Status {
 	case persistence.ProposalStatusApplied:
@@ -1309,7 +1320,9 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 		MaxConcurrentTasksCap: cfg.EffectiveMaxConcurrentTasks(), MaxRoleTokensCap: cfg.EffectiveMaxRoleTokens(),
 		MaxRoleToolIterationsCap: cfg.EffectiveMaxRoleToolIterations(),
 		AgentMaxTokens:           agentContainerLLM(s.c.Config).MaxTokens, ModelMaxTokens: agentModelMaxTokens(s.c.Config),
-		Projects: map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
+		// The operator's intranet hosts, for the approval sentence (§6.10, #403).
+		PrivateHosts: s.c.agentPrivateAPIHosts(),
+		Projects:     map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
 		FileHashes: map[string]string{}, ProjectYAML: map[string][]byte{}, Locked: map[string]bool{},
 		Approvals: map[string]map[string]agentadmin.IntegrationApproval{}, Advertised: map[string][]string{},
 		AdvertisedReads: map[string][]string{},

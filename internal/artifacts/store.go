@@ -55,6 +55,9 @@ type Store struct {
 	// findings to secret_redaction_audit (secret-leak Phase 3 design,
 	// "the remaining sinks"). Nil records nothing.
 	redactionRecorder RedactionRecorder
+	// findingsCounter (optional) counts every finding by rule and outcome
+	// (GitHub #85, artifact heuristic-redaction design §7). Nil counts nothing.
+	findingsCounter FindingsCounter
 }
 
 // StoreOption is a functional option for configuring the Store.
@@ -125,6 +128,43 @@ func (s *Store) BasePath() string {
 // the store needs.
 type RedactionRecorder interface {
 	Record(ctx context.Context, events []persistence.SecretRedactionEvent) error
+}
+
+// FindingsCounter counts the artifact scan's findings by rule type and by
+// what happened to each: FindingRewritten, FindingStored or FindingDropped.
+type FindingsCounter interface {
+	Inc(ruleType, outcome string)
+}
+
+// The outcomes FindingsCounter is given (design §7).
+const (
+	FindingRewritten = "rewritten" // strong, redacted (redact, or block degraded to redact)
+	FindingStored    = "stored"    // strong, stored unchanged (detect)
+	FindingDropped   = "dropped"   // heuristic, removed by DropHeuristic
+)
+
+// SetFindingsCounter wires the findings counter. Nil-safe.
+func (s *Store) SetFindingsCounter(c FindingsCounter) {
+	s.findingsCounter = c
+}
+
+// countFindings increments the counter once per finding: a heuristic finding
+// as dropped, a strong one by what the action does to the body.
+func (s *Store) countFindings(findings []secrets.Finding, action secrets.Action) {
+	if s.findingsCounter == nil {
+		return
+	}
+	strong := FindingStored
+	if action == secrets.ActionRedact || action == secrets.ActionBlock {
+		strong = FindingRewritten
+	}
+	for _, f := range findings {
+		if secrets.IsHeuristicType(f.Type) {
+			s.findingsCounter.Inc(f.Type, FindingDropped)
+		} else {
+			s.findingsCounter.Inc(f.Type, strong)
+		}
+	}
 }
 
 // SetRedactionRecorder wires the secret_redaction_audit recorder. Nil-safe.
@@ -724,6 +764,7 @@ func (s *Store) scanForBackend(src io.Reader, mimeType, projectID, taskID, name 
 			// See https://docs.vornik.io
 			strong := secrets.DropHeuristic(findings)
 			s.recordStrongFindings(projectID, taskID, strong)
+			s.countFindings(findings, action)
 
 			logEvent := s.logger.Warn().
 				Str("project_id", projectID).

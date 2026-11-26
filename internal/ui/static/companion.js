@@ -31,11 +31,59 @@
         return can.length ? can.join(', ') : 'nothing';
     }
     function day() { return new Date().toISOString().slice(0, 10); }
+    // GitHub #766 (UI design §22): the project's companion hints, read only.
+    // Every value goes in through cell(), so through textContent.
+    var hintsURL = '/api/v1/companion/hints/report?projectId=companion';
+    var keyNames = {};
+    function hintsNote(msg) {
+        var n = document.getElementById('companion-hints-note');
+        n.textContent = msg;
+        n.classList.remove('hidden');
+    }
+    function when(t) { return t ? new Date(t).toLocaleString() : 'never'; }
+    function hintState(h) {
+        if (h.state === 'backed_off' && h.backoff_until) { return 'backed off until ' + when(h.backoff_until); }
+        return (h.state || '').replace('_', ' ');
+    }
+    function renderHints(rep) {
+        var body = document.getElementById('companion-hints');
+        var clients = document.getElementById('companion-hint-clients');
+        body.textContent = '';
+        clients.textContent = '';
+        if (!rep.enabled) { hintsNote('Hints are off for this project.'); return; }
+        (rep.hints || []).forEach(function (h) {
+            var tr = document.createElement('tr');
+            var win = h.window || '';
+            var followed = (win.match(/1/g) || []).length;
+            tr.appendChild(cell(h.id));
+            tr.appendChild(cell(hintState(h)));
+            tr.appendChild(cell(win.length ? followed + ' of ' + win.length + ' followed' : 'not shown yet'));
+            tr.appendChild(cell((h.followed_total || 0) + ' of ' + (h.fired_total || 0)));
+            body.appendChild(tr);
+        });
+        (rep.clients || []).forEach(function (c) {
+            var tr = document.createElement('tr');
+            tr.appendChild(cell(keyNames[c.key_id] || c.key_id));
+            tr.appendChild(cell(when(c.last_fetch_at)));
+            tr.appendChild(cell(when(c.last_upload_at)));
+            clients.appendChild(tr);
+        });
+    }
+    async function loadHints() {
+        try {
+            var res = await fetch(hintsURL, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+            if (!res.ok) { throw new Error('status ' + res.status); }
+            renderHints(await res.json());
+        } catch (e) {
+            hintsNote('Hints are not available.');
+        }
+    }
     async function load() {
         var res = await fetch(keysURL, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
         if (!res.ok) { showError('The keys could not be listed (' + res.status + ').'); return; }
         var data = await res.json();
         var keys = Array.isArray(data.keys) ? data.keys : [];
+        keys.forEach(function (k) { keyNames[k.id] = k.sessionLabel || k.keyPrefix; });
         body.replaceChildren();
         keys.filter(function (k) { return !k.revokedAt; }).forEach(function (k) {
             var tr = document.createElement('tr');
@@ -87,5 +135,5 @@
             memoryRead: true, skillRead: true, delegateDisabled: true
         });
     });
-    load();
+    load().then(loadHints, loadHints);
 })();

@@ -557,7 +557,7 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 	// message, on a detached context because the turn's own may be the
 	// thing that ended.
 	if result.Err != nil {
-		notice := streamFailureNotice(ctx, result.Err, streamedText != "")
+		notice := FailureNotice(ctx, result.Err, streamedText != "")
 		sendNotice := func() {
 			sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamFailureNoticeTimeout)
 			defer cancel()
@@ -595,19 +595,21 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 // notice, sent on a context detached from the (possibly ended) turn.
 const streamFailureNoticeTimeout = 15 * time.Second
 
-// streamFailureNotice is the line a failed streamed turn ends with. It says
-// that the reply failed and why, in terms the user can act on, and never
-// quotes the raw error (which can carry upstream bodies; the log has it).
-// partial says whether text was already shown above it.
-//
-// The cause comes from ctxerr.Classify on the turn's context: a finished
-// context means the turn itself ran out of time or was cancelled; a timeout
-// on a live context was one model call.
 // ErrStoppedByUser is the cancel cause of a chat turn the user ended with
 // /stop (dispatcher turn-context design §8, GitHub #644).
 var ErrStoppedByUser = errors.New("stopped by the user")
 
-func streamFailureNotice(ctx context.Context, err error, partial bool) string {
+// FailureNotice is the line a failed turn ends with: the Telegram stream's
+// last edit, and the web chat's message when nothing streamed (web chat
+// design §8, #862). It says that the reply failed and why, in terms the
+// user can act on, and never quotes the raw error (which can carry upstream
+// bodies; the log has it). partial says whether text was already shown
+// above it.
+//
+// The cause comes from ctxerr.Classify on the turn's context: a finished
+// context means the turn itself ran out of time or was cancelled; a timeout
+// on a live context was one model call.
+func FailureNotice(ctx context.Context, err error, partial bool) string {
 	// A turn the user stopped on purpose needs no apology and no "ask
 	// again" (#644, review d298 F6).
 	if errors.Is(context.Cause(ctx), ErrStoppedByUser) {
@@ -618,6 +620,10 @@ func streamFailureNotice(ctx context.Context, err error, partial bool) string {
 	}
 	var why string
 	switch cause := ctxerr.Classify(ctx, err); {
+	case errors.Is(err, conversation.ErrTurnDeadline):
+		// The receiver's own turn bound, reported to a caller whose
+		// context is still live (Slack's dispatch bound, #914).
+		why = "this chat turn ran out its time limit"
 	case cause == ctxerr.Timeout && ctx.Err() != nil:
 		why = "this chat turn ran out its time limit"
 	case cause == ctxerr.Cancelled:
@@ -679,7 +685,9 @@ func (r *ChannelReceiver) serveDisclosure(ctx context.Context, msg conversation.
 		Channel: channel,
 		Scope:   conversation.DisclosureScopeFor(r.Channel, msg),
 		SendNotice: func(ctx context.Context, text string) error {
-			_, sendErr := r.Channel.Send(ctx, conversation.ChannelMessage{
+			// Not a reply: a turn that fails after it still tells the
+			// user (#914).
+			_, sendErr := r.Channel.Send(conversation.WithDisclosureSend(ctx), conversation.ChannelMessage{
 				Source:    channel,
 				SessionID: sessionID,
 				Text:      text,

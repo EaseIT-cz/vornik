@@ -8,6 +8,7 @@ rolePrelude: |
     file diffs. If a check couldn't be run, say so explicitly.
 roles:
     - name: "lead"
+      modelTier: "complex"
       description: "Plans code tasks and schedules autonomous work"
       count: 1
       # 2026-05-13: forced ephemeral. Warm containers bind-mounted the
@@ -16,13 +17,6 @@ roles:
       # blocked ephemeral tasks' worktree merges. Fixed since: warm
       # containers get no project mount at all (S6-D5, 04072e055).
       runtimePolicy: "ephemeral"
-      # Strategic planning — GLM-5 via Bedrock. Rank 1 on the
-      # open-LLM leaderboard ($1.00/$3.20). Lead fires once per
-      # task; quality wins. Fallback to GPT-5.4 via codex-
-      # subscription (plan-billed, different vendor + reasoning
-      # chain).
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 4096
       requiredOutputKeys: ["plan"]
       runtime:
@@ -39,14 +33,10 @@ roles:
         autonomousTaskCreation: true
         maxDelegations: 20
     - name: "feasibility"
+      modelTier: "trivial"
       description: "Checks whether requested code work is blocked"
       count: 1
       runtimePolicy: "ephemeral"
-      # Cheap gate decision — MiniMax M2.5 via Bedrock. Rank 9
-      # on the open-LLM leaderboard, 1M context, $0.30/$1.20.
-      # Fallback to GPT-5.4-mini via codex-subscription.
-      model: "zai.glm-4.7-flash"
-      modelFallback: "deepseek.v3.2"
       maxTokens: 2048
       # outputSchema replaces requiredOutputKeys + the prose Output
       # block. See configs/swarms/dev-swarm.md's feasibility for
@@ -81,15 +71,10 @@ roles:
         allowedTools: ["file_read", "run_shell", "read_many_files", "grep", "glob", "git_status", "git_log", "current_time", "memory_search"]
         delegationAllowed: false
     - name: "analyst"
+      modelTier: "complex"
       description: "Selects/specs the next code task in CURRENT_TASK.md"
       count: 1
       runtimePolicy: "ephemeral"
-      # Spec writing — GLM-5 via Bedrock. Rank 1 on the open-LLM
-      # leaderboard; structured spec writing benefits from the same
-      # reasoning the lead uses. Fallback to GPT-5.4 via
-      # codex-subscription (plan-billed).
-      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-      modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 6144
       # outputSchema replaces requiredOutputKeys + prose Output blocks.
       # See configs/swarms/dev-swarm.md for the rationale.
@@ -110,17 +95,10 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "file_edit", "read_many_files", "grep", "glob", "git_status", "git_log", "current_time", "backlog_deposit", "memory_search"]
         delegationAllowed: false
     - name: "coder"
+      modelTier: "coding"
       description: "Implements focused code changes and commits them"
       count: 2
       runtimePolicy: "ephemeral"
-      # Code generation — Qwen3 Coder 480B (active 35B, MoE) via
-      # Bedrock. Off the general-purpose leaderboard but
-      # purpose-built for code; the leaderboard's general
-      # benchmarks systematically underrate code specialists.
-      # $0.60/$1.80, Apache 2. Fallback to GPT-5.4 via
-      # codex-subscription — different vendor, plan-billed.
-      model: "qwen.qwen3-coder-480b-a35b-v1:0"
-      modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 16384
       # outputSchema replaces requiredOutputKeys + prose Output blocks.
       # See configs/swarms/dev-swarm.md's coder for the rationale.
@@ -166,14 +144,11 @@ roles:
             - "memory_search"
         delegationAllowed: false
     - name: "tester"
+      modelTier: "trivial"
       description: "Runs focused tests and reports JSON pass/fail"
       count: 1
       runtimePolicy: "ephemeral"
-      # Test authoring + execution — MiniMax M2.5 via Bedrock.
-      # Rank 9, 1M context fits noisy stack traces without
-      # truncation. $0.30/$1.20. Fallback to GPT-5.4-mini.
-      model: "zai.glm-4.7-flash"
-      modelFallback: "deepseek.v3.2"
+      # Test authoring + execution.
       maxTokens: 8192
       # outputSchema pins testing.passed:bool because workflow gates
       # branch on it. See configs/swarms/dev-swarm.md's tester for
@@ -209,17 +184,10 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "file_edit", "read_many_files", "grep", "glob", "git_status", "git_diff", "git_log", "test_run", "lint_run", "typecheck_run", "current_time", "backlog_deposit", "memory_search"]
         delegationAllowed: false
     - name: "reviewer"
+      modelTier: "trivial"
       description: "Reviews the latest code change against the spec"
       count: 1
       runtimePolicy: "ephemeral"
-      # Reviewer — Kimi K2.5 via Bedrock. Rank 3 on the open-LLM
-      # leaderboard. Different vendor from the coder (Qwen) so the
-      # reviewer's reasoning chain genuinely differs; mistakes
-      # that look fine inside Qwen-Coder's reasoning surface here.
-      # $0.60/$3.00 (×2 reasoning), Apache 2. Fallback to GPT-5.4
-      # via codex-subscription.
-      model: "zai.glm-4.7-flash"
-      modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 8192
       # outputSchema pins review.approved:bool because workflow gates
       # branch on it. See configs/swarms/dev-swarm.md's reviewer
@@ -253,15 +221,10 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "file_edit", "read_many_files", "grep", "glob", "git_status", "git_diff", "git_log", "git_show", "test_run", "lint_run", "typecheck_run", "current_time", "backlog_deposit", "memory_search"]
         delegationAllowed: false
     - name: "scout"
+      modelTier: "trivial"
       description: "Writes concise PROJECT_CONTEXT.md for a project"
       count: 1
       runtimePolicy: "ephemeral"
-      # Codebase exploration + summarisation — MiniMax M2.5 via
-      # Bedrock. Rank 9 on the leaderboard, 1M context handles
-      # multi-file projects without summarisation. $0.30/$1.20.
-      # Fallback to GPT-5.4-mini via codex-subscription.
-      model: "zai.glm-4.7-flash"
-      modelFallback: "deepseek.v3.2"
       maxTokens: 4096
       # outputSchema replaces requiredOutputKeys + Output blocks. See
       # configs/swarms/dev-swarm.md's scout for the rationale.
@@ -298,16 +261,10 @@ roles:
         allowedTools: ["file_read", "file_write", "run_shell", "file_edit", "read_many_files", "grep", "glob", "git_status", "git_log", "current_time", "memory_search"]
         delegationAllowed: false
     - name: "architect"
+      modelTier: "trivial"
       description: "Updates roadmap/backlog from recent progress"
       count: 1
       runtimePolicy: "ephemeral"
-      # Roadmap reasoning — GLM-4.7 via Bedrock. Rank 7 on the
-      # leaderboard, multi-step reasoning at $0.60/$2.20 (cheaper
-      # than glm-5 but still capable). Architect commits a single
-      # file edit per run, bounded scope. Fallback to GPT-5.4-mini
-      # via codex-subscription — sufficient for the bounded shape.
-      model: "zai.glm-4.7-flash"
-      modelFallback: "deepseek.v3.2"
       maxTokens: 4096
       # outputSchema replaces requiredOutputKeys + Output blocks. See
       # configs/swarms/dev-swarm.md's architect for the rationale.

@@ -30,6 +30,7 @@ import (
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/companionpush"
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/modelcheck"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -305,6 +306,9 @@ func (c *Container) initHTTPServer() error {
 		api.WithAccountTransitionRecovery(accountRecovery{c: c}),
 		api.WithDiagnoser(c.newDiagnoser()),
 		api.WithAPIKeyLimiter(c.apiKeyLimiter),
+		// GitHub Actions ID tokens bound to companion keys (GitHub #792,
+		// design 27): the trust store joins the auth chain.
+		api.WithCompanionOIDCTrusts(c.repos.CompanionOIDCTrusts),
 		// Per-IP backstop (hardening sub-item 2). Same instance is
 		// shared with the UI subtree's middleware below so a flood
 		// targeting one surface can't sidestep the limit via the
@@ -748,6 +752,9 @@ func (c *Container) initHTTPServer() error {
 		if c.dryRunMetrics == nil {
 			c.dryRunMetrics = api.NewDryRunMetrics(reg)
 		}
+		// The artifact scan's findings counter (GitHub #85, artifact
+		// heuristic-redaction design §7): same two-pass rule as above.
+		c.wireArtifactFindings(reg)
 		// Config-tree mirror-seam normalization counter (LLD 2026-07-24 §5).
 		// Same pass-2-only registry rule as the metrics around it: built once,
 		// on the served registry, guarded by the field.
@@ -886,6 +893,7 @@ func (c *Container) initHTTPServer() error {
 	if c.memoryManager != nil {
 		apiOpts = append(apiOpts, api.WithMemorySearcher(newMemorySearchAdapter(c.memoryManager.Searcher, c.memoryManager.Repository())))
 		apiOpts = append(apiOpts, api.WithMemorySearchRolePolicy(c.memorySearchRolePolicy))
+		apiOpts = append(apiOpts, api.WithMemoryProjectResolver(c.memoryProjectFor)) // part 24 §24.6 (#920)
 		apiOpts = append(apiOpts, api.WithMemoryStats(newMemoryStatsAdapter(c.memoryManager)))
 		apiOpts = append(apiOpts, api.WithMemoryEmbedderReporter(newMemoryEmbedderAdapter(c.memoryManager)))
 		// Knowledge-skill dedup preflight (LLD §12.2). Reuses the memory
@@ -1239,6 +1247,7 @@ func (c *Container) initHTTPServer() error {
 		// accidentally participates in tool invocation.
 		apiOpts = append(apiOpts, api.WithMCPRegistry(c.mcpRegistry))
 	}
+	apiOpts = append(apiOpts, api.WithModelChecker(c.modelChecker(), c.managedModelCatalogue())) // #881
 	if c.ChatClient != nil {
 		// Wires the internal chat-completions proxy at
 		// POST /api/v1/chat/completions so agent containers can route
@@ -1732,6 +1741,10 @@ func (c *Container) initHTTPServer() error {
 	// one restart-pending registry, the UI's, plus the reloader's restart-only
 	// diff. Read lazily: the UI server is built after this one.
 	apiOpts = append(apiOpts, api.WithRestartPendingSource(c.restartPendingReasons))
+	if c.restartGen != nil {
+		apiOpts = append(apiOpts, api.WithRestartGeneration(c.restartGen, c.restartGenLoaded, c.restartGenLoadedOK))
+	}
+	apiOpts = append(apiOpts, c.apiHoldOptions()...) // GitHub #586: a held start
 	apiServer := api.NewServer(apiOpts...)
 	c.apiServer = apiServer
 	// The webhook and backlog-deposit checkpoints record their findings too
@@ -1781,9 +1794,20 @@ func (c *Container) initHTTPServer() error {
 			backendDriver = c.backend.Driver
 		}
 		wireDoctorSubjectLedger(dh, backendDriver, c.DB)
+		// breach_deadlines (GDPR Art 33(1), design §4.21): likewise.
+		wireDoctorBreachLedger(dh, backendDriver, c.DB)
 		if c.Registry != nil {
 			dh.SetConfigDir(c.Registry.GetConfigDir())
 		}
+		// healing_judge_family (GitHub #891): the engine is wired as the
+		// healing producer whenever it exists, so its presence is the wiring.
+		dh.SetHealingJudge(func() (bool, string) {
+			eng := apiServer.ConfigAssistant()
+			if eng == nil {
+				return false, ""
+			}
+			return true, eng.JudgePairProblem()
+		})
 		// config_template_drift explains hunks an applied remove/reorder
 		// deleted, from the proposal ledger (drift design, slice E).
 		if c.repos != nil && c.repos.WorkflowProposals != nil {
@@ -1800,6 +1824,9 @@ func (c *Container) initHTTPServer() error {
 			dh.SetChatRouteResolver(c.chatRouter.Resolves)
 			dh.SetChatRouteOf(c.chatRouter.RouteOf)
 		}
+		// GitHub #881: saves check a model through the same client the chat
+		// proxy uses, so a probe reaches a model the way an agent role does.
+		dh.SetModelChecker(c.modelChecker(), c.managedModelCatalogue())
 		// Configuration assistant (2026-09-13): the engine is built over the
 		// API server's own wiring; the doctor's secret snapshot feeds its
 		// fresh hygiene gate. Its root is the deployed configs tree — never
@@ -1833,6 +1860,8 @@ func (c *Container) initHTTPServer() error {
 		// runs before initHTTPServer (container.go:1097), so the tally exists by now.
 		// Nil is handled anyway — the check reports "nothing to assess".
 		dh.SetChatCallStats(c.ChatCallStats)
+		// Keys config.yaml carries that this daemon does not read (#869).
+		dh.SetUndeclaredConfigKeys(c.Config.UndeclaredKeys())
 		// Slack slash-command reconciliation (2026-09-15 incident): the
 		// reporter reads c.SlackChannels at call time, so a reload that
 		// rebuilds a channel needs no re-wiring here.
@@ -1880,6 +1909,12 @@ func (c *Container) initHTTPServer() error {
 			// a2a_corpus_walk (federation design, #617 slice 2).
 			dh.SetA2AKeyRetrieval(c.repos.MemoryRetrievalAudit.A2AChunksByCallerKey)
 		}
+		// control_plane_restore_reload (control-plane design, #859).
+		dh.SetUnconfirmedReload(c.controlPlaneReloadGuard().Unconfirmed)
+		if c.repos != nil && c.repos.Reminders != nil {
+			// reminders_undelivered (scheduled-reminders design §11, #861).
+			dh.SetReminderLister(c.repos.Reminders.List)
+		}
 		if c.memoryManager != nil && c.memoryManager.Repository() != nil && c.Registry != nil {
 			// memory_sensitivity_cap (#618 C4).
 			repo, reg, prefixes := c.memoryManager.Repository(), c.Registry, c.Config.Memory.PublicSourcePrefixes
@@ -1910,6 +1945,8 @@ func (c *Container) initHTTPServer() error {
 					dh.SetAgentRollbackFailures(c.agentChangesStayingApplied)
 				}
 				dh.SetAgentModelCatalogue(c.agentModelCatalogueStatus)
+				dh.SetAgentCGNATConnections(c.agentCGNATStatus)          // part 06 §6.11, #893
+				dh.SetAgentPrivateHostsUnused(c.agentPrivateHostsStatus) // part 06 §6.12, #403
 				dh.SetProvenanceClones(c.provenanceCloneStatus)
 				dh.SetProvenanceForgeNotes(c.provenanceForgeNotes) // #508 F6
 			}
@@ -2003,8 +2040,9 @@ func (c *Container) initHTTPServer() error {
 	}
 	uiOpts := []ui.ServerOption{
 		ui.WithLogger(c.Logger.With().Str("component", "ui").Logger()),
-		ui.WithVersionFunc(c.Version), // page-footer changelog link (lazy — SetVersion runs after this server is built)
-		ui.WithAIMarker(c.aiMarker()), // EU AI Act Art 50(2): web chat replies and downloads (GitHub #117)
+		ui.WithRestartGeneration(c.restartGenBumper()), // GitHub #799
+		ui.WithVersionFunc(c.Version),                  // page-footer changelog link (lazy — SetVersion runs after this server is built)
+		ui.WithAIMarker(c.aiMarker()),                  // EU AI Act Art 50(2): web chat replies and downloads (GitHub #117)
 
 		ui.WithTaskRepository(c.repos.Tasks),
 		// Task 5.4: the Guided Integrations Hub's probe/save counters.
@@ -2169,6 +2207,7 @@ func (c *Container) initHTTPServer() error {
 	// Broker write actions in /inbox (broker write-actions design §5.3). The
 	// kick reads c.brokerActionWorker at call time: the worker is built in
 	// Run, after this runs.
+	uiOpts = append(uiOpts, ui.WithModelChecker(c.modelChecker(), c.managedModelCatalogue())) // #881
 	if c.repos != nil && c.repos.BrokerActions != nil {
 		uiOpts = append(uiOpts, ui.WithBrokerActions(c.repos.BrokerActions, func(actionID string) {
 			c.brokerActionWorker.Kick(actionID)
@@ -2254,15 +2293,18 @@ func (c *Container) initHTTPServer() error {
 	}
 	// The regulatory record (regulatory record design §3): both editions, never
 	// behind the edition gate. The subject-request ledger runs on both drivers
-	// since GitHub #355 (GDPR design §4.19); the breach ledger, the profile-use
-	// audit and the console subject resolution are Postgres-only, so on SQLite
-	// those stay unwired and the page says so. The RESOLVED driver is used — an
-	// empty database.driver means postgres.
+	// since GitHub #355 (GDPR design §4.19), the breach ledger since #475
+	// (§4.21); the profile-use audit and the console subject resolution are
+	// Postgres-only, so on SQLite those stay unwired and the page says so. The
+	// RESOLVED driver is used — an empty database.driver means postgres.
 	if c.repos != nil {
 		var regIncidents ui.RegulatoryIncidents
 		driver := ""
 		if c.backend != nil {
 			driver = c.backend.Driver
+		}
+		if l := incidentLedgerFor(driver, c.DB); l != nil {
+			regIncidents = l
 		}
 		subjects := subjectLedgerFor(driver, c.DB)
 		var regRequests ui.RegulatoryRequests
@@ -2270,7 +2312,6 @@ func (c *Container) initHTTPServer() error {
 			regRequests = subjects
 		}
 		if subjects != nil && driver == "postgres" {
-			regIncidents = postgres.NewIncidentRepository(c.DB)
 			uiOpts = append(uiOpts, ui.WithProfileAuditRecorded())
 			// Subject resolution in the console (GDPR design §4.17, #345):
 			// the CLI's resolver underneath, plus the free-text backstop and
@@ -2334,6 +2375,9 @@ func (c *Container) initHTTPServer() error {
 		// a config key, it is the only producer for what the deterministic
 		// recipes do not handle.
 		apiServer.SetHealingAssistant(&healingComparisonAdapter{engine: eng})
+		if msg := healingJudgeWarning(eng.JudgePairProblem()); msg != "" {
+			c.Logger.Warn().Msg(msg)
+		}
 		if c.Config.ConfigAssistant.ChatEntrypoint {
 			adapter := configassist.NewChatAdapter(eng)
 			for _, ch := range c.SlackChannels {
@@ -2843,6 +2887,17 @@ func (c *Container) initHTTPServer() error {
 	}
 	if c.Config.Hosting.Managed() {
 		c.OperationsServer = newOperationsServer(c.Config.Hosting.OperationsAddress, mux, realIPMW, readTimeout, writeTimeout)
+	}
+	// The hold gate wraps the TCP root, the operations listener and the
+	// agent socket, outermost on each (GitHub #586, §13.2). While held, the
+	// first two serve only the allowlist and the agent socket serves
+	// nothing (no agent runs). After the release it passes everything.
+	c.HTTPServer.Handler = c.holdGate(true)(c.HTTPServer.Handler)
+	if c.OperationsServer != nil {
+		c.OperationsServer.Handler = c.holdGate(true)(c.OperationsServer.Handler)
+	}
+	if c.AgentSocketServer != nil {
+		c.AgentSocketServer.Handler = c.holdGate(false)(c.AgentSocketServer.Handler)
 	}
 	return nil
 }
@@ -3482,6 +3537,33 @@ func wireDoctorSubjectLedger(dh *api.DoctorHandlers, driver string, db *sql.DB) 
 	}
 }
 
+// incidentLedgerFor is the GDPR Art 33/34 breach ledger on the RESOLVED
+// driver: both since GitHub #475 (GDPR design §4.21). Nil when no database is
+// open or the driver is unknown, which the page reports as "not recorded" and
+// the doctor as SKIPPED.
+func incidentLedgerFor(driver string, db *sql.DB) *subjectstore.IncidentRepository {
+	if db == nil {
+		return nil
+	}
+	switch driver {
+	case "postgres":
+		return postgres.NewIncidentRepository(db)
+	case "sqlite":
+		return sqlite.NewIncidentRepository(db)
+	default:
+		return nil
+	}
+}
+
+// wireDoctorBreachLedger gives the doctor's Art 33 deadline check the ledger
+// incidentLedgerFor resolves, the one the regulatory page reads. The nil test
+// keeps a typed-nil repository out of the interface.
+func wireDoctorBreachLedger(dh *api.DoctorHandlers, driver string, db *sql.DB) {
+	if l := incidentLedgerFor(driver, db); l != nil {
+		dh.SetBreachLedger(l)
+	}
+}
+
 func subjectLedgerFor(driver string, db *sql.DB) *subjectstore.Repository {
 	if db == nil {
 		return nil
@@ -3505,4 +3587,44 @@ func gatewayDoctorURL(cfg *config.Config) string {
 		return ""
 	}
 	return cfg.Gateway.Address
+}
+
+// restartGenBumper is the UI's view of the restart generation, nil when none
+// is wired (a true nil interface, not a typed nil).
+func (c *Container) restartGenBumper() ui.RestartGenerationBumper {
+	if c.restartGen == nil {
+		return nil
+	}
+	return c.restartGen
+}
+
+// modelChecker is the one #881 checker every save path shares, so its cache
+// of passes is shared too. Nil without a chat client: saves are not checked.
+func (c *Container) modelChecker() *modelcheck.Checker {
+	c.modelCheckerMu.Lock()
+	defer c.modelCheckerMu.Unlock()
+	// Built only once a chat client exists, so an early call never caches nil.
+	if c.modelCheckerV == nil && c.ChatClient != nil {
+		// RouteOf reads the router at call time, so the order the daemon wires
+		// its parts in can never leave the checker without routes (review
+		// 20261122-62f5 F2).
+		c.modelCheckerV = &modelcheck.Checker{Provider: modelcheck.FromProvider(c.ChatClient), RouteOf: func(m string) string {
+			if c.chatRouter == nil {
+				return ""
+			}
+			return c.chatRouter.RouteOf(m)
+		}}
+	}
+	return c.modelCheckerV
+}
+
+// managedModelCatalogue is the catalogue a model must be in on a managed
+// instance (agent_admin.models, which setup/managed writes), or nil when the
+// instance is not managed (GitHub #881 C3).
+func (c *Container) managedModelCatalogue() func() []string {
+	if c.Config == nil || !c.Config.Hosting.Managed() {
+		return nil
+	}
+	ids := c.Config.AgentAdmin.ModelIDs()
+	return func() []string { return ids }
 }

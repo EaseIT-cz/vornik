@@ -140,7 +140,7 @@ func (s *Server) pairApprover(w http.ResponseWriter, r *http.Request, role strin
 		code = code[:4] + "-" + code[4:]
 	}
 	s.renderApprovers(w, r, ApproversData{Code: code, Expires: expires, PairURL: origin + "/ui/pair",
-		HTTPWarn: plainHTTPNonLoopbackOrigin(origin), NoAlert: !s.approverDevices.PushConfigured()})
+		HTTPWarn: approverdevice.PlainHTTPNonLoopbackOrigin(origin), NoAlert: !s.approverDevices.PushConfigured()})
 }
 
 // approverOrigin is the service's configured public origin, else this
@@ -154,15 +154,6 @@ func (s *Server) approverOrigin(r *http.Request) string {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host
-}
-
-func plainHTTPNonLoopbackOrigin(origin string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "http" {
-		return false
-	}
-	host := u.Hostname() // no brackets, no port: "::1" for "[::1]:8080"
-	return host != "localhost" && host != "127.0.0.1" && host != "::1"
 }
 
 func (s *Server) revokeApprover(w http.ResponseWriter, r *http.Request, role, id string) {

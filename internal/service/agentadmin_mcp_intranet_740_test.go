@@ -13,6 +13,7 @@ import (
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // GitHub #740 (2026-11-15; agent-administered design part 06, §6.8). Found at
@@ -67,9 +68,13 @@ func recordAgentServerClients(t *testing.T, target string) *agentClientRecorder 
 	}
 	rec := &agentClientRecorder{}
 	prev := agentServerClientFor
-	agentServerClientFor = func(rawURL string, hosts []string, timeout time.Duration) *http.Client {
+	agentServerClientFor = func(rawURL string, entries []dialguard.PrivateHost, timeout time.Duration) *http.Client {
+		var hosts []string
+		for _, e := range entries {
+			hosts = append(hosts, e.HostPort())
+		}
 		rec.mu.Lock()
-		rec.calls = append(rec.calls, agentClientCall{url: rawURL, hosts: append([]string(nil), hosts...)})
+		rec.calls = append(rec.calls, agentClientCall{url: rawURL, hosts: hosts})
 		rec.mu.Unlock()
 		return &http.Client{Timeout: timeout, Transport: rewriteTransport{to: to}}
 	}
@@ -88,7 +93,17 @@ func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func intranetFixture(t *testing.T, hosts ...string) *agentAdminFixture {
 	t.Helper()
-	return newAgentAdminFixtureWith(t, func(c *config.Config) { c.AgentAdmin.PrivateAPIHosts = hosts })
+	return newAgentAdminFixtureWith(t, func(c *config.Config) { c.AgentAdmin.PrivateAPIHosts = plainPrivateHosts(hosts...) })
+}
+
+// plainPrivateHosts is agent_admin.private_api_hosts as a plain string list
+// loads (GitHub #403 made an item a string or a mapping).
+func plainPrivateHosts(hosts ...string) []config.PrivateAPIHost {
+	out := make([]config.PrivateAPIHost, len(hosts))
+	for i, h := range hosts {
+		out[i] = config.PrivateAPIHost{Host: h}
+	}
+	return out
 }
 
 func TestAgentMCP_740_EveryDialPassesThePrivateHosts(t *testing.T) {

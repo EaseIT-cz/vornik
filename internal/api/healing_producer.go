@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"vornik.io/vornik/internal/configassist"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/workflowhealing"
 )
@@ -159,10 +160,21 @@ func (s *Server) mapHealingProducerError(w http.ResponseWriter, workflowID strin
 		respondError(w, http.StatusUnprocessableEntity, "PROPOSAL_NOT_A_SINGLE_WORKFLOW_EDIT",
 			"the assistant's proposal was not exactly one edit to "+workflowID+
 				"'s workflow file, so it cannot become a healing candidate: "+err.Error())
+	case isNoChangeRefusal(err):
+		// The producer considered the trigger and answered "nothing to fix"
+		// (GitHub #911): a no-candidate outcome, not a failure.
+		respondError(w, http.StatusUnprocessableEntity, "HEALING_NO_CHANGE",
+			"the assistant made no change to "+workflowID+": "+err.Error())
 	default:
 		s.logger.Warn().Err(err).Str("workflow_id", workflowID).
 			Msg("healing: the assistant produced no usable candidate")
 		respondError(w, http.StatusBadGateway, "HEALING_PRODUCER_FAILED",
 			"the assistant produced no usable candidate for "+workflowID+": "+err.Error())
 	}
+}
+
+// isNoChangeRefusal reports whether err is the assistant's NO_CHANGE refusal.
+func isNoChangeRefusal(err error) bool {
+	var re *configassist.RefusalError
+	return errors.As(err, &re) && re.Refusal.Code == configassist.RefuseNoChange
 }

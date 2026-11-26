@@ -131,13 +131,13 @@ func TestDecideCITrigger(t *testing.T) {
 
 // Truncation is REPORTED, not inferred. A truncated plan that reads as a
 // complete one is a wrong answer presented as a right one.
-func TestCapExcerpt(t *testing.T) {
-	got, truncated := capExcerpt("hello", 100)
+func TestCapText(t *testing.T) {
+	got, truncated := capText("hello", 100)
 	if got != "hello" || truncated {
 		t.Errorf("under the cap: got %q truncated=%v", got, truncated)
 	}
 
-	got, truncated = capExcerpt("hello world", 5)
+	got, truncated = capText("hello world", 5)
 	if got != "hello" || !truncated {
 		t.Errorf("over the cap: got %q truncated=%v", got, truncated)
 	}
@@ -145,7 +145,7 @@ func TestCapExcerpt(t *testing.T) {
 	// A zero cap means unlimited rather than "store nothing": the config
 	// defaults fill it, and a zero reaching here should not silently discard
 	// every artifact.
-	got, truncated = capExcerpt("hello", 0)
+	got, truncated = capText("hello", 0)
 	if got != "hello" || truncated {
 		t.Errorf("zero cap: got %q truncated=%v", got, truncated)
 	}

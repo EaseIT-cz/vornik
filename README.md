@@ -179,12 +179,12 @@ judge-free figures did not move at all, so the judge-free tier is the headline n
 | | |
 |---|---|
 | **Runs on your hardware** | One daemon, one Postgres. No SaaS, no telemetry you did not switch on. |
-| **Agents are contained** | Rootless Podman, no direct egress, tools brokered over MCP. |
+| **Agents are contained** | Rootless Podman, no direct egress, tools brokered over MCP; a connection to a private or tailnet address is refused unless its host is listed. |
 | **Work is durable** | Leased tasks, persisted results, classified failures, resumable runs. |
 | **Memory that compounds** | pgvector RAG with a gate stack, scoped per project and per repo. |
 | **Open-weight friendly** | Point it at your own endpoint — Ollama, vLLM, or a cloud API. |
 | **Workflows, not prompts** | Multi-step graphs with typed steps, budgets, and approval gates. |
-| **Assistants without your keys** | Hermes, Claude Code or Codex ask Vornik for work over your private systems; Vornik holds the credentials and returns a checked result, never raw data. |
+| **Assistants without your keys** | Hermes, Claude Code, Codex, Cursor, opencode or any MCP agent ask Vornik for work over your private systems; Vornik holds the credentials and returns a checked result, never raw data. |
 | **Memory for AWS DevOps Agent** | An AWS DevOps Agent investigation recalls your team's incident memory and approved runbooks from your own Vornik, with a read-only key ([guide](https://docs.vornik.io/guides/aws-devops-agent/)). |
 | **You approve on your phone** | New connections, credentials and every proposed write wait for you on a paired phone, which is notified when one arrives. |
 | **Experts other agents can consult** | A project answers other agents over A2A, each caller key bounded by rate, budget and a daily quota, and only from material you approved. |
@@ -241,4 +241,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.7 -->
+<!-- summary-reviewed-through: 2026.11.8 -->

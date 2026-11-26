@@ -315,3 +315,22 @@ func TestListProviders_ResolverErrorPropagates(t *testing.T) {
 		t.Error("resolver error should propagate")
 	}
 }
+
+// GitHub #910: the role sees only the body, so a non-2xx status is stated in
+// its first line; a 2xx body, or an unknown status (0), passes unchanged.
+func TestQuery_910_StatusStatedInTheBody(t *testing.T) {
+	for _, tc := range []struct {
+		resp apigateway.Response
+		want string
+	}{
+		{apigateway.Response{Status: 200, Body: "ok"}, "ok"},
+		{apigateway.Response{Status: 0, Body: "ok"}, "ok"},
+		{apigateway.Response{Status: 404, Body: "nf"}, "HTTP 404 from provider \"maps\".\nnf"},
+		{apigateway.Response{Status: 500}, "HTTP 500 from provider \"maps\". The response had an empty body."},
+	} {
+		svc := &Service{Client: &fakeClient{resp: tc.resp}}
+		if got := svc.Query(context.Background(), "p", "r", apigateway.Request{Provider: "maps", Path: "/x"}).Body; got != tc.want {
+			t.Fatalf("status %d: got %q, want %q", tc.resp.Status, got, tc.want)
+		}
+	}
+}

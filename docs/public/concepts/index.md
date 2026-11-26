@@ -1,7 +1,7 @@
 ---
 sources:
     - path: https://docs.vornik.io
-      sha256: 32e8ddfe1b1bec505630c51e6b9e26f45496ba174dc48f7c12edeea4fa8016eb
+      sha256: dd82bb3ba847bda983c736a6025815288b6c819603682f25b65027c914801097
 ---
 # Concepts
 
@@ -145,11 +145,12 @@ Two kinds of storage sit behind every step, and the distinction matters:
   one task's work never disturbs another's.
 
 Because a step's outputs live in the ephemeral tier, vornik bridges them
-through the durable artifact store when one step needs to hand work to the
-next: each step's outputs are saved to the store and re-staged into the next
-step's workspace as inputs. This **store-backed handoff** is why a writer
-reliably sees the researcher's files even though each step ran in its own
-throwaway container.
+through the durable artifact store: each step's outputs are saved to the
+store and re-staged into every later step's workspace, in
+`artifacts/out/`. A file a later step rewrites is handed on in its newest
+version. This **store-backed handoff** is why a writer reliably sees the
+researcher's files, and a third step sees both, even though each step ran
+in its own throwaway container.
 
 ## Delegation
 
@@ -176,7 +177,7 @@ approval so nothing runs without oversight.
 **Memory** lets a project carry knowledge forward across tasks instead of
 starting cold every time. vornik can store facts, documents, and prior
 results for a project and let agents semantically recall the relevant parts
-when they work — so an agent on task #50 can draw on what was learned in
+when they work — so an agent on task 50 can draw on what was learned in
 task #3.
 
 Memory is **project-scoped**: each project's memory is private to that

@@ -107,6 +107,18 @@ func ClientFromEnv() *Client {
 	return NewClientWithTimeout(baseURL, apiKey, timeout)
 }
 
+// WithMinTimeout raises the client's deadline to at least d and returns the
+// client. It changes c in place: call it on a client built for this call,
+// never on a shared one. A longer deadline is kept, and a disabled one (0) stays disabled:
+// both are the operator's explicit choice through VORNIK_API_TIMEOUT. For a
+// call that must outlive a server-side budget (GitHub #908).
+func (c *Client) WithMinTimeout(d time.Duration) *Client {
+	if c.httpClient.Timeout > 0 && c.httpClient.Timeout < d {
+		c.httpClient.Timeout = d
+	}
+	return c
+}
+
 // Do performs an HTTP request to the API.
 func (c *Client) Do(method, path string, body interface{}) (*http.Response, error) {
 	var reqBody io.Reader

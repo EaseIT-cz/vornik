@@ -178,7 +178,7 @@
                         {{range .Shadow.Pairs}}<p class="rounded-lg border border-dark-700/60 px-3 py-2">The rules said <span class="text-gray-200">{{.Engine}}</span>; the strategist said <span class="text-gray-200">{{.Model}}</span>; <span class="tabular-nums">{{.Count}}</span> times.</p>{{end}}
                     </div>
                     {{end}}
-                    {{if .Shadow.Disagreements}}<p class="mt-1 text-gray-500">Latest disagreements: {{range $i, $d := .Shadow.Disagreements}}{{if $i}}, {{end}}{{$d.Symbol}} ({{$d.ExecutionID}}){{end}}</p>{{end}}
+                    {{if .Shadow.Disagreements}}<p class="mt-1 text-gray-500">Latest disagreements: {{range $i, $d := .Shadow.Disagreements}}{{if $i}}, {{end}}{{$d.Symbol}} (<span title="{{$d.ExecutionID}}">{{shortID $d.ExecutionID}}</span>){{end}}</p>{{end}}
                     {{else}}<p class="mt-1">No shadow decisions recorded in this window.</p>{{end}}
                     {{if lt .Shadow.Sessions 10}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few sessions to judge (under 10). The issue asks for two weeks before any takeover.</p>{{end}}
                 </div>
@@ -423,7 +423,7 @@
                                 <td class="px-3 py-2 text-gray-300 font-mono tabular-nums text-right">{{printf "%.0f" .FilledQty}}</td>
                                 <td class="px-3 py-2 text-gray-300 font-mono tabular-nums text-right">{{if gt .LimitPrice 0.0}}{{fmtUSD .LimitPrice}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
                                 <td class="px-3 py-2"><span class="{{.StatusClass}} font-mono text-xs">{{.Status}}</span>{{if .StatusReason}}<p class="text-xs text-gray-500 max-w-xs" data-status-reason>{{.StatusReason}}</p>{{end}}</td>
-                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .TaskID}}<a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{else}}<span class="text-gray-500">none: reconcile or manual</span>{{end}}</td>
+                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .TaskID}}<a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}" title="{{.TaskID}}">{{shortID .TaskID}}</a>{{else}}<span class="text-gray-500">none: reconcile or manual</span>{{end}}</td>
                             </tr>
                             {{end}}
                         </tbody>
@@ -457,7 +457,7 @@
                                 <td class="px-3 py-2 text-gray-200 font-mono tabular-nums text-right">{{fmtUSD .Notional}}</td>
                                 <td class="px-3 py-2 font-mono tabular-nums text-right {{if not .HasRealized}}text-gray-600{{else if lt .RealizedUSD 0.0}}text-rose-800 dark:text-rose-400{{else if gt .RealizedUSD 0.0}}text-emerald-800 dark:text-emerald-400{{else}}text-gray-300{{end}}">{{if .HasRealized}}{{fmtUSD .RealizedUSD}}{{else}}—{{end}}</td>
                                 <td class="px-3 py-2 text-gray-400 font-mono tabular-nums text-right">{{if gt .CommissionUSD 0.0}}{{fmtUSD .CommissionUSD}}{{else}}<span class="text-gray-600">—</span>{{end}}</td>
-                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .Side}}<a class="text-gray-400 hover:underline" href="#order-{{.OrderID}}">order</a>{{end}}{{if .TaskID}} · <a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{end}}</td>
+                                <td class="px-3 py-2 text-xs whitespace-nowrap">{{if .Side}}<a class="text-gray-400 hover:underline" href="#order-{{.OrderID}}">order</a>{{end}}{{if .TaskID}} · <a class="text-accent-300 hover:underline font-mono" href="/ui/tasks/{{.TaskID}}" title="{{.TaskID}}">{{shortID .TaskID}}</a>{{end}}</td>
                             </tr>
                             {{end}}
                         </tbody>

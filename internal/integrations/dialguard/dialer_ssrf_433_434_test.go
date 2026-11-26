@@ -27,7 +27,9 @@ func TestLoopbackURLGuard_AllowsOnlyTheURLsOwnLoopbackHost(t *testing.T) {
 	}{
 		{"http://127.0.0.1:8788", nil, []string{"127.0.0.1"}},
 		{"http://localhost:8788/sse", nil, []string{"localhost"}},
+		{"http://LOCALHOST:8788", nil, []string{"LOCALHOST"}}, // #168: any case; still dialled only to loopback
 		{"http://[::1]:8788", nil, []string{"::1"}},
+		{"http://127.0.0.2:8788", nil, []string{"127.0.0.2"}},
 		{"http://localhost.:8788", nil, nil},       // resolves to loopback, not the literal
 		{"http://broker.localhost:8788", nil, nil}, // RFC 6761 name, not the literal
 		{"http://10.0.0.5:8788", nil, nil},

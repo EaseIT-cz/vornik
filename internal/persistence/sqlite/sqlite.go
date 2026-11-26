@@ -230,7 +230,10 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if err := d.applyFunnelOutcomeRefill(ctx); err != nil {
 		return err
 	}
-	return d.applyBarSessionRepair(ctx)
+	if err := d.applyBarSessionRepair(ctx); err != nil {
+		return err
+	}
+	return d.applyToolSwapRetire(ctx) // #886
 }
 
 // additiveColumn is a column added to an EXISTING table after that table first
@@ -435,6 +438,7 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"agent_secrets", "key_version", `INTEGER NOT NULL DEFAULT 0`},
 	{"broker_standing_grants", "key_version", `INTEGER NOT NULL DEFAULT 0`}, // Postgres migration 236
 	{"task_credentials", "key_version", `INTEGER NOT NULL DEFAULT 0`},       // Postgres migration 242 (#578)
+	{"autonomy_evaluations", "proposed_prompt", `TEXT`},                     // Postgres migration 261 (#602)
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -527,6 +531,18 @@ var sqliteTableRebuilds = []tableRebuild{
 	// backup's REFERENCES clause names the rebuilt table once the rename
 	// lands. TestSQLite_VerificationEventsRebuildKeepsBackup_550 holds it.
 	{"memory_verification_events", "'demote'", memoryVerificationEventsTableSQL},
+	// GitHub #887 (instinct tool-budget seam design, amendment 2026-11-23):
+	// instincts loses its domain CHECK, which refused the budget domain. No
+	// Postgres twin: Postgres never had the CHECK. NOT a leaf
+	// (instinct_evidence and others reference it); safe for the same reason
+	// as memory_verification_events: foreign keys are off on every connection.
+	{"instincts", "domain: no CHECK (#887)", instinctsTableSQL},
+	// Postgres migration 265: creation_source learns HANDOVER (agent-
+	// administered design part 24 §24.3, GitHub #920). NOT a leaf (every task
+	// child table references it); safe for the same reason as above: foreign
+	// keys are off on every connection, and schemaSQL recreates the indexes
+	// right after the rebuilds.
+	{"tasks", "'HANDOVER'", tasksTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

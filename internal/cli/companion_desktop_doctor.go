@@ -94,7 +94,27 @@ func runCompanionDoctor(ctx context.Context, out io.Writer) int {
 		failed += doctorLine(out, ok, "the entry runs an executable vornikctl ("+entry.Command+")", connectFix+" (it writes this vornikctl's path)")
 	}
 
-	// 4. The key file.
+	// 4 and 5. The key file, the daemon, and the key against it.
+	base := companionBaseURL()
+	if entry != nil {
+		if u := entryURL(entry.Args); u != "" {
+			base = strings.TrimRight(u, "/")
+		}
+	}
+	f, _, _ := doctorKeyAndDaemon(ctx, out, base, connectFix, harnessconfig.ClaudeDesktop)
+	failed += f
+
+	// 6. Information, not a failure: GUI apps do not read shell profiles.
+	if strings.TrimSpace(os.Getenv("VORNIK_COMPANION_TOKEN")) != "" {
+		_, _ = fmt.Fprintln(out, "INFO VORNIK_COMPANION_TOKEN is set in this shell; GUI apps do not read shell profiles, so Claude Desktop uses the key file, not this variable")
+	}
+	return failed
+}
+
+// doctorKeyAndDaemon checks the key file, the daemon at base and the key
+// against it, one line each, for either client. It returns the failures and,
+// when the key works, what the endpoint said about it.
+func doctorKeyAndDaemon(ctx context.Context, out io.Writer, base, connectFix, client string) (failed int, id companionIdentity, works bool) {
 	key := ""
 	keyPath, kerr := companionKeyFile(companionDeskName)
 	if kerr == nil {
@@ -102,37 +122,27 @@ func runCompanionDoctor(ctx context.Context, out io.Writer) int {
 	}
 	failed += doctorLine(out, kerr == nil, "key file "+keyPath+" exists, is readable only by you, and is yours", connectFix)
 
-	// 5. The daemon, and the key against it.
-	base := companionBaseURL()
-	if entry != nil {
-		if u := entryURL(entry.Args); u != "" {
-			base = strings.TrimRight(u, "/")
-		}
-	}
 	if err := agentbridge.CheckEndpoint(base); err != nil {
 		failed += doctorLine(out, false, base+": "+err.Error(), "use an https:// URL for a Vornik on another machine")
-	} else {
-		failed += doctorLine(out, reachable(ctx, base), "Vornik answers at "+base, "check the URL and that the daemon runs (vornikctl doctor on its host)")
-		if key != "" {
-			id, perr := probeCompanion(ctx, base, key)
-			switch {
-			case errors.Is(perr, errCompanionUnauthorized):
-				failed += doctorLine(out, false, "the key is accepted", "the key is wrong, revoked or not a companion key: ask the operator for a new one (vornikctl companion grant), then "+connectFix)
-			case perr != nil:
-				failed += doctorLine(out, false, "the key is accepted: "+perr.Error(), "check the URL and the key")
-			case id.Admin:
-				failed += doctorLine(out, false, "the key is a companion key", "this is an agent-admin key; use vornikctl agent connect claude-desktop")
-			default:
-				failed += doctorLine(out, true, fmt.Sprintf("the key works (project %s, repo scope %s)", orDash(id.Project), orDash(id.RepoScope)), "")
-			}
-		}
+		return failed, id, false
 	}
-
-	// 6. Information, not a failure: GUI apps do not read shell profiles.
-	if strings.TrimSpace(os.Getenv("VORNIK_COMPANION_TOKEN")) != "" {
-		_, _ = fmt.Fprintln(out, "INFO VORNIK_COMPANION_TOKEN is set in this shell; GUI apps do not read shell profiles, so Claude Desktop uses the key file, not this variable")
+	failed += doctorLine(out, reachable(ctx, base), "Vornik answers at "+base, "check the URL and that the daemon runs (vornikctl doctor on its host)")
+	if key == "" {
+		return failed, id, false
 	}
-	return failed
+	id, perr := probeCompanion(ctx, base, key)
+	switch {
+	case errors.Is(perr, errCompanionUnauthorized):
+		failed += doctorLine(out, false, "the key is accepted", "the key is wrong, revoked or not a companion key: ask the operator for a new one (vornikctl companion grant), then "+connectFix)
+	case perr != nil:
+		failed += doctorLine(out, false, "the key is accepted: "+perr.Error(), "check that the URL is a Vornik daemon's, then the key")
+	case id.Admin:
+		failed += doctorLine(out, false, "the key is a companion key", "this is an agent-admin key; use vornikctl agent connect "+client)
+	default:
+		failed += doctorLine(out, true, fmt.Sprintf("the key works (project %s, repo scope %s)", orDash(id.Project), orDash(id.RepoScope)), "")
+		return failed, id, true
+	}
+	return failed, id, false
 }
 
 // reachable reports whether base answers /healthz.

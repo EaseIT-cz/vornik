@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/contracts"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -504,6 +505,10 @@ type HealingCandidateGeneratorUI interface {
 	// Generate returns the filed proposal's id, and whether a deterministic
 	// recipe produced it rather than the assistant.
 	Generate(ctx context.Context, triggerID string) (proposalID string, byRecipe bool, err error)
+	// Budget is how long one generation may take on this deployment
+	// (config_assistant.request_timeout plus a margin, GitHub #908). Zero
+	// means the shipped default.
+	Budget() time.Duration
 }
 
 // Sentinels the service adapter maps the producer's errors onto, so this
@@ -544,8 +549,18 @@ func (s *Server) AdminBlackBoxTriggerGenerateCandidate(w http.ResponseWriter, r 
 		http.Error(w, "no healing candidate producer wired", http.StatusServiceUnavailable)
 		return
 	}
-	// Generous timeout — the assistant makes one synchronous model call.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// The producer's budget, not a fixed 60 s: the assistant writes a
+	// candidate in a multi-turn tool loop, and 60 s cut every generation of
+	// a bench arm (GitHub #908). The write deadline is lifted to match, so
+	// the server's WriteTimeout cannot cut this route either.
+	budget := s.healingGenerator.Budget()
+	if budget <= 0 {
+		budget = config.DefaultHealingGenerateBudget
+	}
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget + config.HealingGenerateWriteSlack)); err != nil {
+		s.logger.Warn().Err(err).Msg("blackbox: could not lift the write deadline for generate-candidate; the server's write timeout may cut a long generation")
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	principal := adminPrincipal(r)
 

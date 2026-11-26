@@ -65,11 +65,19 @@ func TestBestEffort_DeadlinesDoNotOpenTheCircuit(t *testing.T) {
 // A stance pin, not a regression guard for the baseline (which records the
 // deadline as a failure and trips too): it fails an implementation that
 // exempts best-effort deadlines by recording them as SUCCESS.
+//
+// FailureRate = 1 isolates the consecutive rule, as in
+// TestBestEffort_SuccessStillResetsTheRun. With the default 0.5 the rate rule
+// tripped on 5 failures in 6 samples whether the deadline was recorded as
+// nothing or as a success, so the test passed against the very implementation
+// it names (found by the #727 design re-run, finding R048; shown with that
+// mutant, 2026-11-20).
 func TestBestEffort_DeadlineIsRecordedAsNothingNotSuccess(t *testing.T) {
 	clk := &clock{t: time.Now()}
 	inner := &fakeInner{model: "m"}
-	g := newGate(inner, testCfg(), clk.now)
 	cfg := testCfg()
+	cfg.FailureRate = 1
+	g := newGate(inner, cfg, clk.now)
 	task := context.Background()
 	be := WithBestEffort(context.Background())
 

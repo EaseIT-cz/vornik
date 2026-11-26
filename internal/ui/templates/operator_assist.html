@@ -106,7 +106,7 @@
                     {{range .Refusal.Findings}}<div class="text-xs font-mono text-gray-400">· {{.}}</div>{{end}}
                     {{else}}
                     {{if .Proposal}}
-                    <div>Proposal <a href="/ui/admin/control-plane?section=proposals&amp;proposal={{.Proposal.ID}}" class="font-mono text-brand-400 hover:text-brand-300">{{.Proposal.ID}}</a> · {{.Proposal.Status}} · <span class="text-gray-400">{{.Proposal.Title}}</span></div>
+                    <div>Proposal <a href="/ui/admin/control-plane?section=proposals&amp;proposal={{.Proposal.ID}}" class="font-mono text-brand-400 hover:text-brand-300" title="{{.Proposal.ID}}">{{shortID .Proposal.ID}}</a> · {{.Proposal.Status}} · <span class="text-gray-400">{{.Proposal.Title}}</span></div>
                     {{end}}
                     {{if .Summary}}<div class="text-gray-300">{{.Summary}}</div>{{end}}
                     {{if .Verdict}}{{if .Verdict.Judged}}<div class="text-xs text-gray-400">Judge ({{.Verdict.Model}}): {{.Verdict.Summary}}</div>{{else}}<div class="text-xs text-amber-700 dark:text-amber-300">Not judged: {{.Verdict.Reason}}</div>{{end}}{{end}}

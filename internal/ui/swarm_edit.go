@@ -113,6 +113,24 @@ func (s *Server) SwarmEdit(w http.ResponseWriter, r *http.Request, swarmID strin
 
 // SwarmSave applies the form edits and writes a new SWARM.md.
 func (s *Server) SwarmSave(w http.ResponseWriter, r *http.Request, swarmID string) {
+	// GitHub #881: check each model this save changes before the lock, so no
+	// model call runs under it.
+	// Parsing here consumes the body, so a bad form is reported here.
+	if err := r.ParseForm(); err != nil {
+		data := s.swarmEditData(swarmID)
+		data.Error = "Failed to parse form: " + err.Error()
+		w.WriteHeader(http.StatusBadRequest)
+		s.render(w, "swarm_edit.html", data)
+		return
+	}
+	modelWarnings, refusal := s.swarmSaveModelCheck(r, swarmID)
+	if refusal != "" {
+		data := s.swarmEditData(swarmID)
+		data.Error = refusal
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "swarm_edit.html", data)
+		return
+	}
 	// The read, write and reload hold the process's config-write lock
 	// (operations design §6.9, GitHub #676).
 	unlock, lerr := configlock.LockAsWriter(r.Context())
@@ -262,6 +280,9 @@ func (s *Server) SwarmSave(w http.ResponseWriter, r *http.Request, swarmID strin
 		return
 	}
 	data.Success = res.Message
+	for _, w := range modelWarnings {
+		data.Success += " Warning: " + w + "."
+	}
 	if backupPath != "" {
 		data.Success += " Backup: " + backupPath
 	}
@@ -360,3 +381,17 @@ func trimSwarmParserPrefix(msg string) string {
 // Ensure registry import isn't dropped if every reference above
 // is renamed away in a future refactor.
 var _ = fmt.Sprintf
+
+// swarmSaveModelCheck runs the #881 check over the models the raw editor's
+// form sets, against those the file names now.
+func (s *Server) swarmSaveModelCheck(r *http.Request, swarmID string) ([]string, string) {
+	data := s.swarmEditData(swarmID)
+	if data.Error != "" {
+		return nil, ""
+	}
+	var after []string
+	for _, v := range data.RoleViews {
+		after = append(after, strings.TrimSpace(r.FormValue("roleModel_"+v.Name)), strings.TrimSpace(r.FormValue("roleModelFallback_"+v.Name)))
+	}
+	return s.checkSavedModels(r, fileSwarmModels(data.SwarmPath), after)
+}

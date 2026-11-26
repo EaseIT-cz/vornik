@@ -13,6 +13,7 @@ import (
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/integrations"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/mcpauth"
 )
@@ -146,7 +147,7 @@ func TestAgentAdmin_UnreachableServerSentenceNamesTheClass(t *testing.T) {
 func showProbeOutcomes(t *testing.T) {
 	t.Helper()
 	prev := probeOutcomeVisible
-	probeOutcomeVisible = func(string, []string) bool { return true }
+	probeOutcomeVisible = func(string, []dialguard.PrivateHost) bool { return true }
 	t.Cleanup(func() { probeOutcomeVisible = prev })
 }
 

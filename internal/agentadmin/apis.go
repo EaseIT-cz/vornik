@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // AddAPIInput is add_api (design §8.3; plan P4.5).
@@ -125,16 +126,18 @@ func (r *Renderer) addAPI(st *State, raw json.RawMessage) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
+	intranet := dialguard.PrivateHostsFor(pid, st.PrivateHosts) // §6.12, #403
 	c := Change{
 		Ops:     []FileOp{opFor(st, projectPath(pid), yamlOut)},
 		ReadSet: map[string]string{},
 		Locks:   []string{lockProject(pid), projectPath(pid), lockIntegration(pid, in.Name)},
 		Class:   Widening,
-		Grant:   Grant{Integrations: []IntegrationGrant{{Project: pid, Name: in.Name, Kind: "api", URL: api.BaseURL, Read: read, Write: write, Account: account}}},
+		Grant: Grant{Integrations: []IntegrationGrant{{Project: pid, Name: in.Name, Kind: "api", URL: api.BaseURL, Read: read, Write: write, Account: account,
+			PrivateReach: privateReach(intranet, api.BaseURL)}}},
 	}
 	expect(st, c.ReadSet, projectPath(pid))
 	phrase := addPhrase(p, in.Name, api.BaseURL, account)
-	c.Sentence = apiSentence(ns, pid, in, read, write, phrase) + sharedCredentialSentence(in.Auth.Credential, sharers)
+	c.Sentence = apiSentence(ns, pid, in, read, write, phrase) + intranetSentence(intranet, api.BaseURL) + sharedCredentialSentence(in.Auth.Credential, sharers)
 	if phrase != "" {
 		c.accounts = map[string]string{in.Name: phrase}
 	}

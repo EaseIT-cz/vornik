@@ -131,13 +131,20 @@ type stubGenerator struct {
 	Err         error
 	lastTrigger string
 	calls       int
+	// budget is what Budget reports (GitHub #908); deadline is the one the
+	// handler handed Generate.
+	budget   time.Duration
+	deadline time.Time
 }
 
-func (s *stubGenerator) Generate(_ context.Context, triggerID string) (string, bool, error) {
+func (s *stubGenerator) Generate(ctx context.Context, triggerID string) (string, bool, error) {
 	s.calls++
 	s.lastTrigger = triggerID
+	s.deadline, _ = ctx.Deadline()
 	return s.ProposalID, s.ByRecipe, s.Err
 }
+
+func (s *stubGenerator) Budget() time.Duration { return s.budget }
 
 func openTrigger(id string) *persistence.HealingTrigger {
 	now := time.Now().UTC()

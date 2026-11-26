@@ -1001,6 +1001,10 @@ type ProjectForge struct {
 	// (2026-09-08-forge-ci-outcomes-design.md §8).
 	CI     ProjectForgeCI     `yaml:"ci"`
 	Issues ProjectForgeIssues `yaml:"issues" since:"2026.10.6"`
+	// Canary sets the floors of the App review's planted canary (GitHub #873;
+	// github-app-channel design, "The review measures itself"). Unset floors
+	// measure only: the canary reports and never fails.
+	Canary ProjectForgeCanary `yaml:"canary" since:"2026.11.8"`
 	// GitLab ProjectGitLab `yaml:"gitlab"` // future sibling
 	// Gitea  ProjectGitea  `yaml:"gitea"`  // future sibling
 }
@@ -1089,6 +1093,15 @@ type ProjectForgeCI struct {
 	//
 	// Design: 2026-09-08-forge-ci-outcomes-design.md §14.
 	TriggerWorkflowPaths []string `yaml:"trigger_workflow_paths"`
+}
+
+// ProjectForgeCanary holds the planted canary's floors (GitHub #873). A nil
+// field is unset: with both unset the canary measures and never fails.
+type ProjectForgeCanary struct {
+	// FloorDetections fails a canary run that detects fewer plants.
+	FloorDetections *int `yaml:"floor_detections" since:"2026.11.8"`
+	// CeilingDecoys fails a canary run that flags more decoys.
+	CeilingDecoys *int `yaml:"ceiling_decoys" since:"2026.11.8"`
 }
 
 // CIDefaults fills the zero values a partially-specified ci block leaves.
@@ -1570,6 +1583,12 @@ type ProjectMemory struct {
 	// 22, "Amendment 2026-11-04 (#639)"). A file marked disclosure: never
 	// is skipped. Needs repo_scope. Empty: nothing is mirrored.
 	MirrorPaths []string `yaml:"mirror_paths,omitempty" since:"2026.11.2"`
+	// SharedWithNamespace makes an agent project read and write its
+	// namespace's shared memory (<ns>--home) instead of its own (agent-
+	// administered design part 24 §24.6, GitHub #920). Rendered by the admin
+	// verbs, approved on the phone; refused on an operator project and on
+	// the home project itself.
+	SharedWithNamespace bool `yaml:"shared_with_namespace,omitempty" since:"2026.11.8"`
 }
 
 // TrustedBranch is the configured branch memory provenance trusts:
@@ -1961,6 +1980,11 @@ type ProjectAutonomy struct {
 	AllowedTaskTypes []string `yaml:"allowedTaskTypes"`
 	// RequireApproval gates autonomous tasks for manual approval
 	RequireApproval bool `yaml:"requireApproval"`
+	// Observe runs the loop without starting anything: a tick that passes
+	// every gate records WOULD_START, with the prompt it would have
+	// submitted, and creates no task (GitHub #602; design 11, amendment
+	// 2026-11-20). Absent means false, so an existing project keeps acting.
+	Observe bool `yaml:"observe" since:"2026.11.8"`
 	// PollInterval is how often the lead evaluates the project (default "5m")
 	PollInterval string `yaml:"pollInterval"`
 	// EvaluateTimeout bounds a single evaluation tick's LLM + DB work.
@@ -2548,6 +2572,9 @@ func (p *Project) Validate(filename string) error {
 	if err := p.validateMemoryMirror(filename); err != nil {
 		return err
 	}
+	if err := p.validateSharedMemory(filename); err != nil {
+		return err
+	}
 	if err := p.validateCompanionHints(filename); err != nil {
 		return err
 	}
@@ -3101,4 +3128,30 @@ func validateProjectSecretsNamespace(p *Project) error {
 		return fmt.Errorf("%w (project IDs containing \"--\" are reserved for agent namespaces; %q reads as namespace %q)", err, p.ID, ns)
 	}
 	return err
+}
+
+// validateSharedMemory refuses memory.shared_with_namespace where it has no
+// meaning: an operator project has no namespace, and <ns>--home holds the
+// shared memory (part 24 §24.6 S1).
+func (p *Project) validateSharedMemory(filename string) error {
+	if !p.Memory.SharedWithNamespace {
+		return nil
+	}
+	ns, ok := agentns.FromID(p.ID)
+	if !ok {
+		return ProjectValidationError{File: filename, Field: "memory.shared_with_namespace", Message: "only an agent project can share its namespace's memory"}
+	}
+	if p.ID == agentns.ID(ns, "home") {
+		return ProjectValidationError{File: filename, Field: "memory.shared_with_namespace", Message: "the home project holds the shared memory; set this on the projects that share it"}
+	}
+	return nil
+}
+
+// MemoryProject is the project whose memory this project's tasks read and
+// write (part 24 §24.6 S2).
+func (p *Project) MemoryProject() string {
+	if p == nil {
+		return ""
+	}
+	return agentns.MemoryProject(p.ID, p.Memory.SharedWithNamespace)
 }

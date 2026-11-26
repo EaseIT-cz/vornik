@@ -28,6 +28,9 @@ broker:
 {{- if .Schedule}}
   schedule: {{.Schedule}}
 {{- end}}
+{{- if .HandOver}}
+  hand_over: {{.HandOver}}
+{{- end}}
 steps:
 {{- range .Steps}}
   {{.Name}}:

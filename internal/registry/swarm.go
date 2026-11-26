@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/rolelibrary"
+
 	"vornik.io/vornik/internal/imageref"
 	"vornik.io/vornik/internal/mediakind"
 	"vornik.io/vornik/internal/persistence"
@@ -246,6 +248,17 @@ type SwarmRole struct {
 	// The fallback runs at most once per step — if it also fails,
 	// the executor reports the most recent error.
 	ModelFallback string `yaml:"modelFallback"`
+	// ModelTier states what the role needs from a model without naming one:
+	// trivial, standard, complex, coding or vision (rolelibrary). The
+	// instance's runtime.agent_llm.tiers map turns it into Model and
+	// ModelFallback at load (ResolveRoleModels); unmapped, the role uses the
+	// setup model. Shipped swarms name a tier, never a model (GitHub #880).
+	ModelTier string `yaml:"modelTier,omitempty"`
+	// ModelSource records where Model came from after resolution: "explicit"
+	// (the file named it), "role" (runtime.agent_llm.roles), "tier:<name>"
+	// (runtime.agent_llm.tiers) or "" (no model; the setup model applies).
+	// Never read from or written to a file.
+	ModelSource string `yaml:"-" json:"-"`
 	// MemorySearch pins this role's memory_search retrieval policy (#550;
 	// design 2026-10-25-architect-expert-design.md §2.1 C1). nil = today's
 	// project-wide search. The daemon applies it to every search the role's
@@ -276,6 +289,11 @@ type SwarmRole struct {
 	// ContextSize overrides the daemon-level context window for this role.
 	// 0 = use daemon default (or model_limits entry if the model is overridden).
 	ContextSize int `yaml:"contextSize"`
+	// Reasoning sets how much the role's model reasons: off, low, medium or
+	// high (GitHub #869, reasoning control design B1). Empty uses the model's
+	// model_limits entry, else sends nothing. Each provider maps the level to
+	// its own field.
+	Reasoning string `yaml:"reasoning"`
 	// SystemPrompt is the LLM system message for this role.
 	// When set, it overrides the agent's default role-based system prompt.
 	// The effective prompt the executor sends is built by
@@ -628,6 +646,20 @@ func (s *Swarm) Validate(filename string) error {
 		if err := validateRoleModalities(filename, i, role, declaredModalities); err != nil {
 			return err
 		}
+		if role.ModelTier != "" && !rolelibrary.ValidModelTier(role.ModelTier) {
+			return SwarmValidationError{
+				File:    filename,
+				Field:   fmt.Sprintf("roles[%d].modelTier", i),
+				Message: fmt.Sprintf("modelTier %q is not one of %s", role.ModelTier, rolelibrary.ModelTierList()),
+			}
+		}
+		if !ValidReasoningLevel(role.Reasoning) {
+			return SwarmValidationError{
+				File:    filename,
+				Field:   fmt.Sprintf("roles[%d].reasoning", i),
+				Message: fmt.Sprintf("reasoning %q is not one of off, low, medium, high", role.Reasoning),
+			}
+		}
 		if err := validateSuppressedGuidance(filename, fmt.Sprintf("roles[%d].suppressedGuidanceBlocks", i), role.SuppressedGuidanceBlocks); err != nil {
 			return err
 		}
@@ -862,4 +894,15 @@ func validateRoleModalities(filename string, i int, role SwarmRole, declared map
 		}
 	}
 	return nil
+}
+
+// ValidReasoningLevel reports whether level is a reasoning level a role or a
+// model_limits entry may set: empty (unset), off, low, medium or high
+// (GitHub #869). The values are vornik's own; providers map them.
+func ValidReasoningLevel(level string) bool {
+	switch level {
+	case "", "off", "low", "medium", "high":
+		return true
+	}
+	return false
 }

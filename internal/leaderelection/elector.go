@@ -80,6 +80,9 @@ type Elector struct {
 	// stale (lower) epoch is the signal a new leader has taken over.
 	// Written only by tryAcquireOrRenew; read via Epoch().
 	epoch atomic.Int64
+
+	// standby marks an elector that never leads (NewStandby).
+	standby bool
 }
 
 // New constructs an Elector. holderID is a daemon-instance
@@ -111,6 +114,23 @@ func New(repo persistence.DaemonLeaderLockRepository, workerID, holderID string,
 		logger:   logger,
 		clock:    time.Now,
 	}
+}
+
+// NewStandby constructs an Elector that never leads: it has no lock store, so
+// BootstrapAcquire, Run and Release do nothing, IsLeader is always false and
+// the epoch fence (VerifyEpoch) refuses every write.
+//
+// It is the elector of a node that must not run singleton workers (node
+// profile run_workers: false, GitHub #894). A nil elector cannot mean that:
+// every worker reads nil as "the single process, always leader".
+func NewStandby(workerID string) *Elector {
+	return &Elector{workerID: workerID, standby: true, logger: zerolog.Nop(), clock: time.Now}
+}
+
+// Standby reports whether this elector was built by NewStandby and so can
+// never lead.
+func (e *Elector) Standby() bool {
+	return e != nil && e.standby
 }
 
 // IsLeader returns the cached leader bit. Safe to call

@@ -388,9 +388,7 @@ func (c *Channel) handleFileSharedEvent(ctx context.Context, p eventPayload, ins
 		c.logger.Error().Str("event_id", p.EventID).Msg("slack: bound Receiver does not implement conversation.Receiver; dropping")
 		return
 	}
-	if err := recv.Receive(ctx, msg); err != nil {
-		c.logger.Warn().Err(err).Str("event_id", p.EventID).Msg("slack: file_shared Receiver.Receive returned error")
-	}
+	c.receive(ctx, recv, msg, "file_shared")
 }
 
 // uploadAudioParams bundles the inputs to a Slack files.upload_v2

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,6 +57,21 @@ var companionBundles = map[string]bundleBaseline{
 	// HARNESS PARITY (operator, 2026-10-08; LLD 21 §D2, D6): the Hermes bundle
 	// is version-checked like the other two. Its pinned skill is the broker
 	// skill, which delegates typed inputs, not prompts.
+	// GitHub #621, LLD 28 B9: the Cursor plugin (a Cursor Plugin manifest).
+	"cursor": {
+		manifest:        "../../contrib/cursor-companion/.cursor-plugin/plugin.json",
+		baselineVersion: "0.0.0", // new bundle; 0.1.0 is its first release
+		skill:           "../../contrib/cursor-companion/skills/delegate/SKILL.md",
+		skillSHA256:     "81c6f9b74a9bea9744edee32a32ec1c1805e137219950533528375a214e6bea7",
+	},
+	// GitHub #841, LLD 29 B8: the opencode bundle; its version is the
+	// plugin's VERSION constant.
+	"opencode": {
+		manifest:        "../../contrib/opencode-companion/plugin/vornik-companion.js",
+		baselineVersion: "0.0.0", // new bundle; 0.1.0 is its first release
+		skill:           "../../contrib/opencode-companion/skills/vornik-delegate/SKILL.md",
+		skillSHA256:     "afbac13fd45b5d129100100bd3728d2336100b945ce34123dc5e574736e6e80f",
+	},
 	"hermes": {
 		manifest:        "../../contrib/hermes-companion/plugin.yaml",
 		baselineVersion: "0.21.0",
@@ -73,9 +89,15 @@ func readManifestVersion(t *testing.T, path string) string {
 	var m struct {
 		Version string `json:"version" yaml:"version"`
 	}
-	if strings.HasSuffix(path, ".yaml") {
+	switch {
+	case strings.HasSuffix(path, ".js"):
+		// The opencode plugin carries its version as a constant (LLD 29 B8).
+		got := regexp.MustCompile(`(?m)^const VERSION = "([^"]+)";`).FindSubmatch(raw)
+		require.NotNilf(t, got, "%s holds no VERSION constant", path)
+		m.Version = string(got[1])
+	case strings.HasSuffix(path, ".yaml"):
 		require.NoError(t, yaml.Unmarshal(raw, &m))
-	} else {
+	default:
 		require.NoError(t, json.Unmarshal(raw, &m))
 	}
 	require.NotEmpty(t, m.Version)

@@ -23,8 +23,11 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"vornik.io/vornik/internal/config"
 )
 
 var (
@@ -54,10 +57,16 @@ memetic architect (generate-candidate).`,
 	}
 	blackboxTriggerGenerateCmd = &cobra.Command{
 		Use:   "generate-candidate <id>",
-		Short: "Hand a trigger's evidence to the memetic architect",
-		Long: `Calls the workflow architect synchronously, stamps the resulting
-proposal_id on the trigger, and prints the proposal ID. Use
-'vornikctl workflow-proposals show <id>' to review the proposal.`,
+		Short: "Generate a healing candidate for a trigger",
+		Long: `Asks the daemon for a healing candidate: a deterministic recipe first,
+then the configuration assistant. It stamps the resulting proposal_id on the
+trigger and prints the proposal ID. Use 'vornikctl workflow-proposals show <id>'
+to review the proposal.
+
+The call is synchronous and may take as long as the daemon's
+config_assistant.request_timeout plus 2 minutes (7 minutes by default). This
+command waits 8 minutes. If the daemon's request_timeout is longer, set
+VORNIK_API_TIMEOUT above it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: runBlackBoxTriggerGenerateCandidate,
 	}
@@ -261,9 +270,21 @@ func runBlackBoxTriggerDismiss(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+// generateClientSlack is how far a generate client's deadline exceeds the
+// daemon's generate budget, so the server answers before the client gives up.
+const generateClientSlack = time.Minute
+
+// generateCandidateClient is the client for a generate-candidate call. The
+// daemon may run the producer for its whole budget (GitHub #908), and this
+// command cannot read the daemon's config, so the client outlives the
+// default budget; a longer VORNIK_API_TIMEOUT still wins.
+func generateCandidateClient() *Client {
+	return ClientFromEnv().WithMinTimeout(config.DefaultHealingGenerateBudget + generateClientSlack)
+}
+
 func runBlackBoxTriggerGenerateCandidate(_ *cobra.Command, args []string) error {
 	id := args[0]
-	resp, err := ClientFromEnv().Post(
+	resp, err := generateCandidateClient().Post(
 		"/api/v1/admin/workflow-healing/triggers/"+url.PathEscape(id)+"/generate-candidate", nil)
 	if err != nil {
 		return fmt.Errorf("generate-candidate: %w", err)

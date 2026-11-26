@@ -265,7 +265,7 @@ func executeListTasks(ctx context.Context, action Action, taskRepo persistence.T
 	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to list tasks: %v", err),
+			Message: msgListUnavailable, // never the error text (#916 item 3)
 		}, err
 	}
 
@@ -409,7 +409,7 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to get task: %v", err),
+			Message: msgReadUnavailable,
 		}, err
 	}
 
@@ -422,12 +422,15 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 
 	// Fast path for a clear message; it does not guard the write (scheduler
 	// design §4.10). CLOSED is an end state too — the old check let it through.
-	cancellable := persistence.CancellableTaskStatuses()
+	// The client surfaces' from-set (#326, applied here by #916 item 4): a
+	// task awaiting approval is answered on the approval page, never
+	// cancelled out from under the approver, least of all by a model.
+	cancellable := persistence.ClientCancellableTaskStatuses()
 	if !slices.Contains(cancellable, task.Status) {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Task %s is already in terminal state: %s", task.ID, task.Status),
-		}, fmt.Errorf("task is already in terminal state")
+			Message: fmt.Sprintf("Task %s was not cancelled: %s.", task.ID, taskcancel.RefusalReason(task.Status, cancellable)),
+		}, fmt.Errorf("task is not cancellable in status %s", task.Status)
 	}
 
 	// The shared cancel primitive (05-scheduler.md §4.11): ONE conditional
@@ -441,7 +444,7 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to cancel task: %v", err),
+			Message: msgCancelUnavailable,
 		}, err
 	}
 	if !moved {
@@ -485,7 +488,7 @@ func executeRetryTask(ctx context.Context, action Action, taskRepo persistence.T
 	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to get task: %v", err),
+			Message: msgReadUnavailable,
 		}, err
 	}
 
@@ -496,25 +499,27 @@ func executeRetryTask(ctx context.Context, action Action, taskRepo persistence.T
 		}, fmt.Errorf("task not found: %s", action.TaskID)
 	}
 
-	// Check if task can be retried
-	if task.Status != persistence.TaskStatusFailed {
+	// The atomic requeue /retry and the inbox use (#916 item 2): one
+	// conditional write that accepts FAILED, CANCELLED, COMPLETED or PENDING,
+	// bumps the attempt budget and stamps retry_requested_at. The
+	// read-check-write it replaces could overwrite a task the scheduler had
+	// just picked up.
+	ok, err := taskRepo.RequeueTerminalTask(ctx, task.ID, 1, task.MaxAttempts)
+	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Task %s cannot be retried. Current status: %s (must be FAILED)", task.ID, task.Status),
-		}, fmt.Errorf("task is not in FAILED state")
-	}
-
-	// Reset task to queued
-	task.Status = persistence.TaskStatusQueued
-	task.Attempt = 0
-	task.LastError = nil
-	task.UpdatedAt = time.Now()
-
-	if err := taskRepo.Update(ctx, task); err != nil {
-		return ActionResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to retry task: %v", err),
+			Message: msgRetryUnavailable,
 		}, err
+	}
+	if !ok {
+		now := task.Status
+		if fresh, ferr := taskRepo.Get(ctx, task.ID); ferr == nil && fresh != nil {
+			now = fresh.Status
+		}
+		return ActionResult{
+			Success: false,
+			Message: fmt.Sprintf("Task %s can't be retried in status %s (only failed, cancelled or completed tasks).", task.ID, now),
+		}, fmt.Errorf("task is not retriable in status %s", now)
 	}
 
 	return ActionResult{
@@ -537,7 +542,7 @@ func executeGetStatus(ctx context.Context, action Action, taskRepo persistence.T
 	if err != nil {
 		return ActionResult{
 			Success: false,
-			Message: fmt.Sprintf("Failed to get task: %v", err),
+			Message: msgReadUnavailable,
 		}, err
 	}
 
@@ -606,3 +611,14 @@ func executeGetStatus(ctx context.Context, action Action, taskRepo persistence.T
 		Data:    task,
 	}, nil
 }
+
+// The task-control replies for a store failure: fixed sentences, the error
+// only in the returned error and the log (Telegram task-control design,
+// Amendment 2026-11-25, #916 item 3). Telegram's commands use the same
+// words.
+const (
+	msgListUnavailable   = "Could not list tasks right now. Try again in a moment."
+	msgReadUnavailable   = "Could not read the task right now. Try again in a moment."
+	msgCancelUnavailable = "Could not cancel the task right now. Try again in a moment."
+	msgRetryUnavailable  = "Could not retry the task right now. Try again in a moment."
+)

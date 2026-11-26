@@ -45,6 +45,10 @@ type Metrics struct {
 	// counter.
 	OutputGuardRedactionsTotal *prometheus.CounterVec
 
+	// OutputGuardScanPanicsTotal counts scans that panicked, labelled by
+	// tool; the result was withheld from the model (#917).
+	OutputGuardScanPanicsTotal *prometheus.CounterVec
+
 	// OutputGuardScanDuration is the per-call wall-clock of one guard
 	// scan, labelled by tool. Observed on every scan including
 	// no-finding scans so the histogram captures the regex-set latency
@@ -204,6 +208,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"tool"},
 		),
+		OutputGuardScanPanicsTotal: auto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "vornik",
+				Subsystem: "dispatcher",
+				Name:      "output_guard_scan_panics_total",
+				Help:      "Output-guard scans that panicked, labelled by tool; the tool result was withheld from the model (GitHub #917).",
+			},
+			[]string{"tool"},
+		),
 		AIDisclosureServedTotal: auto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "vornik",
@@ -291,6 +304,14 @@ func (m *Metrics) observeOutputGuardRedaction(tool string) {
 		return
 	}
 	m.OutputGuardRedactionsTotal.WithLabelValues(tool).Inc()
+}
+
+// observeOutputGuardScanPanic bumps OutputGuardScanPanicsTotal. Nil-safe.
+func (m *Metrics) observeOutputGuardScanPanic(tool string) {
+	if m == nil || m.OutputGuardScanPanicsTotal == nil {
+		return
+	}
+	m.OutputGuardScanPanicsTotal.WithLabelValues(tool).Inc()
 }
 
 func (m *Metrics) recordToolCall(tool string) {

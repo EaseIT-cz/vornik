@@ -140,6 +140,12 @@ type MemoryRetrievalAuditRepository interface {
 	// audit row at or after since and the distinct chunks those rows list,
 	// most chunks first. Powers the a2a_corpus_walk doctor check (#617).
 	A2AChunksByCallerKey(ctx context.Context, since time.Time) ([]A2AKeyRetrieval, error)
+
+	// StepRecallChunks returns every chunk every recall of taskID returned,
+	// keyed by the recall's execution and step, with each chunk's class now
+	// (taint-lineage design §16, GitHub #858). The skill distiller judges a
+	// step whose only taint is memory_search by these.
+	StepRecallChunks(ctx context.Context, taskID string) ([]StepRecallChunk, error)
 }
 
 // MemorySearchStageRepository persists per-search stage rows into

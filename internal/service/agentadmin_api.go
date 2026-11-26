@@ -5,6 +5,7 @@ import (
 
 	"vornik.io/vornik/internal/agentapi"
 	"vornik.io/vornik/internal/apigateway"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // Agent projects' REST clients (agent-administered Vornik plan P4.5).
@@ -28,17 +29,24 @@ func (c *Container) agentAPIClient(projectID string, write bool, methods map[str
 		ProjectID: projectID, Project: c.Registry.GetProject, Grants: c.repos.AgentGrants,
 		Secrets: c.secretSource(), AllowedMethods: methods, Write: write,
 		HTTP: func(base string) *http.Client {
-			return c.agentServerClient(base, mcpOAuthHTTPTimeout)
+			return c.agentServerClient(projectID, base, mcpOAuthHTTPTimeout)
 		}, // #560 M1c D5; #734; #740
 		Logger: c.Logger.With().Str("component", "agent-api").Str("project", projectID).Logger(),
 	}
 }
 
-// agentPrivateAPIHosts is agent_admin.private_api_hosts, folded at load (design
-// part 06, §6.7, GitHub #734).
-func (c *Container) agentPrivateAPIHosts() []string {
+// agentPrivateAPIHosts is agent_admin.private_api_hosts, parsed, for every
+// project (design part 06, §6.7, GitHub #734; §6.12, GitHub #403).
+func (c *Container) agentPrivateAPIHosts() []dialguard.PrivateHost {
 	if c.Config == nil {
 		return nil
 	}
-	return c.Config.AgentAdmin.PrivateAPIHosts
+	return c.Config.AgentAdmin.PrivateHosts()
+}
+
+// agentPrivateHostsFor is the entries that serve one agent project: the one
+// place the service scopes the list (§6.12 answer 5). Every dial, listing
+// mask and doctor test of an agent connection reads it.
+func (c *Container) agentPrivateHostsFor(projectID string) []dialguard.PrivateHost {
+	return dialguard.PrivateHostsFor(projectID, c.agentPrivateAPIHosts())
 }

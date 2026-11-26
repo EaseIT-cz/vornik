@@ -170,6 +170,9 @@
                             <span class="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse inline-block"></span>
                             Autonomy enabled
                         </span>
+                        {{if .Project.Autonomy.Observe}}
+                        <span class="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-inset ring-amber-500/30" title="Autonomy records what it would start and starts nothing. Set autonomy.observe to false to let it act.">Observe only</span>
+                        {{end}}
                         {{if .NextAutonomyTickETA}}
                         <span class="text-xs text-ink-400">next tick</span>
                         <span data-next-eval-at="{{.NextAutonomyTickISO}}" class="text-xs font-mono tabular-nums text-violet-700 dark:text-violet-300">{{.NextAutonomyTickETA}}</span>
@@ -181,6 +184,19 @@
                         <span class="text-xs text-ink-500 font-mono tabular-nums">{{.LastAutonomyAgoLabel}}</span>
                         {{end}}
                     </div>
+                    {{if .Project.Autonomy.Observe}}
+                    <div class="mb-3" data-observe-summary>
+                        <dt class="text-xs text-ink-500 mb-1">Observe: {{.ObserveWouldStart7d}}{{if .ObserveWouldStart7dCapped}}+{{end}} would-start in 7 days</dt>
+                        {{if .ObserveRecent}}
+                        <ul class="text-xs text-ink-300 space-y-1">
+                            {{range .ObserveRecent}}
+                            <li><span class="text-ink-500 font-mono tabular-nums">{{.AgoLabel}}</span> {{.Prompt}}</li>
+                            {{end}}
+                        </ul>
+                        {{end}}
+                        <p class="text-xs text-ink-500 mt-1">All rows: <code>vornikctl autonomy evaluations -p {{.Project.ID}} --outcome WOULD_START</code></p>
+                    </div>
+                    {{end}}
                     {{if .Project.Autonomy.Goal}}
                     <div class="mb-3">
                         <dt class="text-xs text-ink-500 mb-1">Goal</dt>

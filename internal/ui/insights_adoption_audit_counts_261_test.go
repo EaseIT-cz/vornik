@@ -1,12 +1,17 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/chatorigin"
 	"vornik.io/vornik/internal/persistence"
@@ -69,5 +74,50 @@ func TestAdoption261_UncountedSurfaceIsNotShownAsZero(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-tile="chat-turns-uncounted"`) || !strings.Contains(body, `data-tile="tool-calls-uncounted"`) {
 		t.Fatal("an uncounted surface does not say so")
+	}
+}
+
+// GitHub #749 item 1 (2026-11-13 batch review of #261): countActivity turned
+// every CountSince error into "not counted here" and logged nothing, so during
+// a database outage the operator saw "not counted" with no signal. A failed
+// count now logs one warning; ErrActivityNotCounted (a wrapper over a
+// repository that cannot count) is not a failure and logs nothing.
+//
+// Found at: review (2026-11-13 batch review).
+// Regression test at: unit (countActivity).
+
+type erroringCounter749 struct{ err error }
+
+func (e erroringCounter749) CountSince(context.Context, string, time.Time) (int64, error) {
+	return 0, e.err
+}
+
+func TestCountActivity749_AFailedCountIsLoggedNotCountedIsNot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantLog bool
+	}{
+		{"transport error", errors.New("connection refused"), true},
+		{"cannot count", persistence.ErrActivityNotCounted, false},
+		{"wrapped cannot count", fmt.Errorf("wrap: %w", persistence.ErrActivityNotCounted), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			n, counted := countActivity(context.Background(), zerolog.New(&buf), "chat_turns",
+				erroringCounter749{err: tc.err}, []string{"p1", "p2"}, time.Now())
+			if n != 0 || counted {
+				t.Fatalf("got (%d, %v), want (0, false): a failed count is never a number", n, counted)
+			}
+			logged := buf.String()
+			if got := strings.Count(logged, `"level":"warn"`); tc.wantLog && got != 1 {
+				t.Fatalf("want exactly one warning, got %d: %s", got, logged)
+			} else if !tc.wantLog && logged != "" {
+				t.Fatalf("a repository that cannot count is not a failure; logged %s", logged)
+			}
+			if tc.wantLog && (!strings.Contains(logged, "connection refused") || !strings.Contains(logged, "chat_turns")) {
+				t.Fatalf("the warning names neither the error nor the surface: %s", logged)
+			}
+		})
 	}
 }

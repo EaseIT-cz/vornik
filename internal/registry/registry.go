@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"vornik.io/vornik/internal/config"
 )
 
 // Registry holds all loaded definitions and provides thread-safe read access.
@@ -53,6 +55,8 @@ type Registry struct {
 	// the process default (SetDefaultAgentModelCatalogue); empty refuses
 	// every agent role model (fail closed, review 20261003-a525 A1).
 	agentModels map[string]bool
+	// modelTiers and modelRoles resolve swarm role models at load (#880).
+	modelTiers, modelRoles map[string]config.ModelChoice
 }
 
 // defaultAgentModels is the catalogue every New registry starts with: the
@@ -168,12 +172,15 @@ func New() *Registry {
 		swarms:    make(map[string]*Swarm),
 		workflows: make(map[string]*Workflow),
 	}
+	tiers, roles := defaultModelResolution()
 	return &Registry{
 		active:      active,
 		projects:    active.projects,
 		swarms:      active.swarms,
 		workflows:   active.workflows,
 		agentModels: defaultAgentModelSet(),
+		modelTiers:  tiers,
+		modelRoles:  roles,
 	}
 }
 
@@ -257,7 +264,8 @@ func (r *Registry) ConfigDir() string {
 
 // Stage loads configs into a staged snapshot without touching the active state.
 func (r *Registry) Stage(configDir string) error {
-	staged, err := loadConfigSetWith(configDir, r.agentModelSet())
+	tiers, roles := r.modelResolution()
+	staged, err := loadConfigSetWith(configDir, r.agentModelSet(), tiers, roles)
 	if err != nil {
 		return err
 	}
@@ -588,12 +596,14 @@ func (r *Registry) applyActiveLocked(cfg *ConfigSet) {
 }
 
 func loadConfigSet(configDir string) (*ConfigSet, error) {
-	return loadConfigSetWith(configDir, nil)
+	return loadConfigSetWith(configDir, nil, nil, nil)
 }
 
 // loadConfigSetWith loads a tree, judging agent role models against
-// agentModels (nil: no agent role may name a model).
-func loadConfigSetWith(configDir string, agentModels map[string]bool) (*ConfigSet, error) {
+// agentModels (nil: no agent role may name a model), then resolves role
+// models through the tier and role maps (GitHub #880). Every load path comes
+// through here, so a staged and an active snapshot are resolved alike.
+func loadConfigSetWith(configDir string, agentModels map[string]bool, tiers, roles map[string]config.ModelChoice) (*ConfigSet, error) {
 	index := newTreeIndex(configDir)
 	projects, err := loadProjects(configDir, index)
 	if err != nil {
@@ -619,6 +629,7 @@ func loadConfigSetWith(configDir string, agentModels map[string]bool) (*ConfigSe
 		index:     index,
 	}
 	agentRuleRejections(cfg, agentModels)
+	ResolveRoleModels(cfg.swarms, tiers, roles)
 
 	return cfg, nil
 }
@@ -675,7 +686,8 @@ func (r *Registry) LoadFromPaths(paths ...string) error {
 		} else if err != nil {
 			return fmt.Errorf("stat config path %q: %w", p, err)
 		}
-		layer, err := loadConfigSetWith(p, r.agentModelSet())
+		tiers, roles := r.modelResolution()
+		layer, err := loadConfigSetWith(p, r.agentModelSet(), tiers, roles)
 		if err != nil {
 			return fmt.Errorf("load layer %q: %w", p, err)
 		}

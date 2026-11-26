@@ -23,6 +23,11 @@ func WithoutModelFallback(ctx context.Context) context.Context {
 	return context.WithValue(ctx, withoutModelFallbackKey{}, true)
 }
 
+// ModelFallbackSkipped reports whether ctx carries WithoutModelFallback, for a
+// caller outside this package that must prove its probe ran with fallbacks
+// off (modelcheck, GitHub #881).
+func ModelFallbackSkipped(ctx context.Context) bool { return modelFallbackSkipped(ctx) }
+
 func modelFallbackSkipped(ctx context.Context) bool {
 	v, _ := ctx.Value(withoutModelFallbackKey{}).(bool)
 	return v

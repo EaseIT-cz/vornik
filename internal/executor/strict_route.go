@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -89,7 +90,9 @@ const routerSystemPrompt = `You are a workflow router. Your only job is to pick 
 
 You have no tools on this step. Do not plan the work, research it, or produce it — the workflow you pick has the tools and the budget to do that.
 
-The candidate list (context.adaptiveCandidateWorkflows) is the whole configuration; nothing else is needed and nothing is missing.
+The candidates are listed under CANDIDATE WORKFLOWS in the user message, each with what it does. That list is the whole configuration; nothing else is needed and nothing is missing.
+
+Routing needs no tools: the workflow you pick has its own roles and tools to read files, write artifacts and use memory. Compare the task with each candidate's description and pick the one that covers it.
 
 If no candidate is equipped for the task (for example a research request and only outreach workflows), answer "none" and say in the reason what the task needs. Use "none" only for that; never to ask for configuration.
 
@@ -123,10 +126,17 @@ func roleContractFor(role *registry.SwarmRole, opts *agentInputOpts) *registry.S
 // applyStrictRouteContract rewrites a route step's agent input into the router
 // contract (see strictRouteContractApplies). Runs after resolveRoleOpts, which
 // has already set the role's prompt and schema.
-func applyStrictRouteContract(opts *agentInputOpts, candidates []string) {
+//
+// describe returns a candidate workflow's description ("" when it has none or
+// does not resolve); nil lists the candidates by id alone. The router sees the
+// candidates only through this block: the agent does not render the context's
+// adaptiveCandidateWorkflows (delegation-engine design, "A first none gets one
+// corrective re-run, against candidates the router can see", #889).
+func applyStrictRouteContract(opts *agentInputOpts, candidates []string, describe func(string) string) {
 	if opts == nil {
 		return
 	}
+	opts.StepPrompt += routeCandidateBlock(candidates, describe)
 	opts.ToolFree = true
 	opts.RouteContract = true
 	opts.SystemPrompt = routerSystemPrompt
@@ -171,6 +181,55 @@ func (e routeNoFitError) FailureClass() string { return persistence.TaskFailureC
 // rambling answer cannot fill the notice.
 const routeNoFitReasonMax = 300
 
+// routeCandidateDescriptionMax caps each candidate's description in the
+// route prompt (#889).
+const routeCandidateDescriptionMax = 300
+
+// routeCandidateBlock lists the project's candidates, in order, with their
+// descriptions, for the route prompt (#889).
+func routeCandidateBlock(candidates []string, describe func(string) string) string {
+	var b strings.Builder
+	b.WriteString("\n\nCANDIDATE WORKFLOWS (pick one id verbatim, or \"none\"):\n")
+	for _, id := range candidates {
+		desc := ""
+		if describe != nil {
+			desc = trimToSentence(strings.Join(strings.Fields(describe(id)), " "), routeCandidateDescriptionMax)
+		}
+		if desc == "" {
+			fmt.Fprintf(&b, "- %s\n", id)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", id, desc)
+	}
+	return b.String()
+}
+
+// trimToSentence cuts s to at most limit runes, at the last sentence end within
+// them when there is one, so a description loses whole sentences.
+func trimToSentence(s string, limit int) string {
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	cut := textutil.TruncateRunes(s, limit)
+	if i := strings.LastIndex(cut, ". "); i > 0 {
+		return cut[:i+1]
+	}
+	return cut
+}
+
+// routeNoFitRetryHint is the corrective hint for a first "none" (#889). Its
+// last clause keeps "none" an answer, so a genuine misfit still fails
+// ROUTE_NO_FIT rather than being forced into a candidate (#641).
+func routeNoFitRetryHint(reason string) string {
+	reason = strings.Join(strings.Fields(reason), " ")
+	if reason == "" {
+		reason = "no reason given"
+	}
+	return fmt.Sprintf(
+		"\n\nROUTE CORRECTION: You answered \"none\" (%s). Routing needs no tools: the workflow you pick has its own. Compare the task with each candidate's description under CANDIDATE WORKFLOWS. Pick the one whose description covers the task, %s. Emit {\"selected_workflow\": \"<one id or none>\", \"reason\": \"...\"} and nothing else.",
+		textutil.TruncateRunes(reason, routeNoFitReasonMax), `or answer "none" again only if no candidate's description covers the task`)
+}
+
 // routeAnsweredNoFit reports whether the router's answer is "none" and "none"
 // is not itself one of the project's candidates.
 func routeAnsweredNoFit(result *agentStepResult, candidates []string) bool {
@@ -194,4 +253,17 @@ func (e *Executor) routeNoFitFailure(task *persistence.Task, project *registry.P
 	return routeNoFitError{msg: fmt.Sprintf(
 		"no workflow in project %q fits this task (%s); its workflows are %s. Run it in a project that has one, or add one.",
 		project.ID, reason, strings.Join(project.AdaptiveCandidateWorkflows, ", "))}
+}
+
+// describeWorkflow returns a workflow's description for the route prompt, or
+// "" when the resolver is unset or the id does not resolve (#889).
+func (e *Executor) describeWorkflow(id string) string {
+	if e == nil || e.workflows == nil {
+		return ""
+	}
+	wf := e.workflows.GetWorkflow(id)
+	if wf == nil {
+		return ""
+	}
+	return wf.Description
 }

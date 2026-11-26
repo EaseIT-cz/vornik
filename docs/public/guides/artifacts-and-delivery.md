@@ -3,13 +3,13 @@ sources:
     - path: internal/dispatcher/render_document.go
       sha256: 3b9186ad84783c7cb102a04635ea36f1ecbfb4899fbb897af8f6359e720e4754
     - path: internal/dispatcher/tools.go
-      sha256: e1b110dedef605e12558d667ea75fed7be95f6c35abe8834f6049544b37204f9
+      sha256: ba30928b2cf25a6f7462fcd4b02706d40d1c07933b8a7dcd6bcd4d040f73f515
     - path: internal/dispatcher/agent.go
       sha256: b54aca7996eadb1347b7360c3cabec2231d8ffc9e8e614a6307effe7c7d719d2
     - path: internal/email/channel.go
       sha256: e51ca70a6dd52acf7e044e155cc2ba92eec186c123e94f1bc940a87399959481
     - path: internal/slack/voice.go
-      sha256: 1836b2db7a8a16253a0ebba29de188423fa5f6ec62713e37f541daffacd626f0
+      sha256: dc7d0ec26ed38cf37d7cb39e7f65d444092747cf5939c58b311d9aebcb698d3e
     - path: internal/reminders/completion_notifier.go
       sha256: 39f310edeed8d3f01613224f92615506bf85f755baee580fd44339d9c4b0381f
 ---

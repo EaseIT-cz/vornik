@@ -3,11 +3,11 @@ sources:
     - path: internal/api/companion_artifacts.go
       sha256: 3ad6022ea09f444eace44d417596dd259bd5a603307401b1309161255aa2110f
     - path: internal/api/companion_mcp.go
-      sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
+      sha256: 4012de992ccc0a5856cc39f879ad5249230d44ddd48a2ed1daf5fbf1fa94cdb8
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 9484ec74f1605e271bb356e76127bf9dd667ab21ea664d714a5c64607ab26b08
+      sha256: 33e9b0166409a588c5d90cc9ba2aa3a0c12eb3fcb6584fb6f869f8eb7fd3cd5a
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 2fd0bf22a8c61e7349fda4433a5f27438f84b8814010c0ae1beaaf738c1ecf9a
+      sha256: 58a56bd43db636dbacadfd08fe954853e9cd0196cca1c96330230d80fcb49423
 ---
 # Companion plugin
 
@@ -725,9 +725,18 @@ For **Claude Desktop and Cowork**, mint the key the same way, then follow
 [Use Vornik from Claude Desktop and Cowork](../guides/claude-desktop.md): one
 command connects them, with no Node and no token in Claude's config.
 
+For **any other agent** (Gemini CLI, opencode, Cursor and others), follow
+[Use Vornik from any agent](../guides/any-agent.md): `vornikctl companion
+connect generic --print` prints the MCP entry to paste, and `vornikctl
+companion instructions --write AGENTS.md` gives the agent Vornik's working
+rules.
+
 On the **daemon** side, an operator prepares a companion project and mints a
 **companion-scoped key** (a plain API key won't be accepted on the companion
-endpoint):
+endpoint). Each companion key may make 5 requests a second, with bursts of
+up to 50; past that the endpoint answers 429 with `Retry-After`. Change or
+turn off that default with `api.rate_limit.companion_key` (`rps`, `burst`,
+`off`) in `config.yaml`:
 
 ```bash
 # confirm the daemon advertises the companion capabilities
@@ -872,3 +881,41 @@ itself enabled so its skill remains available:
 [plugins."codex-companion@vornik".mcp_servers.vornik]
 enabled = false
 ```
+
+## From a GitHub Actions job, without a stored secret
+
+A workflow can call the companion with the ID token GitHub issues to its run
+instead of a key's secret, so nothing secret is stored in the repository.
+Bind a key to one workflow file on one branch:
+
+```bash
+vornikctl companion grant -p ci-review --client github-actions \
+    --workflows companion-architectural-review --budget-usd 10 --oidc-only
+vornikctl companion trust-github --key <key id> -p ci-review \
+    --repo acme/app --repo-id "$(gh api repos/acme/app --jq .id)" \
+    --ref refs/heads/main --workflow .github/workflows/review.yml
+```
+
+`--oidc-only` never prints the key's secret. The trust's audience defaults to
+the Vornik URL `vornikctl` talks to. In the workflow:
+
+```yaml
+permissions:
+  id-token: write
+steps:
+  - run: |
+      TOKEN=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+        "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://vornik.example.org" | jq -r .value)
+      curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whoami","arguments":{}}}' \
+        https://vornik.example.org/api/v1/mcp/companion
+```
+
+Every claim must match: the repository (by its numeric id and its name), the
+ref, the workflow file and the event (by default `push`, `schedule`,
+`workflow_dispatch`). A run on another branch, a fork or a pull request gets
+a 401. `vornikctl companion trusts -p ci-review` lists the trusts and when
+each last served a request; `vornikctl companion untrust <trust id>` removes
+one. Only `pull_request_target` serves a pull request, and only when you name
+it with `--event`: it runs the base branch's workflow file, so name it only
+for a workflow that never runs the pull request's code.

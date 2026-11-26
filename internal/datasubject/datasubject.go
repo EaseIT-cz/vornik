@@ -208,6 +208,11 @@ var UncoveredTable = map[string]string{
 		"and by whom. The `query` column holds search text that routinely names a person, so this is retained " +
 		"personal data, reported as a retained category rather than erased — the same treatment as tool_audit_log.",
 
+	"autonomy_evaluations": "Art 17(3)(b) accountability record of what autonomy decided on each tick and why. " +
+		"Observe mode's proposed_prompt is model text that can name a person; it passes the secrets checkpoint on " +
+		"write and is swept on tool_audit_log's window (retention design §5b, GitHub #870), so it is retained " +
+		"personal data reported as a retained category rather than erased — the same treatment as tool_audit_log.",
+
 	"memory_ingest_audit": "Art 17(3)(b) accountability record of what was admitted to memory and on whose " +
 		"authority. Holds a content hash and gate decisions, not content.",
 

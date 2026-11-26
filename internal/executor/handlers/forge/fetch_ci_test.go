@@ -169,3 +169,20 @@ func ciStepInput(t *testing.T, head string) executor.SystemStepInput {
 		Task: &persistence.Task{ID: "task-1", ProjectID: "p-1", Payload: payload},
 	}
 }
+
+// CI outcomes design §19.5 (GitHub #876): a row stored before the ingest
+// unpacked artifacts holds ZIP bytes. fetch_ci shows such an excerpt as
+// withheld rather than putting binary into a prompt.
+func TestRender_876_ABinaryExcerptIsWithheld(t *testing.T) {
+	zipBytes := "PK\x03\x04\x14\x00\x08\x00\x08\x00\xff\xfe binary"
+	got := renderCIOutcomes([]*persistence.ForgeCIOutcome{{
+		RunID: 1, WorkflowPath: ".github/workflows/scan.yml", Conclusion: "success",
+		ArtifactExcerpt: zipBytes, ArtifactBytes: len(zipBytes),
+	}}, "")
+	if strings.Contains(got, "PK\x03\x04") || strings.Contains(got, "\xff") {
+		t.Fatalf("binary reached the prompt:\n%q", got)
+	}
+	if !strings.Contains(got, "[content withheld: stored before #876]") {
+		t.Fatalf("the withheld note is missing:\n%s", got)
+	}
+}

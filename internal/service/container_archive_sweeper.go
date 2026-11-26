@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 
-	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
@@ -131,19 +130,13 @@ func (c *Container) initArchiveSweeper() *projectarchive.Sweeper {
 		cfg.ArtifactBasePath = c.Config.Storage.ArtifactsPath
 	}
 	// Leader election (2026.8.0 prep). Only the elected leader
-	// runs the wipe in a multi-replica deployment. Wired only
-	// when the repo is available (Postgres branch); SQLite's
-	// stub always grants the lock so single-process deployments
-	// behave identically.
-	if c.repos != nil && c.repos.LeaderLocks != nil {
-		c.archiveSweeperElector = leaderelection.New(
-			c.repos.LeaderLocks,
-			"archive_sweeper",
-			c.daemonHolderID(),
-			leaderelection.DefaultTTL,
-			c.Logger.With().Str("component", "leader-election").Logger(),
-		)
-		cfg.LeaderGate = c.archiveSweeperElector
+	// runs the wipe in a multi-replica deployment. Through
+	// initWorkerElector like every other singleton, so a node that
+	// does not run workers gets a standby elector and never sweeps
+	// or holds the lease (GitHub #894); nil only without a lock store.
+	if e := c.initWorkerElector("archive_sweeper"); e != nil {
+		c.archiveSweeperElector = e
+		cfg.LeaderGate = e
 	}
 	return projectarchive.NewSweeper(cfg)
 }

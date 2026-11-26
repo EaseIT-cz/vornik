@@ -342,7 +342,30 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          scripts/third-party-source-archive.sh --out third-party-src
+          # Rebuild from our own previous copy first (GitHub #851): an upstream
+          # archive can disappear (microsoft/onnxruntime answered 404 at
+          # 2026.11.7). Every member is still checked against sources.tsv.
+          name="$(scripts/third-party-source-archive.sh --print-name)"
+          prior=""
+          for t in $(gh release list --exclude-drafts --limit 100 --json tagName --jq '.[].tagName'); do
+            [ "$t" = "$TAG" ] && continue
+            if gh release view "$t" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+              mkdir -p prior-src
+              gh release download "$t" -p "$name" -p "$name.sha256" -D prior-src
+              # Our own published copy must match its checksum; if it does not,
+              # a person should look, so the step fails rather than fall back.
+              (cd prior-src && sha256sum -c "$name.sha256")
+              prior="$t"
+              break
+            fi
+          done
+          if [ -n "$prior" ]; then
+            echo "third-party source: rebuilt from $prior's copy" >> "$GITHUB_STEP_SUMMARY"
+            THIRD_PARTY_SRC_PRIOR="prior-src/$name" scripts/third-party-source-archive.sh --out third-party-src
+          else
+            echo "third-party source: no earlier copy of $name; upstream used" >> "$GITHUB_STEP_SUMMARY"
+            scripts/third-party-source-archive.sh --out third-party-src
+          fi
           existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
           for f in third-party-src/vornik-agent-third-party-source-*.tar third-party-src/vornik-agent-third-party-source-*.tar.sha256; do
             n="$(basename "$f")"

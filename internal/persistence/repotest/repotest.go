@@ -769,6 +769,7 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 			persistence.TaskCreationSourceScheduled,
 			persistence.TaskCreationSourceCheckpoint,
 			persistence.TaskCreationSourceFork,
+			persistence.TaskCreationSourceHandover, // #920, migration 265
 		} {
 			task := newQueuedTask(project)
 			task.CreationSource = src
@@ -2365,6 +2366,54 @@ func RunAutonomyEvaluationSuite(t *testing.T, repo persistence.AutonomyEvaluatio
 		}
 		if len(list) != 2 {
 			t.Errorf("List = %d, want 2 CREATED rows", len(list))
+		}
+	})
+
+	// GitHub #602 (design 11, amendment 2026-11-20, B7): an observe-mode
+	// proposal stores the prompt it would have submitted, and the
+	// WOULD_START filter reads it back on both drivers.
+	t.Run("WouldStart_round_trips_proposed_prompt", func(t *testing.T) {
+		wp := uniqueID("proj")
+		if err := repo.Record(ctx, &persistence.AutonomyEvaluation{
+			ID: uniqueID("eval"), ProjectID: wp, Outcome: persistence.AutonomyOutcomeWouldStart,
+			Reason: "observe mode", ProposedPrompt: "Summarise the open issues labelled P1.",
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		if err := repo.Record(ctx, &persistence.AutonomyEvaluation{
+			ID: uniqueID("eval"), ProjectID: wp, Outcome: "CREATED",
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		outcome := persistence.AutonomyOutcomeWouldStart
+		list, err := repo.List(ctx, persistence.AutonomyEvaluationFilter{ProjectID: &wp, Outcome: &outcome})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(list) != 1 || list[0].ProposedPrompt != "Summarise the open issues labelled P1." {
+			t.Fatalf("WOULD_START list = %+v, want one row carrying the proposed prompt", list)
+		}
+		// LatestByProject reads the same columns on both drivers (review
+		// 1e98 finding 2): the newest row here is the CREATED one, so
+		// record one more WOULD_START and read it back as the latest.
+		if err := repo.Record(ctx, &persistence.AutonomyEvaluation{
+			ID: uniqueID("eval"), ProjectID: wp, Outcome: persistence.AutonomyOutcomeWouldStart,
+			ProposedPrompt: "latest proposal", CreatedAt: time.Now().UTC().Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		latest, err := repo.LatestByProject(ctx)
+		if err != nil {
+			t.Fatalf("LatestByProject: %v", err)
+		}
+		if got := latest[wp]; got == nil || got.ProposedPrompt != "latest proposal" {
+			t.Fatalf("LatestByProject[%s] = %+v, want the newest row with its proposed prompt", wp, got)
+		}
+		all, _ := repo.List(ctx, persistence.AutonomyEvaluationFilter{ProjectID: &wp})
+		for _, e := range all {
+			if e.Outcome == "CREATED" && e.ProposedPrompt != "" {
+				t.Errorf("a CREATED row carries a proposed prompt %q", e.ProposedPrompt)
+			}
 		}
 	})
 }

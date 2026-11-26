@@ -2196,6 +2196,14 @@ func (s *Server) Readyz(w http.ResponseWriter, r *http.Request) {
 		body["status"] = "not-ready"
 		s.logger.Error().Interface("failures", failures).Msg("readiness check failed")
 	}
+	// A held start (GitHub #586, §13.3): 503 "held" whatever the checks
+	// say; the checks still run, and a failing one shows in checks.
+	// Draining (above) wins over held.
+	if s.held.Load() {
+		status = http.StatusServiceUnavailable
+		body["status"] = "held"
+		body["overdue"] = s.holdOverdue()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

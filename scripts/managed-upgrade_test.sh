@@ -7,6 +7,12 @@
 # changed before the checks pass, the EULA is never accepted without the
 # matching hash, a failed start rolls back by itself, and a started upgrade is
 # final.
+#
+# GitHub #909 (amendment 2026-11-24): the new version starts held (#586); the
+# upgrade verifies the held instance, then releases it, and is final at the
+# release. Found at: review (#586 §13.8 item 7: the managed upgrade still
+# started unheld). Regression test at: unit (this file, as every D2 case).
+# Lower because: the CI-VM lane with a real RPM and systemd is the follow-up.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 cmd="$here/managed-upgrade.sh"
@@ -50,8 +56,12 @@ s="$s"
 echo "systemctl \$*" >> "\$s/calls"
 case "\$1" in
   is-active) [ -f "\$s/active" ] ;;
-  stop) rm -f "\$s/active" ;;
-  start) if [ -f "\$s/start_fail_\$(cat "\$s/installed")" ]; then exit 1; fi; touch "\$s/active" ;;
+  stop) rm -f "\$s/active" "\$s/held" ;;
+  start) if [ -f "\$s/start_fail_\$(cat "\$s/installed")" ]; then exit 1; fi
+      if [ -e "$work/state/start-held" ]; then
+        cp "$work/state/start-held" "\$s/marker_seen"; stat -c %a "$work/state/start-held" > "\$s/marker_mode"; touch "\$s/held"
+      fi
+      touch "\$s/active" ;;
   *) exit 99 ;;
 esac
 STUB
@@ -61,12 +71,52 @@ s="$s"
 echo "vornikctl \$* config=\${VORNIK_CONFIG:-}" >> "\$s/calls"
 case "\$1 \$2" in
   "backup --out") [ -f "\$s/backup_fail" ] && exit 1; echo snap > "\$3" ;;
-  "restore --from") [ -f "\$3" ] || exit 1 ;;
+  "restore --from") [ -f "\$3" ] || exit 1
+      # The canary's restore error (#864), last line last.
+      if [ -f "\$s/restore_fail" ]; then
+        printf 'Error: psql restore failed: exit status 3\npsql:db.sql:26: ERROR:  permission denied to create extension vector\n' >&2
+        exit 1
+      fi ;;
   "daemon operations-credentials") printf 'url=http://10.0.0.5:8081\nkey=sk-current\nprevious=\n' ;;
   "doctor --json") [ "\$VORNIK_API_KEY" = sk-current ] || exit 1
+      if [ -f "\$s/held" ]; then
+        # indented, as the real --json prints it
+        printf '{\n  "checks": [\n    {\n      "name": "start_held",\n      "status": "WARN",\n      "message": "held {x}"\n    }'
+        [ -f "\$s/doctor_held_error" ] && printf ',\n    {\n      "name": "config_validation",\n      "status": "ERROR",\n      "message": "bad"\n    }'
+        printf '\n  ],\n  "summary": "x"\n}\n'
+        exit 0
+      fi
       printf '{"checks":[{"name":"a","status":"OK"},{"name":"b","status": "ERROR"}]}\n'; exit 1 ;;
+  "daemon release") [ "\$VORNIK_API_URL" = http://10.0.0.5:8081 ] && [ "\$VORNIK_API_KEY" = sk-current ] || exit 1
+      case "\$(cat "\$s/release" 2>/dev/null)" in
+        keep) exit 1 ;;                                    # refused: still held
+        removed) rm -f "$work/state/start-held" "\$s/held"; exit 1 ;; # released, answer lost
+        dead) rm -f "$work/state/start-held" "\$s/held" "\$s/active"; exit 1 ;; # failed, write-back failed
+        late) ( sleep 1; rm -f "$work/state/start-held" "\$s/held" ) & exit 1 ;; # released during the settle wait
+        dangling) rm -f "$work/state/start-held"; ln -s /nonexistent/x "$work/state/start-held"; exit 1 ;; # not a release
+      esac
+      rm -f "$work/state/start-held" "\$s/held"; echo "held: false" ;;
   *) echo "fake vornikctl: unexpected \$*" >&2; exit 99 ;;
 esac
+STUB
+cat > "$work/bin/curl" <<STUB
+#!/usr/bin/env bash
+s="$s"
+echo "curl \$*" >> "\$s/calls"
+case "\$*" in *http://10.0.0.5:8081/readyz*) ;; *) exit 7 ;; esac
+if [ -f "\$s/readyz" ]; then cat "\$s/readyz"; exit 0; fi
+if [ -f "\$s/held" ]; then
+  printf '{"checks":[{"name":"database","status":"ok"},{"name":"scheduler_heartbeat","status":"ok"},{"name":"chat_provider","status":"ok"},{"name":"retention_sweeper","status":"ok"}],"overdue":false,"status":"held"}'
+else
+  printf '{"checks":[{"name":"database","status":"ok"}],"status":"ready"}'
+fi
+STUB
+cat > "$work/bin/runuser" <<STUB
+#!/usr/bin/env bash
+# runuser -u USER -- CMD...: records the user, runs CMD as the test's user.
+echo "runuser \$1 \$2" >> "$s/calls"
+[ "\$1" = -u ] && [ "\$3" = -- ] || exit 99
+shift 3; exec "\$@"
 STUB
 cat > "$work/bin/gate" <<STUB
 #!/usr/bin/env bash
@@ -97,6 +147,14 @@ STUB
 cat > "$work/bin/daemon" <<STUB
 #!/usr/bin/env bash
 echo "daemon \$*" >> "$s/calls"
+# The acceptance as it failed on the canary (#865): EULA text on stdout, the
+# refusal on stderr, exit 1.
+if [ "\$1" = --accept-eula ] && [ -f "$s/accept_fail" ]; then
+  echo "EULA BODY TEXT"
+  if [ -f "$s/accept_msg" ]; then cat "$s/accept_msg" >&2
+  else echo "EULA not accepted (you did not type 'accept')" >&2; fi
+  exit 1
+fi
 STUB
 chmod +x "$work/bin/"*
 
@@ -108,7 +166,9 @@ run() { # args...
   env MU_STATE_DIR="$work/state" MU_MARKER="$work/managed-image" MU_CONFIG="$work/vornik.yaml" \
     MU_GATE="$work/bin/gate" MU_DAEMON="$work/bin/daemon" MU_RPM="$work/bin/rpm" \
     MU_RPM2CPIO="$work/bin/rpm2cpio" MU_CPIO="$work/bin/cpio" MU_SYSTEMCTL="$work/bin/systemctl" \
-    MU_VORNIKCTL="$work/bin/vornikctl" bash "$cmd" "$@" >"$work/out" 2>"$work/err"
+    MU_VORNIKCTL="$work/bin/vornikctl" MU_CURL="$work/bin/curl" MU_RUNUSER="$work/bin/runuser" \
+    MU_HOLD_MARKER="$work/state/start-held" MU_VERIFY_SECONDS=2 MU_SETTLE_SECONDS=3 \
+    bash "$cmd" "$@" >"$work/out" 2>"$work/err"
   echo $?
 }
 up() { run --package "$work/new.rpm" --from-package "$work/old.rpm" "$@"; }
@@ -283,6 +343,109 @@ if [ -f "$gr" ]; then
     fi
   done
 fi
+
+# GitHub #865: the acceptance's failure was sent to /dev/null, so the line
+# said only "the install failed". Its stderr now reaches managed-upgrade's
+# stderr and its last line the reason; the EULA text stays out.
+reset; touch "$s/eula_needed" "$s/accept_fail"; rc=$(up --eula-hash abc123)
+check "a failed acceptance rolls back" 1 '"result":"rolled_back","step":"install"' "$rc"
+check "the reason names the acceptance's error" 1 "EULA acceptance: EULA not accepted (you did not type 'accept')" "$rc"
+if grep -q "you did not type 'accept'" "$work/err" && ! grep -q "EULA BODY TEXT" "$work/err" "$work/out"; then
+  echo "managed-upgrade: the acceptance's stderr is passed on, its stdout is not — OK"
+else
+  echo "FAIL: the acceptance's output: err:"; sed 's/^/  /' "$work/err"; fail=1
+fi
+
+# GitHub #864: a rollback whose restore failed said only that it failed.
+reset; touch "$s/eula_needed" "$s/accept_fail" "$s/restore_fail"; rc=$(up --eula-hash abc123)
+check "a failed restore's error reaches the reason" 1 '"result":"failed","step":"install","reason":"the install failed and so did the rollback (psql:db.sql:26: ERROR: permission denied to create extension vector)' "$rc"
+
+# The reason stays one printable-ASCII line (#775's rule), whatever the
+# command printed.
+reset; touch "$s/eula_needed" "$s/accept_fail"
+printf 'first\nbad\tline \303\251 \033[31m%0600d\n' 0 > "$s/accept_msg"
+rc=$(up --eula-hash abc123)
+reason=$(sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' "$work/out")
+if [ "$(wc -l < "$work/out")" = 1 ] && ! LC_ALL=C grep -q '[^ -~]' "$work/out" && [ "${#reason}" -le 620 ] && case "$reason" in *"bad line"*) true ;; *) false ;; esac; then
+  echo "managed-upgrade: a hostile acceptance error leaves one printable line, cut — OK"
+else
+  echo "FAIL: the reason is not one printable, capped line:"; od -c "$work/out" | head; fail=1
+fi
+
+# GitHub #909: the held start (amendment 2026-11-24).
+marker="$work/state/start-held"
+reset; rc=$(up)
+check "#909: a held upgrade verifies, releases and is final" 0 '"result":"upgraded"' "$rc"
+order=$(grep -E '^(systemctl start|curl |vornikctl doctor|vornikctl daemon release)' "$s/calls" | cut -d' ' -f1-3 | tr '\n' '|')
+case "$order" in
+  "systemctl start vornik-enterprise|curl"*"vornikctl doctor --json|vornikctl daemon release|vornikctl doctor --json|") echo "managed-upgrade: #909: start, readyz, doctor, release, then the report's doctor — OK" ;;
+  *) echo "FAIL: #909: the order: $order"; fail=1 ;;
+esac
+ever "#909: the marker is written as the daemon's user, never by root" "^runuser -u vornik"
+[ ! -e "$marker" ] || { echo "FAIL: #909: the marker outlived the release"; fail=1; }
+if grep -Eq '^\{"hold_id":"1\.0-1-2\.0-1-[0-9]+","created_at":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z","reason":"managed-upgrade 1\.0-1->2\.0-1","deadline_seconds":1800\}$' "$s/marker_seen" 2>/dev/null &&
+   [ "$(cat "$s/marker_mode" 2>/dev/null)" = 600 ]; then
+  echo "managed-upgrade: #909: the start found the marker in §13.1's format, mode 0600 — OK"
+else
+  echo "FAIL: #909: the marker at start: $(cat "$s/marker_seen" 2>/dev/null || echo none), mode $(cat "$s/marker_mode" 2>/dev/null)"; fail=1
+fi
+
+verify_case() { # name readyz-json-or-empty extra-touch
+  reset; [ -n "$2" ] && printf '%s' "$2" > "$s/readyz"; [ -n "${3:-}" ] && touch "$s/$3"
+  rc=$(up)
+  check "#909: $1 rolls back at verify" 1 '"result":"rolled_back","step":"verify"' "$rc"
+  never "#909: $1 never releases" "^vornikctl daemon release"
+  [ ! -e "$marker" ] && [ "$(cat "$s/installed")" = 1.0-1 ] && [ -f "$s/active" ] ||
+    { echo "FAIL: #909: after $1: marker $(ls "$marker" 2>/dev/null), installed $(cat "$s/installed")"; fail=1; }
+}
+ok4='{"name":"database","status":"ok"},{"name":"scheduler_heartbeat","status":"ok"},{"name":"chat_provider","status":"ok"},{"name":"retention_sweeper","status":"ok"}'
+verify_case "an overdue hold" '{"checks":['"$ok4"'],"overdue":true,"status":"held"}'
+verify_case "a failing check" '{"checks":[{"name":"database","status":"error"},{"name":"chat_provider","status":"ok"}],"overdue":false,"status":"held"}'
+verify_case "an unknown check" '{"checks":['"$ok4"',{"name":"brand_new","status":"ok"}],"overdue":false,"status":"held"}'
+verify_case "no chat_provider" '{"checks":[{"name":"database","status":"ok"}],"overdue":false,"status":"held"}'
+verify_case "an unheld /readyz" '{"checks":['"$ok4"'],"status":"ready"}'
+verify_case "a doctor ERROR" '' doctor_held_error
+
+reset; printf '{\n  "checks": [\n    {"name": "database", "status": "ok"},\n    {"name": "chat_provider", "status": "ok"}\n  ],\n  "overdue": false,\n  "status": "held"\n}\n' > "$s/readyz"; rc=$(up)
+check "#909: an indented held /readyz verifies (review 37da #2)" 0 '"result":"upgraded"' "$rc"
+cp "$work/bin/curl" "$work/curl.orig"; cp "$work/bin/runuser" "$work/runuser.orig"
+reset; printf '#!/usr/bin/env bash\necho "curl $*" >> "%s/calls"\nexit 7\n' "$s" > "$work/bin/curl"; rc=$(up)
+check "#909: a /readyz that never answers rolls back at verify" 1 '"result":"rolled_back","step":"verify"' "$rc"
+check "#909: and says so" 1 "/readyz did not answer" "$rc"
+never "#909: an unanswered /readyz is never released" "^vornikctl daemon release"
+cp "$work/curl.orig" "$work/bin/curl"
+reset; printf '#!/usr/bin/env bash\necho "runuser $*" >> "%s/calls"\nexit 1\n' "$s" > "$work/bin/runuser"; rc=$(up)
+check "#909: a marker that cannot be written rolls back at start" 1 '"result":"rolled_back","step":"start"' "$rc"
+[ "$(cat "$s/installed")" = 1.0-1 ] && [ -f "$s/active" ] && [ ! -e "$marker" ] ||
+  { echo "FAIL: #909: after an unwritable marker: installed $(cat "$s/installed")"; fail=1; }
+cp "$work/runuser.orig" "$work/bin/runuser"
+reset; echo keep > "$s/release"; rc=$(up)
+check "#909: a refused release with the marker kept rolls back" 1 '"result":"rolled_back","step":"release"' "$rc"
+[ ! -e "$marker" ] && [ "$(cat "$s/installed")" = 1.0-1 ] || { echo "FAIL: #909: after a refused release"; fail=1; }
+reset; echo removed > "$s/release"; rc=$(up)
+check "#909: a lost answer with the marker gone and the unit active is final" 0 '"result":"upgraded"' "$rc"
+never "#909: a released upgrade restores nothing" "^vornikctl restore"
+reset; echo dead > "$s/release"; rc=$(up)
+check "#909: the marker gone and the unit dead rolls back" 1 '"result":"rolled_back","step":"release"' "$rc"
+reset; echo dangling > "$s/release"; rc=$(up)
+check "#909: a dangling link in place of the marker is not a release (review 37da #1)" 1 '"result":"rolled_back","step":"release"' "$rc"
+reset; echo late > "$s/release"; rc=$(up)
+check "#909: a release that lands during the settle wait is final" 0 '"result":"upgraded"' "$rc"
+never "#909: a late release is not rolled back" "^vornikctl restore"
+
+reset; echo '{"hold_id":"other"}' > "$marker"; rc=$(up)
+check "#909: a marker from an earlier run fails the check" 1 '"step":"check"' "$rc"
+never "#909: and changes nothing" "^gate \|^systemctl stop\|^rpm -U --define"
+[ -e "$marker" ] || { echo "FAIL: #909: the earlier marker was removed"; fail=1; }
+
+reset; touch "$s/held"; printf '{"phase":"installed","from":"1.0-1","to":"2.0-1","snapshot":"%s"}\n' "$work/state/snap.tgz" > "$work/state/state.json"
+echo x > "$marker"; echo -n 2.0-1 > "$s/installed"; echo snap > "$work/state/snap.tgz"
+rc=$(run --rollback --from-package "$work/old.rpm")
+check "#909: --rollback on a held unit rolls back" 0 '"result":"rolled_back","step":"rollback"' "$rc"
+[ ! -e "$marker" ] || { echo "FAIL: #909: --rollback left the marker"; fail=1; }
+
+reset; touch "$s/start_fail_2.0-1"; rc=$(up)
+[ ! -e "$marker" ] || { echo "FAIL: #909: a failed start left the marker"; fail=1; }
 
 [ "$fail" = 0 ] && echo "managed-upgrade_test.sh: PASS"
 exit "$fail"

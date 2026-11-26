@@ -10,6 +10,9 @@ maxConcurrentTasks: 1
 
 autonomy:
   enabled: false
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   goal: |
     (Set a goal when you enable autonomy. The personal-assistant
     template ships with autonomy disabled — chat-driven by default.)

@@ -3,10 +3,21 @@ package executor
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+)
+
+// Three rules match a whole word, not a substring (GitHub #878): as
+// substrings, "gate " matched "investigate " and "delegate ", "exec" matched
+// "execution" and "executor", and "429" matched a token count such as 14290.
+// Permanent-failure design, "Amendment 2026-11-23".
+var (
+	gateWord = regexp.MustCompile(`\bgate\s`)
+	execWord = regexp.MustCompile(`\bexec\b`)
+	word429  = regexp.MustCompile(`\b429\b`)
 )
 
 // ClassifyExecutionFailure maps a Go error surfaced from execution to a
@@ -128,7 +139,7 @@ func ClassifyExecutionFailure(err error, hint string) string {
 	// that was here ("merge"/"worktree" + "fail"/"could not") matched
 	// container crashes and container start failures whose messages name a
 	// worktree path (GitHub #353, design §9.2 M1).
-	case containsAny(lowered, "gate ", "gate_failed", "condition", "gate did not pass"):
+	case gateWord.MatchString(lowered) || containsAny(lowered, "gate_failed", "condition"):
 		return persistence.TaskFailureClassGateFailed
 	// Loop-cap escalation must be matched BEFORE the generic
 	// schema-violation branch — its message contains "schema
@@ -140,7 +151,11 @@ func ClassifyExecutionFailure(err error, hint string) string {
 		return persistence.TaskFailureClassInvalidOutputLoop
 	case containsAny(lowered, "invalid json", "parse", "unmarshal", "schema violation", "could not parse", "plausibility violation"):
 		return persistence.TaskFailureClassInvalidOutput
-	case containsAny(lowered, "role ", " researcher", "not present in swarm", "workflow role"):
+	// The phrases the code's missing-role errors use (plan.go, autonomy,
+	// dispatcher, the assistant). Not the bare word "role ": text that only
+	// mentions a role, such as the output-cap message's "raise the role's
+	// maxTokens", is not a missing role (GitHub #863).
+	case containsAny(lowered, "not present in swarm", "not present in the project's swarm", "not in swarm", "not found in swarm", "workflow role"):
 		return persistence.TaskFailureClassWorkflowRole
 	case containsAny(lowered, "workflow not found", "step .* not found", "workflow configuration"):
 		return persistence.TaskFailureClassWorkflowCfg
@@ -149,9 +164,11 @@ func ClassifyExecutionFailure(err error, hint string) string {
 	// diagnosis does not call a known model-circuit failure UNKNOWN.
 	case containsAny(lowered, "model_unhealthy", "model unhealthy"):
 		return persistence.TaskFailureClassLLMError
-	case containsAny(lowered, "chat provider", "llm", "anthropic", "openai", "gateway", "upstream", "502 bad gateway", "503 service", "stream closed"):
+	// Not the bare word "upstream": the agent's missing-prerequisite message
+	// names "an upstream role" (GitHub #918, design follow-up F1).
+	case containsAny(lowered, "chat provider", "llm", "anthropic", "openai", "gateway", "upstream provider", "upstream model", "502 bad gateway", "503 service", "stream closed"):
 		return persistence.TaskFailureClassLLMError
-	case containsAny(lowered, "rate limit", "too many requests", "429"):
+	case containsAny(lowered, "rate limit", "too many requests") || word429.MatchString(lowered):
 		return persistence.TaskFailureClassRateLimited
 	case containsAny(lowered, "budget", "spend cap", "over budget"):
 		return persistence.TaskFailureClassBudgetBlocked
@@ -159,7 +176,7 @@ func ClassifyExecutionFailure(err error, hint string) string {
 		return persistence.TaskFailureClassLeaseExpired
 	case containsAny(lowered, "orphaned execution"):
 		return persistence.TaskFailureClassOrphaned
-	case containsAny(lowered, "tool ", "shell", "exec", "podman", "container", "runtime"):
+	case containsAny(lowered, "tool ", "shell", "podman", "container", "runtime") || execWord.MatchString(lowered):
 		return persistence.TaskFailureClassToolError
 	case containsAny(lowered, "cancelled", "canceled"):
 		return persistence.TaskFailureClassCancelled

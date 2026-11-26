@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -472,6 +473,9 @@ func composeInstall(st *State, plan *installPlan, out *renderedInstall) Change {
 		case EntryNew, EntryToolsAdded, EntryToolsMixed:
 			widening = true
 			g := entryGrant(p.ID, e)
+			if e.class == EntryNew { // a new destination records its grant (§6.12, #403)
+				g.PrivateReach = privateReach(dialguard.PrivateHostsFor(p.ID, st.PrivateHosts), e.url)
+			}
 			if rec.account != "" {
 				g.Account = &AccountGrant{Label: rec.account}
 				if c.accounts == nil {
@@ -499,7 +503,13 @@ func composeInstall(st *State, plan *installPlan, out *renderedInstall) Change {
 			}
 			c.accounts[name] = phrase
 		}
-		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev) + recipeSharedCredentials(st, plan) + same
+		var newURLs []string // a new server's host is named if it is an intranet host (§6.10, #403)
+		for _, e := range plan.entries {
+			if e.class == EntryNew {
+				newURLs = append(newURLs, e.url)
+			}
+		}
+		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev) + intranetSentence(dialguard.PrivateHostsFor(p.ID, st.PrivateHosts), newURLs...) + recipeSharedCredentials(st, plan) + same
 	case len(c.Narrow.RemovedTools) > 0:
 		c.Sentence = fmt.Sprintf("Your assistant (%s) updated %q in %s to version %d; %s.", ns, rec.Title, p.ID, rec.Version, removalPhrase(plan))
 	case len(c.Ops) == 0:
@@ -752,21 +762,22 @@ func (r *Renderer) recipeNames() []string {
 // RecipeListTargets returns the URLs of an install's entries that declare no
 // credential: the only servers Vornik may list before an approval (the
 // unauthenticated tool check, §19.8 F6). Nil when the input does not
-// resolve; the render then refuses it with the reason.
-func (r *Renderer) RecipeListTargets(ns string, input json.RawMessage) []string {
+// resolve; the render then refuses it with the reason. project is the
+// install's full project ID, whose intranet grant the listing dials with
+// (part 06 §6.12, GitHub #403).
+func (r *Renderer) RecipeListTargets(ns string, input json.RawMessage) (project string, urls []string) {
 	// One resolution with the install (review 20261003-e379 F6): an input
 	// the install would refuse is never listed.
-	_, rec, vars, why := r.resolveInstall(ns, input)
+	in, rec, vars, why := r.resolveInstall(ns, input)
 	if why != "" {
-		return nil
+		return "", nil
 	}
-	var out []string
 	for _, n := range rec.Needs {
 		if n.Credential == nil {
-			out = append(out, substitute(n.URL, vars))
+			urls = append(urls, substitute(n.URL, vars))
 		}
 	}
-	return out
+	return agentns.ID(ns, in.Project), urls
 }
 
 // RecipeView is one recipe as list_recipes shows it (§19.2, §19.8 F2).

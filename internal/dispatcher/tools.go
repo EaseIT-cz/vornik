@@ -682,7 +682,12 @@ func (te *ToolExecutor) listTasks(ctx context.Context, argsJSON string, activePr
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("Error: %v", err)}
+		// The action's own message, never the store error's text (#916 item 3).
+		te.logger.Warn().Err(err).Str("tool", "list_tasks").Msg("task tool failed")
+		if result.Message != "" {
+			return ToolResult{Content: "Error: " + result.Message}
+		}
+		return ToolResult{Content: "Error: the task action failed."}
 	}
 	// ThirdParty: result.Message can embed exec.ErrorMessage / agent-derived text (chat/parser.go:496) — must be injection-scanned.
 	return ToolResult{Content: result.Message, Provenance: outputguard.ProvenanceThirdParty}
@@ -1248,7 +1253,12 @@ func (te *ToolExecutor) getTaskStatus(ctx context.Context, argsJSON string, allo
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("Error: %v", err)}
+		// The action's own message, never the store error's text (#916 item 3).
+		te.logger.Warn().Err(err).Str("tool", "get_task_status").Msg("task tool failed")
+		if result.Message != "" {
+			return ToolResult{Content: "Error: " + result.Message}
+		}
+		return ToolResult{Content: "Error: the task action failed."}
 	}
 	// T-b093f: chat.ActionGetStatus describes execution state but carries no
 	// artifact inventory. On terminal tasks that made the dispatcher compare
@@ -1529,7 +1539,12 @@ func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowed
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("Error: %v", err)}
+		// The action's own message, never the store error's text (#916 item 3).
+		te.logger.Warn().Err(err).Str("tool", "cancel_task").Msg("task tool failed")
+		if result.Message != "" {
+			return ToolResult{Content: "Error: " + result.Message}
+		}
+		return ToolResult{Content: "Error: the task action failed."}
 	}
 	// ThirdParty: result.Message can embed exec.ErrorMessage / agent-derived text (chat/parser.go:496) — must be injection-scanned.
 	return ToolResult{Content: result.Message, Provenance: outputguard.ProvenanceThirdParty}
@@ -1558,7 +1573,12 @@ func (te *ToolExecutor) retryTask(ctx context.Context, argsJSON string, allowedP
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
-		return ToolResult{Content: fmt.Sprintf("Error: %v", err)}
+		// The action's own message, never the store error's text (#916 item 3).
+		te.logger.Warn().Err(err).Str("tool", "retry_task").Msg("task tool failed")
+		if result.Message != "" {
+			return ToolResult{Content: "Error: " + result.Message}
+		}
+		return ToolResult{Content: "Error: the task action failed."}
 	}
 	// ThirdParty: result.Message can embed exec.ErrorMessage / agent-derived text (chat/parser.go:496) — must be injection-scanned.
 	return ToolResult{Content: result.Message, Provenance: outputguard.ProvenanceThirdParty}

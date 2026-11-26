@@ -831,3 +831,7 @@ func readAll(t *testing.T, r io.Reader) string {
 	}
 	return string(b)
 }
+
+func (r *reminderRepoSpy) MarkAttemptFailed(context.Context, string, string, persistence.ReminderAttemptOutcome) error {
+	return nil
+}

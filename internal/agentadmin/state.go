@@ -3,6 +3,7 @@ package agentadmin
 import (
 	"sort"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -36,6 +37,13 @@ type State struct {
 	ModelMaxTokens map[string]int
 	// WritesOn is the daemon's broker.writes: proposals need it (P4.8).
 	WritesOn bool
+	// PrivateHosts is agent_admin.private_api_hosts, parsed: the operator's
+	// list of intranet hosts an approved agent server or API may reach on a
+	// private address (part 06 §6.7, §6.8), for every project; scope it with
+	// dialguard.PrivateHostsFor. Read to say so in an approval sentence
+	// (§6.10), to record the grant and to check it at apply (§6.12, GitHub
+	// #403); the dial guard reads the list itself.
+	PrivateHosts []dialguard.PrivateHost
 
 	Projects  map[string]*ProjectState
 	Workflows map[string]*WorkflowState
@@ -91,12 +99,15 @@ type ProjectState struct {
 	// MaxConcurrentTasks is the project's maxConcurrentTasks as loaded; 0
 	// is no per-project limit (part 06 §6.9, GitHub #798).
 	MaxConcurrentTasks int
-	DefaultWorkflowID  string
-	Home               bool
-	Swarm              SwarmState
-	Servers            []ServerState
-	APIs               []APIState
-	Secrets            []string
+	// SharedMemory is memory.shared_with_namespace as loaded (part 24
+	// §24.6), so a verb that re-renders the project keeps it.
+	SharedMemory      bool
+	DefaultWorkflowID string
+	Home              bool
+	Swarm             SwarmState
+	Servers           []ServerState
+	APIs              []APIState
+	Secrets           []string
 	// Loaded and LoadedSwarm are the registry objects, for reach signatures.
 	Loaded      *registry.Project
 	LoadedSwarm *registry.Swarm

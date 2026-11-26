@@ -27,40 +27,29 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/netguard"
 	"vornik.io/vornik/internal/persistence"
 )
 
 // isBlockedPushIP reports whether an IP is a non-routable / internal target a
-// webhook must never reach — the SSRF block set (loopback, link-local,
-// unspecified, RFC-1918 private, and multicast). Used both at URL-validation
-// time (literal-IP hosts) AND at connect time (the dialer Control hook), so a
-// hostname that resolves to an internal address — DNS rebinding — is still
-// refused at the moment of connect.
+// webhook must never reach. Used both at URL-validation time (literal-IP
+// hosts) AND at connect time (the dialer Control hook), so a hostname that
+// resolves to an internal address — DNS rebinding — is still refused at the
+// moment of connect.
+//
+// It is the daemon's one list, netguard.IsPrivateIP (dialguard.IsBlockedIP,
+// and nil is refused), with no grant and no extra rule (GitHub #904;
+// integrations-hub-design.md, "Change (2026-11-24): #904"). The list this
+// guard kept before admitted 0.0.0.0/8, 255.255.255.255 and a blocked IPv4
+// address inside NAT64, 6to4 or IPv4-compatible IPv6.
+func isBlockedPushIP(ip net.IP) bool {
+	return netguard.IsPrivateIP(ip)
+}
+
 // blockPushIP is the connect-time predicate the dialer uses. It points at
 // isBlockedPushIP in production; tests override it to reach loopback httptest
 // servers (and one test leaves it at the default to prove the guard fires).
 var blockPushIP = isBlockedPushIP
-
-func isBlockedPushIP(ip net.IP) bool {
-	if ip == nil ||
-		ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsUnspecified() ||
-		ip.IsPrivate() {
-		return true
-	}
-	// RFC 6598 shared address space (carrier-grade NAT) is intentionally
-	// excluded from net.IP.IsPrivate. It is nevertheless non-public address
-	// space and commonly routes to provider-internal services, so accepting it
-	// would leave the webhook SSRF guard with a bypass.
-	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-		return true
-	}
-	return false
-}
 
 // PushConfigGetter is the narrow read the pusher needs.
 type PushConfigGetter interface {

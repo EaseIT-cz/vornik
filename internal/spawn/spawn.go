@@ -579,7 +579,7 @@ func gitWorkspace(ctx context.Context, dir string, dirs GitDirs, args []string) 
 			}
 		}
 	}
-	c := newCmd(ctx, KindGitWorkspace, "git", append([]string{"-C", dir}, args...))
+	c := newGitCmd(ctx, KindGitWorkspace, append([]string{"-C", dir}, args...))
 	c.gitSub = sub
 	c.c.Env = daemonGitEnv(dirs)
 	return c, nil
@@ -624,7 +624,7 @@ func GitHTTPBackend(ctx context.Context, env []string) (*Cmd, error) {
 	if !underRoot(root) {
 		return nil, refuse(KindGitHTTPBackend, "GIT_PROJECT_ROOT %q is not under a registered workspace root", root)
 	}
-	c := newCmd(ctx, KindGitHTTPBackend, "git", []string{"http-backend"})
+	c := newGitCmd(ctx, KindGitHTTPBackend, []string{"http-backend"})
 	c.c.Env = append(append([]string(nil), env...), gitConfigPins()...)
 	return c, nil
 }
@@ -708,4 +708,21 @@ func ConfiguredProgram(ctx context.Context, cc ConfiguredCommand, opts Configure
 	}
 	c.c.WaitDelay = opts.WaitDelay
 	return c, nil
+}
+
+// gitWaitDelay bounds Wait after a git command's group is killed, so a pipe
+// held open by anything outside the group cannot block it (#913).
+const gitWaitDelay = 5 * time.Second
+
+// newGitCmd builds a git kind's command in its own process group, and makes
+// its context's end kill the whole group: a child git forked (index-pack,
+// ssh, a remote helper) dies with it (process-spawn law design, Amendment
+// 2026-11-25 (#913)). Git's detached auto-maintenance runs in its own
+// session, so the group kill does not reach it (the #856 note).
+func newGitCmd(ctx context.Context, kind Kind, args []string) *Cmd {
+	c := newCmd(ctx, kind, "git", args)
+	c.c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.c.Cancel = c.KillGroup
+	c.c.WaitDelay = gitWaitDelay
+	return c
 }

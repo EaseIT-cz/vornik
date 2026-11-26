@@ -254,6 +254,58 @@ verdict into a real GitHub APPROVE / REQUEST_CHANGES. (A review that would
 approve the App's *own* PR is automatically downgraded to a comment, since GitHub
 won't let an author approve their own pull request.)
 
+### Measuring the review: the canary
+
+Nothing tells you when the App review stops catching secrets: a model
+change, a detector change or a prompt edit can lower its catch rate
+silently. The canary measures it.
+
+A canary run feeds the review a freshly generated diff with planted fake
+values:
+- five secrets the mask must catch;
+- one key split across two string literals, which only a model can catch;
+- three decoys that nothing should flag.
+
+The run uses the review's own steps, prompts and models. It posts nothing
+and calls GitHub for nothing. Its result counts:
+- what was detected, by the mask and by a model;
+- each plant it missed;
+- each decoy it flagged.
+
+If the detector stops matching one kind of secret, the run fails and names
+that kind.
+
+To run it weekly, add this to the review project:
+
+```yaml
+autonomy:
+  enabled: true
+  observe: false
+  mode: cron
+  pollInterval: 168h
+  cronTaskType: canary
+  allowedTaskTypes: [canary]
+  goal: "Measure the review against the planted canary."
+```
+
+Run it now with `vornikctl task submit -p <project> --task-type canary --prompt
+"canary"`.
+
+**Set floors from measured runs.** With no floors set, the canary reports
+and never fails. Models vary from run to run, so run it four times, read the
+results, then set the floors:
+
+```yaml
+forge:
+  canary:
+    floor_detections: 6   # fail below this many of the 6 plants
+    ceiling_decoys: 0     # fail above this many of the 3 decoys
+```
+
+A run below the floor, or above the ceiling, ends FAILED, and its result
+names each miss. Each run costs one review's model calls. A webhook cannot
+start a canary run.
+
 ## When the target is gone
 
 A review needs the pull request it was asked about. If the forge says that PR is
@@ -316,18 +368,33 @@ such as a push to your default branch.
   without starting anything.
 - Any review that runs later reads the outcomes for the commit it is reviewing.
 
-**Getting the actual output in.** Conclusions come free. Content — a
-`terraform plan`, a test report, a scan result — has to be **uploaded by your
-pipeline as an artifact**, and you name it in `ci.artifact_name`. Forge reads
-artifacts, never job logs: a log has no format contract and is where secrets get
-printed, whereas an upload is a deliberate act by whoever wrote the pipeline.
-There is no tool-specific parsing anywhere — Terraform is simply a repository
-that uploads a plan, and the same setup works for anything else.
+**Getting the actual output in.** Conclusions come free. Content, such as a
+`terraform plan`, a test report or a scan result, must be **uploaded by your
+pipeline as an artifact**, and you name that artifact in `ci.artifact_name`.
+Forge reads artifacts, never job logs. A log has no format contract and is
+where secrets get printed; an upload is a deliberate act by whoever wrote the
+pipeline.
 
-Uploaded content is treated as **untrusted**: anyone who can push a branch can
-make CI print anything, so it reaches a model marked as data rather than
-instructions, and it is size-capped with any truncation stated rather than
-silent.
+What Forge does with the artifact:
+- **Unpacks it.** GitHub serves an artifact as a ZIP. Forge reads its text
+  files, up to `max_artifact_bytes` uncompressed and 64 files, and says when
+  it stopped. A binary file is listed, not shown.
+- **Masks it.** Secret-shaped values are masked with the daemon's secret
+  detector before anything is stored, so `secrets.enabled` must be on. With
+  it off, the review says the content was withheld.
+- **Reads SARIF.** A `.sarif` or `.sarif.json` file is shown as one line per
+  finding: level, rule, file, line and message. That covers gitleaks, CodeQL,
+  Semgrep, Trivy and other scanners that emit SARIF 2.1.0. Up to 200 findings
+  are shown per file, and code snippets and fingerprints are never shown. In
+  the App review, the triager merges scanner findings with the reviewers'
+  findings. A finding is posted only when it is on a line the pull request
+  adds.
+- **Nothing else is parsed.** Terraform is simply a repository that uploads a
+  plan; any text artifact works the same way.
+
+Uploaded content is **untrusted**: anyone who can push a branch can make CI
+print anything. It reaches a model marked as data, not instructions. It is
+size-capped, and any truncation is stated rather than silent.
 
 ```yaml
 forge:

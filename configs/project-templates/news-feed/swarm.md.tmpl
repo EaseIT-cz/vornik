@@ -4,6 +4,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Plans the autonomy tick and routes to the candidate workflows."
     model: "{{.llmModel}}"
     runtime:
@@ -19,6 +20,7 @@ roles:
         - "memory_search"
 
   - name: "researcher"
+    modelTier: "standard"
     description: "Researches the configured topic and writes findings to artifacts/out/research.md."
     model: "{{.llmModel}}"
     runtime:
@@ -37,6 +39,7 @@ roles:
         - "memory_search"
 
   - name: "writer"
+    modelTier: "standard"
     description: "Turns research notes into a scannable digest at artifacts/out/digest.md."
     model: "{{.llmModel}}"
     runtime:

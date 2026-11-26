@@ -13,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrock v1.59.2
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
+	github.com/aws/smithy-go v1.25.1
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
@@ -36,6 +37,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	golang.org/x/tools v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -56,7 +58,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
-	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -86,7 +87,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect

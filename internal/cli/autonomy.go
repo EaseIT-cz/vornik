@@ -10,8 +10,10 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"vornik.io/vornik/internal/textutil"
 )
 
 // Autonomy CLI — surfaces the per-tick evaluation audit trail added
@@ -32,6 +34,7 @@ regardless of whether a task was created; the outcome tells you why.
 
 Common outcomes:
   CREATED           task successfully enqueued
+  WOULD_START       observe mode: every gate passed, nothing was started; the row shows the proposal
   NO_ACTION         lead decided no work needed
   ACTIVE_TASKS      tick skipped: tasks still running, queued or awaiting approval (the reason counts them)
   RATE_LIMITED      project or config per-minute / per-hour cap hit
@@ -109,6 +112,22 @@ type autonomyEvalRow struct {
 	PromptHash string    `json:"prompt_hash"`
 	DurationMs int64     `json:"duration_ms"`
 	CreatedAt  time.Time `json:"created_at"`
+	// ProposedPrompt is set on WOULD_START rows only (GitHub #602).
+	ProposedPrompt string `json:"proposed_prompt,omitempty"`
+}
+
+// evalReasonCell is the table's last column: a WOULD_START row shows the
+// proposal observe mode recorded, any other row its reason, cut to 80
+// characters (the whole text is in --json).
+func evalReasonCell(e autonomyEvalRow) string {
+	text := e.Reason
+	if e.Outcome == "WOULD_START" && e.ProposedPrompt != "" {
+		text = "would start: " + e.ProposedPrompt
+	}
+	if utf8.RuneCountInString(text) > 80 {
+		text = textutil.TruncateRunes(text, 77) + "..."
+	}
+	return text
 }
 
 func runAutonomyEvaluations(cmd *cobra.Command, args []string) error {
@@ -156,10 +175,7 @@ func runAutonomyEvaluations(cmd *cobra.Command, args []string) error {
 		if wf == "" {
 			wf = "—"
 		}
-		reason := e.Reason
-		if len(reason) > 80 {
-			reason = reason[:77] + "..."
-		}
+		reason := evalReasonCell(e)
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%dms\t%s\t%s\t%s\t%s\n",
 			e.CreatedAt.Local().Format("15:04:05"),
 			e.Outcome,

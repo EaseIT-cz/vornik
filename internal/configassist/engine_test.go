@@ -108,6 +108,9 @@ func newFixture(t *testing.T) *fixture {
 	write("projects/assistant.yaml", fixtureProject)
 	write("swarms/s1.md", fixtureSwarm)
 	write("workflows/w1.md", fixtureWorkflow)
+	// A second workflow the project runs but does not default to (#892).
+	write("workflows/w2.md", strings.Replace(strings.Replace(fixtureWorkflow, `workflowId: "w1"`, `workflowId: "w2"`, 1), `displayName: "W1"`, `displayName: "W2"`, 1))
+	write("workflows/w3.md", strings.Replace(strings.Replace(fixtureWorkflow, `workflowId: "w1"`, `workflowId: "w3"`, 1), `displayName: "W1"`, `displayName: "W3"`, 1))
 	reg := registry.New()
 	if err := reg.Load(root); err != nil {
 		t.Fatalf("registry load: %v", err)
@@ -862,4 +865,30 @@ func (m *memProposals) count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.rows)
+}
+
+// GitHub #891 (design §7.3a): the engine resolves the pair once, for its
+// refusal and for the doctor row and start-up warning. With no judge client
+// it reports nothing, as its refusal never did.
+func TestJudgePairProblem_891(t *testing.T) {
+	f := newFixture(t)
+	if p := f.engine.JudgePairProblem(); p != "" {
+		t.Fatalf("a GLM assistant judged by nemotron is usable, got %q", p)
+	}
+	f.cfg.JudgeModel = ""
+	f.cfg.Model = ""
+	f.assistant.model = "vllm/gemma4-26b"
+	f.judge.model = "vllm/gemma4-26b"
+	p := f.engine.JudgePairProblem()
+	if !strings.Contains(p, "vllm/gemma4-26b") || !strings.Contains(p, "same family") {
+		t.Fatalf("a one-model install must be named: %q", p)
+	}
+	res, _ := f.engine.Propose(context.Background(), operatorReq("x"))
+	if res.Refusal == nil || res.Refusal.Code != RefuseModelFamily || !strings.Contains(res.Refusal.Message, "vllm/gemma4-26b") {
+		t.Fatalf("the request path must refuse with the same reason: %+v", res.Refusal)
+	}
+	f.engine.Judge = nil
+	if p := f.engine.JudgePairProblem(); p != "" {
+		t.Fatalf("no judge client: nothing to refuse, got %q", p)
+	}
 }

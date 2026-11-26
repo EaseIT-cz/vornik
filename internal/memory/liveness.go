@@ -244,8 +244,9 @@ func (c *URLLivenessChecker) dialContext(ctx context.Context, network, addr stri
 // validateLivenessURL rejects URL targets that would let memory
 // content trigger SSRF from the daemon. Only http(s) URLs with
 // public-routable hosts are allowed by default. Hostnames are
-// resolved before the request; any private/loopback/link-local/etc.
-// answer rejects the target. The same function is used by the
+// resolved before the request; any answer on the daemon's one
+// blocklist (netguard.IsPrivateIP, which is dialguard.IsBlockedIP;
+// issue 905 retired this file's own, shorter list) rejects the target. The same function is used by the
 // default client's redirect hook, so a public URL cannot redirect
 // the checker to 127.0.0.1 or 169.254.169.254.
 func (c *URLLivenessChecker) validateLivenessURL(ctx context.Context, raw string) error {
@@ -278,11 +279,11 @@ func (c *URLLivenessChecker) publicIPsForHost(ctx context.Context, host string) 
 		}
 		return ipAddrsToIPs(addrs), nil
 	}
-	if isLocalHostname(host) {
+	if netguard.IsLocalHostname(host) {
 		return nil, fmt.Errorf("local hostname %q is not allowed", host)
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateLivenessIP(ip) {
+		if netguard.IsPrivateIP(ip) {
 			return nil, fmt.Errorf("private IP %q is not allowed", host)
 		}
 		return []net.IP{ip}, nil
@@ -296,7 +297,7 @@ func (c *URLLivenessChecker) publicIPsForHost(ctx context.Context, host string) 
 	}
 	ips := make([]net.IP, 0, len(addrs))
 	for _, addr := range addrs {
-		if isPrivateLivenessIP(addr.IP) {
+		if netguard.IsPrivateIP(addr.IP) {
 			return nil, fmt.Errorf("host %q resolves to private IP %q", host, addr.IP.String())
 		}
 		ips = append(ips, addr.IP)
@@ -310,23 +311,6 @@ func ipAddrsToIPs(addrs []net.IPAddr) []net.IP {
 		out = append(out, addr.IP)
 	}
 	return out
-}
-
-func isLocalHostname(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	return h == "localhost" || strings.HasSuffix(h, ".localhost")
-}
-
-func isPrivateLivenessIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	return ip.IsUnspecified() ||
-		ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast()
 }
 
 // LivenessOutcome aggregates one chunk's recheck result.

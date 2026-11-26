@@ -204,9 +204,12 @@ func (c *Container) ciIngestForProject(p *registry.Project) *forgeci.Ingest {
 	ci := p.Forge.CI
 	ci.CIDefaults()
 	cfg := forgeci.Config{
-		ArtifactName:      ci.ArtifactName,
-		MaxArtifactBytes:  ci.MaxArtifactBytes,
-		MaxExcerptBytes:   ci.MaxExcerptBytes,
+		ArtifactName:     ci.ArtifactName,
+		MaxArtifactBytes: ci.MaxArtifactBytes,
+		MaxExcerptBytes:  ci.MaxExcerptBytes,
+		// Artifact content is masked before it is stored; nil (secrets
+		// disabled) withholds it (CI outcomes design §19.2, GitHub #876).
+		Detector:          c.secretsDetector,
 		ReviewOnFailure:   ci.ReviewOnFailure,
 		SuccessWorkflowID: ci.SuccessWorkflowID,
 		SuccessWorkflowNeedsChangeRequest: successWorkflowNeedsChangeRequest(
@@ -272,4 +275,17 @@ func successWorkflowNeedsChangeRequest(lookup func(string) *registry.Workflow, i
 		return false
 	}
 	return forgeci.NeedsChangeRequest(wf.SystemHandlers())
+}
+
+// canaryFloors resolves a project's review-canary floors (GitHub #873). An
+// unknown project, like an unset block, measures only.
+func (c *Container) canaryFloors(projectID string) registry.ProjectForgeCanary {
+	if c.Registry == nil {
+		return registry.ProjectForgeCanary{}
+	}
+	p := c.Registry.GetProject(projectID)
+	if p == nil {
+		return registry.ProjectForgeCanary{}
+	}
+	return p.Forge.Canary
 }

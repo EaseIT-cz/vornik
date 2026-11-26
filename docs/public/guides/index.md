@@ -13,6 +13,8 @@ already have a project up and running — if you don't, start with
 - **[Workflows and LLM controls](workflows-and-llm-controls.md)** — author
   your own workflows and tune the safety, tool-discovery, and reliability
   controls that wrap every model call.
+- **[Choose the models your roles run on](model-tiers.md)** — map the model
+  tiers shipped roles name to your own models, or apply a provider profile.
 - **[Connect your tools (MCP)](mcp-tools.md)** — declare a project's MCP
   servers, restrict each to an explicit set of tools, throttle expensive
   tools, and inspect it all with `vornikctl mcp`.

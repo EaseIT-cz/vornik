@@ -116,6 +116,9 @@ type ProjectConfigFormData struct {
 	AutonomyMaxTasksPerHour int
 	AutonomyPollInterval    string
 	AutonomyRequireApproval bool
+	// AutonomyObserve is "Observe only" (GitHub #602): pre-set when the
+	// project's autonomy is off, so enabling it here starts in observe mode.
+	AutonomyObserve bool
 	// AllowedTaskTypes / allowedTools / secrets are rendered as
 	// textareas with one item per line. Easier to paste from a
 	// list than comma-separated, and the diff stays line-oriented.
@@ -518,6 +521,7 @@ func populateFormFromProject(data *ProjectConfigFormData, proj *registry.Project
 	data.AutonomyMaxTasksPerHour = proj.Autonomy.MaxTasksPerHour
 	data.AutonomyPollInterval = proj.Autonomy.PollInterval
 	data.AutonomyRequireApproval = proj.Autonomy.RequireApproval
+	data.AutonomyObserve = proj.Autonomy.Observe || !proj.Autonomy.Enabled
 	data.AutonomyAllowedTaskTypes = strings.Join(proj.Autonomy.AllowedTaskTypes, "\n")
 	data.PermissionsSecrets = strings.Join(proj.Permissions.Secrets, "\n")
 	// Save-side value is the full, joined list — that's what the
@@ -626,6 +630,7 @@ func overlayFormValuesOntoData(data *ProjectConfigFormData, r *http.Request) {
 	data.AutonomyMaxTasksPerHour = parseFormInt(r.FormValue("autonomy_maxTasksPerHour"))
 	data.AutonomyPollInterval = strings.TrimSpace(r.FormValue("autonomy_pollInterval"))
 	data.AutonomyRequireApproval = parseFormBool(r.FormValue("autonomy_requireApproval"))
+	data.AutonomyObserve = parseFormBool(r.FormValue("autonomy_observe"))
 	data.AutonomyAllowedTaskTypes = r.FormValue("autonomy_allowedTaskTypes")
 	data.PermissionsSecrets = r.FormValue("permissions_secrets")
 	// Re-assemble allowedTools from the checkbox grid (common agent
@@ -730,7 +735,7 @@ var projectConfigFormGuard = fieldguard.Allowlist(
 )
 
 func buildFormPatches(data *ProjectConfigFormData) []yamlPatch {
-	return []yamlPatch{
+	patches := []yamlPatch{
 		{Path: []string{"displayName"}, Value: data.DisplayName, RemoveIfEmpty: true},
 		{Path: []string{"description"}, Value: data.Description, RemoveIfEmpty: true},
 		{Path: []string{"swarmId"}, Value: data.SwarmID, RemoveIfEmpty: true},
@@ -744,6 +749,7 @@ func buildFormPatches(data *ProjectConfigFormData) []yamlPatch {
 		{Path: []string{"autonomy", "maxTasksPerHour"}, Value: data.AutonomyMaxTasksPerHour, RemoveIfEmpty: true},
 		{Path: []string{"autonomy", "pollInterval"}, Value: data.AutonomyPollInterval, RemoveIfEmpty: true},
 		{Path: []string{"autonomy", "requireApproval"}, Value: data.AutonomyRequireApproval, RemoveIfEmpty: true},
+		{Path: []string{"autonomy", "observe"}, Value: data.AutonomyObserve, RemoveIfEmpty: true},
 		{Path: []string{"autonomy", "allowedTaskTypes"}, Value: splitChipList(data.AutonomyAllowedTaskTypes), RemoveIfEmpty: true},
 		{Path: []string{"permissions", "secrets"}, Value: splitChipList(data.PermissionsSecrets), RemoveIfEmpty: true},
 		{Path: []string{"permissions", "allowedTools"}, Value: splitChipList(data.PermissionsAllowedTools), RemoveIfEmpty: true},
@@ -785,6 +791,25 @@ func buildFormPatches(data *ProjectConfigFormData) []yamlPatch {
 		{Path: []string{"github_app", "pr_review_labels"}, Value: splitChipList(data.GitHubAppPRReviewLabels), RemoveIfEmpty: true},
 		{Path: []string{"github_app", "sender_allowlist"}, Value: splitChipList(data.GitHubAppSenderAllowlist), RemoveIfEmpty: true},
 	}
+	if !data.AutonomyEnabled {
+		// "Observe only" is pre-set while autonomy is off (GitHub #602), so
+		// a save that leaves autonomy off must not write it: an untouched
+		// form posts back unchanged (#748). Turning autonomy on writes it.
+		return withoutPatch(patches, "autonomy", "observe")
+	}
+	return patches
+}
+
+// withoutPatch returns patches minus the one at path.
+func withoutPatch(patches []yamlPatch, path ...string) []yamlPatch {
+	want := strings.Join(path, ".")
+	out := patches[:0:0]
+	for _, p := range patches {
+		if strings.Join(p.Path, ".") != want {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // splitChipList turns a newline-separated (or comma-separated)

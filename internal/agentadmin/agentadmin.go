@@ -177,6 +177,13 @@ type IntegrationGrant struct {
 	// its label is not the default or an identity was given, so the
 	// canonical document of every default-account approval is unchanged.
 	Account *AccountGrant `json:"account,omitempty"`
+	// PrivateReach is the agent_admin.private_api_hosts entry that granted
+	// a new destination private reach when the request was filed
+	// (dialguard.PrivateHost.String), "" when none did (part 06 §6.12, GitHub
+	// #403). Apply refuses when the live grant differs (PrivateReachMoved).
+	// Omitempty: an ungranted destination's document is unchanged, and a
+	// request filed before #403 reads as "no grant".
+	PrivateReach string `json:"private_reach,omitempty"`
 }
 
 // Narrowing is what an inert removal records: approvals it withdraws.

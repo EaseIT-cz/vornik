@@ -30,6 +30,8 @@ import (
 	"unicode"
 
 	"golang.org/x/net/idna"
+
+	"vornik.io/vornik/internal/netguard"
 )
 
 // writeIDNA is the UTS-46 NON-transitional (IDNA2008) lookup profile, pinned
@@ -38,9 +40,8 @@ import (
 // legacy transitional folding.
 var writeIDNA = idna.New(idna.MapForLookup(), idna.BidiRule())
 
-// blockedNets is the set of CIDR ranges a target host must not resolve into.
-// Built once at package init.
-var blockedNets = buildBlockedNets()
+// writeTargetBlockedNets is writeTargetCIDRs, parsed once at package init.
+var writeTargetBlockedNets = buildBlockedNets()
 
 // metadataHosts are well-known cloud metadata endpoint hostnames that must be
 // rejected by name (their IPs, e.g. 169.254.169.254 / 100.100.100.200, are also
@@ -51,43 +52,54 @@ var metadataHosts = map[string]bool{
 	"metadata":                 true,
 }
 
+// writeTargetCIDRs is the web guards' table and their named extra rule: a web
+// write or fetch never needs a documentation, benchmarking, reserved,
+// discard, site-local or translated destination. isBlockedIP refuses what the
+// daemon's one list refuses and, on top, every range here. The scraper keeps
+// the same table, BLOCKED_CIDRS in services/scraper/src/urlguard.ts;
+// TestScraperTableMatchesGo904 fails when the two differ by an entry, and
+// TestWriteTargetTableCoversTheOneList904 holds the table to the one list,
+// because the scraper cannot call the Go list (GitHub #904;
+// integrations-hub-design.md, "Change (2026-11-24): #904").
+var writeTargetCIDRs = []string{
+	"127.0.0.0/8",     // IPv4 loopback
+	"10.0.0.0/8",      // RFC1918 private
+	"172.16.0.0/12",   // RFC1918 private
+	"192.168.0.0/16",  // RFC1918 private
+	"169.254.0.0/16",  // link-local (incl. AWS/GCP metadata 169.254.169.254)
+	"100.64.0.0/10",   // CGNAT (RFC6598; incl. Alibaba metadata 100.100.100.200)
+	"0.0.0.0/8",       // "this" network / unspecified (IPv4)
+	"192.0.0.0/24",    // IETF protocol assignments
+	"192.0.2.0/24",    // TEST-NET-1
+	"198.18.0.0/15",   // benchmarking
+	"198.51.100.0/24", // TEST-NET-2
+	"203.0.113.0/24",  // TEST-NET-3
+	"224.0.0.0/4",     // multicast
+	"240.0.0.0/4",     // reserved + limited broadcast
+	"192.88.99.0/24",  // 6to4 relay anycast (deprecated, RFC7526)
+	"::1/128",         // IPv6 loopback
+	"fc00::/7",        // IPv6 unique-local (ULA)
+	"fe80::/10",       // IPv6 link-local
+	"::/128",          // IPv6 unspecified
+	"::/96",           // IPv4-compatible (deprecated, RFC4291): ::a9fe:a9fe IS 169.254.169.254
+	"2001:db8::/32",   // IPv6 documentation
+	"ff00::/8",        // IPv6 multicast
+	// Transition/translation prefixes. These embed an IPv4 destination in
+	// an IPv6 address, so a blocked v4 target reached through a NAT64 or
+	// 6to4 gateway sidesteps every v4 rule above: 64:ff9b::a9fe:a9fe IS
+	// 169.254.169.254 (cloud metadata). Blocking the prefixes is correct —
+	// we never need to reach a public host through one.
+	"64:ff9b::/96",   // NAT64 well-known prefix (RFC6052)
+	"64:ff9b:1::/48", // local-use NAT64 (RFC8215)
+	"2002::/16",      // 6to4 (RFC3056)
+	"2001::/32",      // Teredo (RFC4380)
+	"100::/64",       // discard-only (RFC6666)
+	"fec0::/10",      // deprecated site-local (RFC3879)
+}
+
 func buildBlockedNets() []*net.IPNet {
-	cidrs := []string{
-		"127.0.0.0/8",     // IPv4 loopback
-		"10.0.0.0/8",      // RFC1918 private
-		"172.16.0.0/12",   // RFC1918 private
-		"192.168.0.0/16",  // RFC1918 private
-		"169.254.0.0/16",  // link-local (incl. AWS/GCP metadata 169.254.169.254)
-		"100.64.0.0/10",   // CGNAT (RFC6598; incl. Alibaba metadata 100.100.100.200)
-		"0.0.0.0/8",       // "this" network / unspecified (IPv4)
-		"192.0.0.0/24",    // IETF protocol assignments
-		"192.0.2.0/24",    // TEST-NET-1
-		"198.18.0.0/15",   // benchmarking
-		"198.51.100.0/24", // TEST-NET-2
-		"203.0.113.0/24",  // TEST-NET-3
-		"224.0.0.0/4",     // multicast
-		"240.0.0.0/4",     // reserved + limited broadcast
-		"192.88.99.0/24",  // 6to4 relay anycast (deprecated, RFC7526)
-		"::1/128",         // IPv6 loopback
-		"fc00::/7",        // IPv6 unique-local (ULA)
-		"fe80::/10",       // IPv6 link-local
-		"::/128",          // IPv6 unspecified
-		"2001:db8::/32",   // IPv6 documentation
-		"ff00::/8",        // IPv6 multicast
-		// Transition/translation prefixes. These embed an IPv4 destination in
-		// an IPv6 address, so a blocked v4 target reached through a NAT64 or
-		// 6to4 gateway sidesteps every v4 rule above: 64:ff9b::a9fe:a9fe IS
-		// 169.254.169.254 (cloud metadata). Blocking the prefixes is correct —
-		// we never need to reach a public host through one.
-		"64:ff9b::/96",   // NAT64 well-known prefix (RFC6052)
-		"64:ff9b:1::/48", // local-use NAT64 (RFC8215)
-		"2002::/16",      // 6to4 (RFC3056)
-		"2001::/32",      // Teredo (RFC4380)
-		"100::/64",       // discard-only (RFC6666)
-		"fec0::/10",      // deprecated site-local (RFC3879)
-	}
-	nets := make([]*net.IPNet, 0, len(cidrs))
-	for _, c := range cidrs {
+	nets := make([]*net.IPNet, 0, len(writeTargetCIDRs))
+	for _, c := range writeTargetCIDRs {
 		_, n, err := net.ParseCIDR(c)
 		if err != nil {
 			// Static, compile-time-known list; a parse failure is a programming
@@ -99,14 +111,21 @@ func buildBlockedNets() []*net.IPNet {
 	return nets
 }
 
-// isBlockedIP reports whether ip falls in any blocked range. IPv4-mapped IPv6
-// addresses (::ffff:a.b.c.d) are normalized to their IPv4 form first so that
-// e.g. ::ffff:127.0.0.1 is caught by 127.0.0.0/8.
+// isBlockedIP reports whether ip is refused: the daemon's one list
+// (netguard.IsPrivateIP, which also refuses nil) or the write-target table.
+// Before GitHub #904 it was the table alone, which admitted ::a9fe:a9fe
+// (169.254.169.254 in the IPv4-compatible form).
 func isBlockedIP(ip net.IP) bool {
+	return netguard.IsPrivateIP(ip) || inWriteTargetTable(ip)
+}
+
+// inWriteTargetTable reports whether ip lies in writeTargetCIDRs. IPv4-mapped
+// IPv6 is judged as its IPv4 address.
+func inWriteTargetTable(ip net.IP) bool {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4
 	}
-	for _, n := range blockedNets {
+	for _, n := range writeTargetBlockedNets {
 		if n.Contains(ip) {
 			return true
 		}

@@ -29,21 +29,23 @@ func TestFamily(t *testing.T) {
 }
 
 // Test 37 (design §9): a same-family assistant/judge pair is refused; a
-// different-family pair passes; an unclassifiable id fails closed.
-func TestSameFamily(t *testing.T) {
-	if !SameFamily("glm-5.2:cloud", "glm-4.5-air") {
+// different-family pair passes; an unclassifiable id fails closed. Through
+// PairProblem, the one rule since #891.
+func TestPairProblemTest37(t *testing.T) {
+	refused := func(a, j string) bool { r, _ := PairProblem(a, j); return r != "" }
+	if !refused("glm-5.2:cloud", "glm-4.5-air") {
 		t.Error("two GLM ids must be the same family")
 	}
-	if SameFamily("glm-5.2:cloud", "nvidia.nemotron-nano-9b-v2") {
+	if refused("glm-5.2:cloud", "nvidia.nemotron-nano-9b-v2") {
 		t.Error("GLM vs nemotron must be different families")
 	}
-	if SameFamily("glm-5.2:cloud", "openai.gpt-oss-20b-1:0") {
+	if refused("glm-5.2:cloud", "openai.gpt-oss-20b-1:0") {
 		t.Error("GLM vs gpt-oss must be different families")
 	}
-	if !SameFamily("glm-5.2:cloud", "mystery-model") {
-		t.Error("an unclassifiable id must fail CLOSED (reported as same family)")
+	if !refused("glm-5.2:cloud", "mystery-model") {
+		t.Error("an unclassifiable id must fail CLOSED")
 	}
-	if !SameFamily("", "") {
+	if !refused("", "") {
 		t.Error("empty ids must fail closed")
 	}
 }

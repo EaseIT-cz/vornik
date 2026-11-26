@@ -141,7 +141,7 @@ func GitProvenance(ctx context.Context, dir string, args ...string) (*Cmd, error
 			return nil, refuse(KindGitProvenance, "fetch may only fetch one origin branch into its tracking ref")
 		}
 	}
-	c := newCmd(ctx, KindGitProvenance, "git", append([]string{"-C", dir}, args...))
+	c := newGitCmd(ctx, KindGitProvenance, append([]string{"-C", dir}, args...))
 	c.gitSub = sub
 	c.c.Env = provenanceEnv()
 	return c, nil
@@ -177,7 +177,7 @@ func GitProvenanceClone(ctx context.Context, root, rawURL, dest string) (*Cmd, e
 	if _, err := os.Lstat(absDest); err == nil {
 		return nil, refuse(KindGitProvenance, "destination %q already exists", dest)
 	}
-	c := newCmd(ctx, KindGitProvenance, "git", []string{"clone", "--quiet", "--no-checkout",
+	c := newGitCmd(ctx, KindGitProvenance, []string{"clone", "--quiet", "--no-checkout",
 		"--filter=blob:none", "--no-tags", "--", rawURL, absDest})
 	c.c.Dir = absRoot
 	c.gitSub = "clone"

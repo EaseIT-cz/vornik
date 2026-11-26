@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"vornik.io/vornik/internal/modelcheck"
+
 	"vornik.io/vornik/internal/aimark"
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/listener"
@@ -288,7 +290,11 @@ type Server struct {
 	diagnoser       proposalDiagnoser
 	// cpConfigPath is the deployed config.yaml the hub's ledger-gated edits
 	// read + splice (MCP-server add/remove). Empty disables hub config writes.
-	cpConfigPath        string
+	cpConfigPath string
+	// modelChecker and managedCatalogue check a model before a console save
+	// writes it (GitHub #881). Nil: saves are not checked; not managed.
+	modelChecker        *modelcheck.Checker
+	managedCatalogue    func() []string
 	tradingSnapshotRepo persistence.TradingPositionsSnapshotRepository
 	tradingOrderRepo    persistence.TradingOrderRepository
 	// tradingBenchmarkRepo holds benchmark (SPY) session closes (GitHub #597).
@@ -528,6 +534,8 @@ type Server struct {
 	// the persistent "restart required" banner. See
 	// https://docs.vornik.io
 	restartPending restartPendingFlag
+	// restartGen counts restart-pending marks across restarts (GitHub #799).
+	restartGen RestartGenerationBumper
 	// archiveSweeper is the project-archival deletion runner.
 	// Optional — when nil the archive/unarchive endpoints still
 	// work (writing the YAML + reloading the registry); only the
@@ -3397,7 +3405,8 @@ func uiFuncMap() template.FuncMap {
 		//
 		// Last 4 chars chosen because: (a) it's the highest-entropy
 		// segment of the ULID-style suffix; (b) 16⁴=65k forms per
-		// prefix is collision-safe inside a project's open set; (c)
+		// prefix rarely collides inside a project's open set, and where two
+		// do, the link and the title carry the full ID (UI design §23); (c)
 		// 4 chars fit a tap target without truncation. Callers
 		// disambiguate via title="..." on the long-form ID for
 		// hover/long-press copy.

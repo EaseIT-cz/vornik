@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"vornik.io/vornik/internal/termcheck"
 )
 
 // vornikctl auth — manage the API key in the OS keychain instead of a
@@ -52,7 +53,7 @@ var (
 func runAuthLogin(cmd *cobra.Command, _ []string) error {
 	// If stdin is a terminal, nudge the operator toward piping so the key
 	// doesn't get echoed; still accept interactive input.
-	if fi, err := os.Stdin.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+	if termcheck.IsTerminal(os.Stdin) { // not /dev/null (GitHub #866)
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Enter API key (input is echoed; prefer piping the key in to keep it out of shell history):")
 	}
 	data, err := io.ReadAll(bufio.NewReader(cmd.InOrStdin()))

@@ -74,9 +74,11 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	}
 	var lastContainerID string
 	var lastResult []byte
-	// stepArtifacts carries output artifacts from the previous agent step
-	// so they can be staged as inputs for the next step.
+	// stepArtifacts is what the next step stages: the task's uploads plus
+	// carriedOutputs, the outputs of every earlier succeeded agent step
+	// (15-artifact-store.md §14, GitHub #918).
 	var stepArtifacts []map[string]string
+	var carriedOutputs []map[string]string
 	var lastResultMessage string
 	// systemChain accumulates consecutive system steps' output so an agent
 	// receives ALL of it, not only the last step's. See the type's doc comment
@@ -123,10 +125,13 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	taskInputArtifacts = e.confineTaskInputArtifacts(ctx, task, taskInputArtifacts)
 	e.observeInputStaging(task.ID, task.Payload, taskInputArtifacts, stagingDecision)
 	stepArtifacts = append(stepArtifacts, taskInputArtifacts...)
-	// An automatic resume starts mid-workflow with no in-memory handoff:
-	// restage the last carried step's outputs for the step it resumes at
-	// (GitHub #123, design §8.3 D4). Nil for every other execution.
-	stepArtifacts = append(stepArtifacts, autoResumeHandoff(state, completedSteps)...)
+	// An execution that re-enters mid-workflow (an automatic resume, an
+	// approval's resume, a child wait, a daemon restart, RetryFromStep) has
+	// no in-memory handoff: restage every completed step's checkpointed
+	// outputs (GitHub #123, design §8.3 D4; 15-artifact-store.md §14.3,
+	// #919). Nil for a fresh execution.
+	carriedOutputs = autoResumeHandoff(state, completedSteps)
+	stepArtifacts = append(stepArtifacts, carriedOutputs...)
 	// ...and hand the resumed step the last carried step's message, as the
 	// in-memory loop would have; empty for every other execution.
 	lastResultMessage = autoResumePreviousMessage(state, completedSteps)
@@ -524,21 +529,18 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			e.emitStepCompleted(ctx, execution.ID, currentStepID, "ok", stepStartedAt, 0)
 
 			// Extract output artifacts, message, and delegated tasks from result.
-			// stepArtifacts is rebuilt as (task inputs ⊕ this step's outputs)
-			// so the next step's container sees BOTH the original user
-			// uploads and the upstream step's products. The step's outputs
-			// come from plan.stepOutputArtifacts — the STORE-backed handoff
-			// (task e9a5): persistArtifacts harvested them into the durable
-			// artifact store and recorded each {name, sourcePath} where
-			// sourcePath is the store StoragePath (under an allowed staging
-			// root). We tag each with class="output" so the next step stages
-			// them into artifacts/out/ (where roles read upstream products),
-			// not artifacts/in/. The raw result.OutputArtifacts forwarding is
-			// REMOVED: those carried the agent's container-relative path with
-			// no host sourcePath and were silently rejected by
-			// resolveStagingSrc, so the file never reached the next step.
-			// Task uploads (taskInputArtifacts) stay untagged → artifacts/in/.
-			stepArtifacts = append([]map[string]string{}, taskInputArtifacts...)
+			// The step's outputs come from plan.stepOutputArtifacts, the
+			// STORE-backed handoff (task e9a5): persistArtifacts harvested
+			// them into the durable artifact store and recorded each
+			// {name, sourcePath} with sourcePath the store StoragePath (under
+			// an allowed staging root). Tagged class="output", they are staged
+			// into artifacts/out/ (where roles read upstream products), not
+			// artifacts/in/. The raw result.OutputArtifacts are not forwarded:
+			// they carry the agent's container path, which resolveStagingSrc
+			// rejects. They merge into carriedOutputs, so every later step,
+			// not only the next, finds them (#918); task uploads stay
+			// untagged and go to artifacts/in/.
+			thisStepOutputs := make([]map[string]string, 0, len(plan.stepOutputArtifacts))
 			for _, out := range plan.stepOutputArtifacts {
 				// Copy the map and tag it; do not mutate plan's slice entries.
 				tagged := make(map[string]string, len(out)+1)
@@ -546,8 +548,10 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					tagged[k] = v
 				}
 				tagged["class"] = "output"
-				stepArtifacts = append(stepArtifacts, tagged)
+				thisStepOutputs = append(thisStepOutputs, tagged)
 			}
+			carriedOutputs = mergeCarriedOutputs(carriedOutputs, thisStepOutputs)
+			stepArtifacts = append(append([]map[string]string{}, taskInputArtifacts...), carriedOutputs...)
 			lastResultMessage = ""
 			lastResultErr = nil
 			// The agent has now been handed the chain, so it is spent. Without
@@ -699,12 +703,12 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			recordStepResult(&state, currentStepID, resultBytes)
 			// Checkpoint the handoff this step just gave the next one, so an
 			// automatic resume can restage it (GitHub #123, design §8.3 D4).
-			// stepArtifacts is (task inputs ⊕ this step's tagged outputs).
-			if len(stepArtifacts) > len(taskInputArtifacts) {
+			// Only this step's own outputs: a resume merges them (§14).
+			if len(thisStepOutputs) > 0 {
 				if state.StepHandoffs == nil {
 					state.StepHandoffs = map[string][]map[string]string{}
 				}
-				state.StepHandoffs[currentStepID] = cloneArtifactHandoffEntries(stepArtifacts[len(taskInputArtifacts):])
+				state.StepHandoffs[currentStepID] = cloneArtifactHandoffEntries(thisStepOutputs)
 			}
 			state.ApprovalPendingStep = ""
 			state.ApprovalGrantedStep = ""
@@ -1306,17 +1310,15 @@ func (e *Executor) handleSelectedWorkflowRoute(
 	if isDelegatorStep(step) || len(result.DelegatedTasks) > 0 {
 		return false, "", nil, completedSteps, nil
 	}
-	// "No candidate fits" is an answer (delegation-engine design, #641):
-	// final on the first answer, no corrective re-run, no child.
-	if routeAnsweredNoFit(result, plan.project.AdaptiveCandidateWorkflows) {
-		return true, "", nil, completedSteps, e.routeNoFitFailure(task, plan.project, result.Reason)
-	}
-	badPick := result.SelectedWorkflow != "" && !slices.Contains(plan.project.AdaptiveCandidateWorkflows, result.SelectedWorkflow)
+	// A first "none" gets one corrective re-run; the re-run's "none" is final
+	// (delegation-engine design, #641 and #889).
+	firstNoFit := routeAnsweredNoFit(result, plan.project.AdaptiveCandidateWorkflows)
+	badPick := !firstNoFit && result.SelectedWorkflow != "" && !slices.Contains(plan.project.AdaptiveCandidateWorkflows, result.SelectedWorkflow)
 	emptyPick := result.SelectedWorkflow == ""
 	// usedStepID is the attempt whose answer the delegation uses: the first,
 	// or the corrective re-run (GitHub #649).
 	usedStepID := currentStepID
-	if badPick || emptyPick {
+	if firstNoFit || badPick || emptyPick {
 		retryStepID := currentStepID + "_route_retry"
 		// The rejected answer is the route model's own failure, charged to it
 		// rather than left for the orphan sweep (outcome-quality design,
@@ -1324,8 +1326,13 @@ func (e *Executor) handleSelectedWorkflowRoute(
 		e.rejectRoutePick(ctx, execution.ID, currentStepID, result.SelectedWorkflow, plan.project.AdaptiveCandidateWorkflows)
 		usedStepID = retryStepID
 		retryReason := "out_of_list"
-		if emptyPick {
+		hint := buildRouteCorrectiveHint(result.SelectedWorkflow, plan.project.AdaptiveCandidateWorkflows)
+		switch {
+		case emptyPick:
 			retryReason = "empty_selected_workflow"
+		case firstNoFit:
+			retryReason = "no_fit"
+			hint = routeNoFitRetryHint(result.Reason)
 		}
 		e.logger.Warn().
 			Str("execution_id", execution.ID).
@@ -1336,7 +1343,7 @@ func (e *Executor) handleSelectedWorkflowRoute(
 			Strs("candidates", plan.project.AdaptiveCandidateWorkflows).
 			Msg("strict adaptive: lead pick invalid; re-running with corrective hint")
 		correctedOpts := *opts
-		correctedOpts.StepPrompt = opts.StepPrompt + buildRouteCorrectiveHint(result.SelectedWorkflow, plan.project.AdaptiveCandidateWorkflows)
+		correctedOpts.StepPrompt = opts.StepPrompt + hint
 		retryCID, retryBytes, retryErr := e.executeAgentStepWithFallback(ctx, task, execution, plan, retryStepID, step, stepTimeout, &correctedOpts, roleConfig)
 		if retryErr != nil {
 			return true, "", nil, completedSteps, fmt.Errorf("strict adaptive: corrective re-run failed: %w", retryErr)
@@ -2266,7 +2273,7 @@ func (e *Executor) prepareAgentStepInput(
 	// task_20260928150654_7ddaa17fe3a66569); 10-delegation-engine.md, "The
 	// route step is tool-free and schema-bound".
 	if strictRouteContractApplies(plan.workflow, plan.project, currentStepID, step) {
-		applyStrictRouteContract(opts, plan.project.AdaptiveCandidateWorkflows)
+		applyStrictRouteContract(opts, plan.project.AdaptiveCandidateWorkflows, e.describeWorkflow)
 	}
 	return opts, roleConfig, nil
 }
@@ -2954,6 +2961,10 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 		}
 	}
 
+	// Part 24 §24.3 (#920): after its outputs are in memory, a job may start
+	// the next job of the namespace. It never changes this task.
+	e.handOver(ctx, task, execution)
+
 	// Ingest structured trading activity into project memory so the
 	// next tick's strategist memory_search has rich context (fills,
 	// skips, cancels) without depending on the LLM correctly
@@ -3151,6 +3162,8 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 	// autonomy tick, a channel message — leaves it absent, which is why the
 	// project default exists. Empty after both is still a no-op downstream.
 	repoScope := memoryscope.Resolve(task.Payload, e.projectRepoScope(task.ProjectID))
+	// Part 24 §24.2 A2 (#920): an agent namespace's projects share one memory.
+	memProject := e.memoryProject(task.ProjectID)
 
 	brokerDeclared := e.brokerDeclaredOutputs(execution.WorkflowID)
 	for _, a := range artifacts {
@@ -3220,7 +3233,7 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 			}
 			scopePtr := memoryscope.Ptr(repoScope)
 			item := &persistence.IngestQueueItem{
-				ProjectID:          task.ProjectID,
+				ProjectID:          memProject,
 				SourceArtifactID:   a.ID,
 				ProducerRole:       producerRoleForExecution(execution, wf),
 				IngestExecutionID:  &execID,
@@ -3251,7 +3264,7 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 		}
 
 		artifactID := a.ID
-		if err := e.memoryIndexer.IngestText(ctx, task.ProjectID, task.ID, artifactID, a.Name, string(content)); err != nil {
+		if err := e.memoryIndexer.IngestText(ctx, memProject, task.ID, artifactID, a.Name, string(content)); err != nil {
 			e.logger.Warn().Err(err).
 				Str("artifact_id", a.ID).
 				Str("source_name", a.Name).
@@ -3262,7 +3275,7 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 		// scoped recall finds them under the right partition. Empty
 		// scope = no-op at the indexer layer.
 		if repoScope != "" {
-			if err := e.memoryIndexer.PatchScopeByArtifact(ctx, task.ProjectID, artifactID, repoScope); err != nil {
+			if err := e.memoryIndexer.PatchScopeByArtifact(ctx, memProject, artifactID, repoScope); err != nil {
 				e.logger.Warn().Err(err).
 					Str("artifact_id", a.ID).
 					Str("repo_scope", repoScope).
@@ -3360,6 +3373,8 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 	}
 
 	repoScope := memoryscope.Resolve(task.Payload, e.projectRepoScope(task.ProjectID))
+	// Part 24 §24.2 A2 (#920): an agent namespace's projects share one memory.
+	memProject := e.memoryProject(task.ProjectID)
 	scopePtr := memoryscope.Ptr(repoScope)
 	var wf *registry.Workflow
 	if e.workflows != nil && execution.WorkflowID != "" {
@@ -3403,7 +3418,7 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 		// path. File bytes never touch this process.
 		if e.ingestQueue != nil {
 			item := &persistence.IngestQueueItem{
-				ProjectID:          task.ProjectID,
+				ProjectID:          memProject,
 				SourceArtifactID:   ref.ID,
 				ProducerRole:       producer,
 				IngestExecutionID:  &execID,
@@ -3461,14 +3476,14 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 			}
 			ingest = dw.IngestDocumentText
 		}
-		if err := ingest(ctx, task.ProjectID, task.ID, ref.ID, sourceName, string(content)); err != nil {
+		if err := ingest(ctx, memProject, task.ID, ref.ID, sourceName, string(content)); err != nil {
 			e.logger.Warn().Err(err).Str("artifact_id", ref.ID).Str("source_name", sourceName).
 				Msg("memory: input artifact IngestText failed")
 			failed++
 			continue
 		}
 		if repoScope != "" {
-			if err := e.memoryIndexer.PatchScopeByArtifact(ctx, task.ProjectID, ref.ID, repoScope); err != nil {
+			if err := e.memoryIndexer.PatchScopeByArtifact(ctx, memProject, ref.ID, repoScope); err != nil {
 				e.logger.Warn().Err(err).Str("artifact_id", ref.ID).Str("repo_scope", repoScope).
 					Msg("memory: failed to stamp repo_scope on input chunks (ingest succeeded)")
 			}

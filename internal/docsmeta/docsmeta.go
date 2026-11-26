@@ -166,6 +166,10 @@ func ParseFrontmatter(md []byte) (Frontmatter, bool, error) {
 // HashPath returns a hex sha256 of a file, or a composite hash of a directory
 // tree (sorted "relpath\tfilehash" lines) so adding, removing, or changing any
 // file under a directory source changes the hash.
+//
+// A .md file is hashed without the `sha256:` lines of its front matter
+// (#658): a design's own stamps are not a change to the design, so
+// restamping it does not make every brief that cites it stale.
 func HashPath(p string) (string, error) {
 	info, err := os.Stat(p)
 	if err != nil {
@@ -203,8 +207,28 @@ func hashFile(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if strings.HasSuffix(p, ".md") {
+		b = withoutStampLines(b)
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// withoutStampLines drops the front-matter lines whose trimmed text starts
+// with "sha256:". The body, and every other front-matter line (a source's
+// path, disclosure, delivers), stays in the hash. No front matter: unchanged.
+func withoutStampLines(md []byte) []byte {
+	fm, body, had := SplitFrontmatter(md)
+	if !had {
+		return md
+	}
+	var kept []string
+	for _, line := range strings.Split(string(fm), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "sha256:") {
+			kept = append(kept, line)
+		}
+	}
+	return []byte(fence + strings.Join(kept, "\n") + "\n" + fence + string(body))
 }
 
 // StaleSources returns the source paths whose current hash differs from the
@@ -228,9 +252,10 @@ func StaleSources(root, mdPath string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: source %q: %w", mdPath, s.Path, err)
 		}
-		if cur != s.SHA256 {
-			stale = append(stale, s.Path)
+		if cur == s.SHA256 {
+			continue
 		}
+		stale = append(stale, s.Path)
 	}
 	return stale, nil
 }

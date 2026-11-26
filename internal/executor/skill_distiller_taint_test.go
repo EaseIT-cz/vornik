@@ -109,6 +109,29 @@ type taintWiring struct {
 	outcomes *distillOutcomeRepo
 	execs    *distillExecRepo
 	lister   *distillLister
+	recalls  *distillRecallRepo
+}
+
+// distillRecallRepo serves the memory recalls each task's steps made (#858).
+type distillRecallRepo struct {
+	rows map[string][]persistence.StepRecallChunk
+}
+
+func (r *distillRecallRepo) StepRecallChunks(_ context.Context, taskID string) ([]persistence.StepRecallChunk, error) {
+	return r.rows[taskID], nil
+}
+
+type recalled struct {
+	id, class string
+	found     bool
+}
+
+// recall records that row's step recalled these chunks.
+func (w *taintWiring) recall(row *persistence.ExecutionStepOutcome, chunks ...recalled) {
+	for _, c := range chunks {
+		w.recalls.rows[row.TaskID] = append(w.recalls.rows[row.TaskID], persistence.StepRecallChunk{
+			ExecutionID: row.ExecutionID, StepID: row.StepID, ChunkID: c.id, Class: c.class, Found: c.found})
+	}
 }
 
 // wireTaint gives the fixture an empty record; tests add steps with step().
@@ -117,7 +140,9 @@ func (f *distillFixture) wireTaint() *taintWiring {
 		outcomes: newDistillOutcomeRepo(),
 		execs:    &distillExecRepo{execs: map[string][]*persistence.Execution{}},
 		lister:   &distillLister{byID: map[string]*persistence.Task{}},
+		recalls:  &distillRecallRepo{rows: map[string][]persistence.StepRecallChunk{}},
 	}
+	f.e.recallChunks = w.recalls
 	f.e.outcomeRepo = w.outcomes
 	f.e.execRepo = w.execs
 	f.e.persistTaskRepo = w.lister
@@ -196,14 +221,69 @@ func TestDistiller_LocalFileToolsTaskStillDistils(t *testing.T) {
 	}
 }
 
-// Low (memory_search) is permitted: open question 3 of the amendment.
+// Low (memory_search) is judged by what each recall returned (taint-lineage
+// design §16, GitHub #858): the team's own records still distil.
 func TestDistiller_MemorySearchOnlyTaskStillDistils(t *testing.T) {
 	f := newDistillFixture(t)
 	w := f.wireTaint()
-	w.step(t, "t1", "memory_search", "file_read")
+	row := w.step(t, "t1", "memory_search", "file_read")
+	w.recall(row, recalled{"c-spec", "spec", true}, recalled{"c-dec", "decision", true})
 	if n := f.runOrdinary(t, w, ordinaryTask()); n != 1 {
-		t.Fatalf("a memory_search-only task must still be distilled; got %d drafts", n)
+		t.Fatalf("a task that recalled only first-party records must still be distilled; got %d drafts", n)
 	}
+}
+
+// #858: a recall is judged by the chunks it returned. Before the fix the
+// distiller accepted every Low-only step, so web text that had reached memory
+// could feed a skill; each case below drafted before and is refused now.
+func TestDistiller_858_ARecallOfThirdPartyChunksIsNotDistilled(t *testing.T) {
+	for name, tc := range map[string]struct {
+		chunks []recalled
+		reason string
+	}{
+		"web text":         {[]recalled{{"c-spec", "spec", true}, {"c-web", "external_fetch", true}}, "third_party_memory"},
+		"unclassified":     {[]recalled{{"c-u", "unclassified", true}}, "third_party_memory"},
+		"no class":         {[]recalled{{"c-e", "", true}}, "third_party_memory"},
+		"a deleted chunk":  {[]recalled{{"c-gone", "", false}}, "third_party_memory"},
+		"no recall record": {nil, "memory_unaudited"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newDistillFixture(t)
+			w := f.wireTaint()
+			row := w.step(t, "t1", "memory_search", "file_read")
+			if tc.chunks != nil {
+				w.recall(row, tc.chunks...)
+			}
+			f.assertRefused(t, f.runOrdinary(t, w, ordinaryTask()), tc.reason)
+		})
+	}
+}
+
+// A recall that returned nothing fed nothing; and a recall row of another step
+// does not cover this one.
+func TestDistiller_858_AnEmptyRecallDistilsAndAnotherStepsRowDoesNot(t *testing.T) {
+	f := newDistillFixture(t)
+	w := f.wireTaint()
+	row := w.step(t, "t1", "memory_search")
+	w.recall(row, recalled{"", "", false})
+	if n := f.runOrdinary(t, w, ordinaryTask()); n != 1 {
+		t.Fatalf("an empty recall must not refuse; got %d drafts", n)
+	}
+
+	f2 := newDistillFixture(t)
+	w2 := f2.wireTaint()
+	w2.step(t, "t1", "memory_search")
+	w2.recalls.rows["t1"] = []persistence.StepRecallChunk{{ExecutionID: "ex-t1", StepID: "other-step", ChunkID: "c", Class: "spec", Found: true}}
+	f2.assertRefused(t, f2.runOrdinary(t, w2, ordinaryTask()), "memory_unaudited")
+}
+
+// No recall reader wired: a memory_search step cannot be judged, so it refuses.
+func TestDistiller_858_NoRecallReaderRefuses(t *testing.T) {
+	f := newDistillFixture(t)
+	w := f.wireTaint()
+	w.step(t, "t1", "memory_search")
+	f.e.recallChunks = nil
+	f.assertRefused(t, f.runOrdinary(t, w, ordinaryTask()), "memory_unaudited")
 }
 
 // A gate row and an annotation row beside an audited step prove nothing and

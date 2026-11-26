@@ -42,7 +42,8 @@ type RegulatoryRequests interface {
 }
 
 // RegulatoryIncidents is the slice of the breach ledger the page reads.
-// Implemented by *postgres.IncidentRepository; nil on SQLite.
+// Implemented by subjectstore.IncidentRepository on both drivers (GitHub #475;
+// until 2026-11-23 it was Postgres-only and nil on SQLite).
 type RegulatoryIncidents interface {
 	List(ctx context.Context, limit, offset int) ([]incident.Incident, error)
 	ListLive(ctx context.Context) ([]incident.Incident, error)

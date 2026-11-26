@@ -37,7 +37,8 @@ func (s *Server) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	if detector.Config == nil {
 		detector.Config = s.config
 	}
-	writeSetupStatus(w, detector.Detect(r.Context()), s.restartReasons())
+	pending, loaded := s.restartGenerations()
+	writeSetupStatus(w, detector.Detect(r.Context()), s.restartReasons(), pending, loaded)
 }
 
 // setupModelLister is the optional capability the concrete chat validator
@@ -311,16 +312,21 @@ func (s *Server) SetupSessionCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	offer := s.setupProfileOffer(proposal.Endpoint) // #880: name a matching provider profile
 	if isHTMXRequest(r) {
-		respondSetupCommitHTML(w)
+		respondSetupCommitHTML(w, offer)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	body := map[string]any{
 		"committed":        true,
 		"restart_required": true,
 		"secret_path":      secretPath,
-	})
+	}
+	if offer != nil {
+		body["model_profile"] = offer
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // configPatchError carries the error code + message from writeChatConfig so
@@ -529,9 +535,9 @@ func respondSetupValidationHTML(w http.ResponseWriter, status int, result onboar
 	_, _ = w.Write([]byte(b.String()))
 }
 
-func respondSetupCommitHTML(w http.ResponseWriter) {
+func respondSetupCommitHTML(w http.ResponseWriter, offer *setupProfileOfferDTO) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<div class="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-800 dark:text-emerald-200"><div class="font-semibold">Chat config saved</div><div class="mt-1 text-gray-300">Restart required before the daemon uses the new chat credentials.</div></div>`))
+	_, _ = w.Write([]byte(`<div class="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-800 dark:text-emerald-200"><div class="font-semibold">Chat config saved</div><div class="mt-1 text-gray-300">Restart required before the daemon uses the new chat credentials.</div>` + setupProfileOfferHTML(offer) + `</div>`))
 }
 
 // setupSessionID generates a fresh onboarding session ID.

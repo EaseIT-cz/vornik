@@ -4,10 +4,9 @@
 // metadata addresses, and re-validates every redirect hop so a public URL
 // cannot bounce the daemon into its own internal network.
 //
-// The logic mirrors internal/memory.URLLivenessChecker's private-address
-// guard, which is bound to that subsystem's Repository and cannot be reused
-// across packages. This package is the shared home for that primitive; the
-// liveness checker is a candidate to fold onto it in a later pass.
+// internal/memory.URLLivenessChecker keeps its own resolve-then-dial (it is
+// bound to that subsystem's Repository) but decides by IsPrivateIP and
+// IsLocalHostname here (GitHub #905 folded its own, shorter list).
 //
 // Which addresses are refused is not decided here: IsPrivateIP delegates to
 // dialguard.IsBlockedIP, the daemon's one list (GitHub #505), so this package

@@ -574,15 +574,12 @@ chat:
   # system_prompt: |
   #   You are a task scheduling assistant for vornik.
 
-  # thinking_enabled: enable extended thinking / reasoning (Claude and compatible models).
-  # Sends both the Anthropic-native 'thinking' field and the bedrock-access-gateway
-  # 'reasoning_effort' field so it works regardless of which gateway is in use.
-  # Increases latency and token usage; useful for complex multi-step scheduling decisions.
-  thinking_enabled: false
-
-  # thinking_budget: maximum tokens the model may spend on internal reasoning.
-  # Ignored when thinking_enabled is false. 0 = default (8192).
-  thinking_budget: 8192
+  # Reasoning (thinking) is not set here. chat.thinking_enabled and
+  # chat.thinking_budget were removed on 2026-06-23 and did nothing since
+  # (GitHub #869). An agent role sets `reasoning: off|low|medium|high` in its
+  # swarm, a model sets a default under runtime.agent_llm.model_limits, and
+  # each provider maps the level to its own field; a sub-provider's own
+  # router.<sub>.thinking_budget / effort_level applies when no level is set.
 
 # ---------------------------------------------------------------------------
 # Autonomy (Autonomous evaluation manager)

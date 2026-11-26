@@ -9,6 +9,9 @@ maxConcurrentTasks: 1
 
 autonomy:
   enabled: false
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
 
 # Diff-only (GitHub #801 B): no role reads the checkout, which holds the
 # raw lines the diff was masked from.

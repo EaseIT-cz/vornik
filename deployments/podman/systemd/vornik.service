@@ -30,7 +30,11 @@ Wants=podman-restart.service
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+# notify, not simple (#898): the start ends at the daemon's READY=1, sent once
+# its listeners serve, so TimeoutStartSec below bounds the whole boot. Under
+# simple, a boot that hung (a config read that never returned) showed
+# `active (running)` forever while answering nothing.
+Type=notify
 ExecStart=%h/.local/bin/vornik
 Environment=VORNIK_CONFIG=%h/.config/vornik/config.yaml
 Environment=VORNIK_CONFIGS_DIR=%h/.config/vornik/configs
@@ -61,8 +65,9 @@ Restart=on-failure
 Environment=VORNIK_RESTART_ON_EXIT=1
 RestartSec=3
 # Must exceed VORNIK_DB_WAIT_SECONDS: TimeoutStartSec covers ExecStartPre and
-# ExecStart together, so a short value would kill the gate mid-wait and leave
-# first-boot DB migrations no room either.
+# the daemon's boot up to READY=1 together (Type=notify), so a short value
+# would kill the gate mid-wait and leave DB migrations no room either. A boot
+# still not ready at 300 s is killed, and Restart=on-failure tries again.
 TimeoutStartSec=300
 
 [Install]

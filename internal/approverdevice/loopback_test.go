@@ -15,6 +15,8 @@ func TestIsLoopbackHost(t *testing.T) {
 		"[::1]": true, "[::ffff:127.0.0.1]:8080": true, "[::1]:8080": true, "::1": true,
 		"192.168.1.50:8080": false, "example.com": false, "localhost.evil.com": false,
 		"127.0.0.1.evil.com": false, "": false, "[fe80::1]:80": false, "foo.localhost": false,
+		// GitHub #168, review 4dca item 3: brackets enclose an IP literal only.
+		"[localhost]": false, "[localhost]:8080": false, "[localhost.]:8080": false,
 	} {
 		if got := isLoopbackHost(host); got != want {
 			t.Errorf("isLoopbackHost(%q) = %v, want %v", host, got, want)

@@ -2,6 +2,7 @@ package narrator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -120,9 +121,29 @@ func (h *testHarness) awaitLine(timeout time.Duration) *persistence.ExecutionNar
 	case row := <-h.Lines:
 		return row
 	case <-time.After(timeout):
-		h.t.Fatalf("timed out waiting for a narration line")
+		h.t.Fatalf("timed out waiting for a narration line after %s\n%s", timeout, h.diagnose())
 		return nil
 	}
+}
+
+// diagnose says what the narrator saw when an expected line never came, so
+// a flake names its path instead of only timing out (GitHub #923: the VM
+// gate waited 60 s for a first line that never landed and said nothing
+// else; the earlier flakes of this package were real defects).
+func (h *testHarness) diagnose() string {
+	h.Store.mu.Lock()
+	rows := make([]string, 0, len(h.Store.rows))
+	for _, r := range h.Store.rows {
+		rows = append(rows, fmt.Sprintf("%s/%s seq=%d", r.ExecutionID, r.Kind, r.Seq))
+	}
+	h.Store.mu.Unlock()
+	exec, err := h.Executions.Get(context.Background(), testExecID)
+	status := "unresolvable"
+	if err == nil && exec != nil {
+		status = string(exec.Status)
+	}
+	return fmt.Sprintf("  persist/publish log: %v\n  stored rows: %v\n  queued bus events: %d\n  execution %s: %s",
+		h.Recorder.snapshot(), rows, len(h.Sub.Events), testExecID, status)
 }
 
 // expectNoLine asserts no line arrives within the window — used to

@@ -340,6 +340,7 @@ func (e *Executor) distillProveSteps(ctx context.Context, id string, self bool) 
 	}
 
 	covered := make(map[string]bool, len(rows))
+	var recalls []*persistence.ExecutionStepOutcome
 	for _, r := range rows {
 		if r == nil || r.TaskID != id {
 			return "taint_unreadable", errors.New("step-outcome read returned a row of another task")
@@ -355,12 +356,75 @@ func (e *Executor) distillProveSteps(ctx context.Context, id string, self bool) 
 			// nothing. One that carries agent fields is judged as a step.
 			continue
 		}
-		if reason := distillJudgeRow(r, tainted); reason != "" {
+		reason := distillJudgeRow(r, tainted)
+		if reason == distillNeedsRecall {
+			recalls = append(recalls, r)
+			reason = ""
+		}
+		if reason != "" {
 			return reason, nil
 		}
 		covered[r.ExecutionID+"\x00"+r.StepID] = true
 	}
+	if reason, err := e.distillJudgeRecalls(ctx, id, recalls); reason != "" {
+		return reason, err
+	}
 	return distillCoverage(execs, id, covered)
+}
+
+// distillNeedsRecall is distillJudgeRow's answer for a step whose only taint
+// is memory_search: the step is judged by what its recalls returned.
+const distillNeedsRecall = "\x00needs_recall"
+
+// distillThirdPartyClass reports whether a recalled chunk's class makes the
+// recall third-party: web text, or a class nobody set (taint-lineage design
+// §16.2). First-party is every other known class.
+func distillThirdPartyClass(class string) bool {
+	switch class {
+	case "", "unclassified", "external_fetch":
+		return true
+	}
+	return false
+}
+
+// distillJudgeRecalls judges each memory_search step of task id by the chunks
+// its recalls returned (taint-lineage design §16, GitHub #858). One read per
+// task. A step with no matching recall row, a deleted chunk, or a third-party
+// class refuses; a recall that returned nothing fed nothing.
+func (e *Executor) distillJudgeRecalls(ctx context.Context, id string, steps []*persistence.ExecutionStepOutcome) (string, error) {
+	if len(steps) == 0 {
+		return "", nil
+	}
+	if e.recallChunks == nil {
+		return "memory_unaudited", nil
+	}
+	chunks, err := e.recallChunks.StepRecallChunks(ctx, id)
+	if err != nil {
+		return "taint_unreadable", err
+	}
+	byStep := make(map[string][]persistence.StepRecallChunk, len(chunks))
+	for _, c := range chunks {
+		if c.ExecutionID == "" || c.StepID == "" {
+			continue // a recall row without its step matches no step
+		}
+		k := c.ExecutionID + "\x00" + c.StepID
+		byStep[k] = append(byStep[k], c)
+	}
+	for _, r := range steps {
+		got, ok := byStep[r.ExecutionID+"\x00"+r.StepID]
+		if !ok {
+			return "memory_unaudited", nil
+		}
+		for _, c := range got {
+			if c.ChunkID == "" {
+				continue
+			}
+			if !c.Found || distillThirdPartyClass(c.Class) {
+				return "third_party_memory", nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // distillJudgeRow proves one non-annotation step row, or names why not.
@@ -380,7 +444,7 @@ func distillJudgeRow(r *persistence.ExecutionStepOutcome, tainted string) string
 			TaskID: r.TaskID, RequiresReview: r.RequiresReview, UntrustedSources: r.UntrustedSources}) {
 			return tainted
 		}
-		return ""
+		return distillNeedsRecall
 	}
 	if r.ToolCallsUsed == nil {
 		// No parsed tool audit: a step that called nothing cannot be told

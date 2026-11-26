@@ -146,8 +146,8 @@ func TestInitChatRouter_OllamaCloudAsDefault(t *testing.T) {
 // TestResolveOllamaCloudEndpoint verifies the baked-in default and the
 // override path.
 func TestResolveOllamaCloudEndpoint(t *testing.T) {
-	assert.Equal(t, "https://ollama.com/v1", resolveOllamaCloudEndpoint(""))
-	assert.Equal(t, "https://proxy.internal/v1", resolveOllamaCloudEndpoint("https://proxy.internal/v1"))
+	assert.Equal(t, "https://ollama.com/v1", chat.OllamaCloudEndpoint(""))
+	assert.Equal(t, "https://proxy.internal/v1", chat.OllamaCloudEndpoint("https://proxy.internal/v1"))
 }
 
 // TestMergeWithDefaultRoutes_OllamaCloudExplicitRouteWinsOverGptDefault

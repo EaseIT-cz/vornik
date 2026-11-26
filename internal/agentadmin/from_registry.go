@@ -16,6 +16,7 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 		MonthlyUSD: p.Budget.MonthlyHardUSD, DefaultWorkflowID: p.DefaultWorkflowID,
 		// Loaded back so a verb that re-renders the project keeps it (§6.9).
 		MaxConcurrentTasks: p.MaxConcurrentTasks,
+		SharedMemory:       p.Memory.SharedWithNamespace, // part 24 §24.6
 		Secrets:            append([]string(nil), p.Permissions.Secrets...), Loaded: p, LoadedSwarm: sw,
 	}
 	ps.Swarm.ID = p.SwarmID

@@ -154,6 +154,19 @@ var firstPartyBuiltins = map[string]struct{}{
 	"task_done":   {},
 }
 
+// FirstPartyBuiltins returns the first-party allowlist, sorted. The gate
+// verdict pin (TestGateVerdicts_858, taint-lineage design §16.3) iterates it,
+// so a tool added here fails that test until its verdict in every gate is
+// written down.
+func FirstPartyBuiltins() []string {
+	out := make([]string, 0, len(firstPartyBuiltins))
+	for k := range firstPartyBuiltins {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // urlRe extracts the first http(s) URL from a tool input (best-effort ref for
 // fetch/scrape tools).
 var urlRe = regexp.MustCompile(`https?://[^\s"'<>)\]}]+`)

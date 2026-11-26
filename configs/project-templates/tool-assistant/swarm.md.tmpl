@@ -4,6 +4,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Routes ad-hoc tasks through the adaptive workflow."
     model: "{{.llmModel}}"
     runtime:
@@ -23,6 +24,7 @@ roles:
         - "memory_search"
 
   - name: "dispatcher"
+    modelTier: "complex"
     description: "Handles chat conversations for this project and uses the attached MCP tools."
     model: "{{.llmModel}}"
     runtime:

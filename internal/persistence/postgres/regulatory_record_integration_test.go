@@ -27,7 +27,12 @@ func TestRegulatoryRecord_ListRequestsPagesEveryStateNewestFirst(t *testing.T) {
 	if err := repo.CreateSubject(ctx, datasubject.Subject{ID: subj, DisplayName: "fixture"}); err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Second)
+	// Microsecond, Postgres's precision, not second: two runs in one second
+	// (-count=2, or a rerun against the persistent integration database)
+	// shared opened_at, and the id DESC tiebreaker interleaved the earlier
+	// run's rows with this run's (GitHub #897). Each run now sorts strictly
+	// newer than every earlier run; its own three rows still share one value.
+	at := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Microsecond)
 	ids := []string{uniqueSuffix("rq-a"), uniqueSuffix("rq-b"), uniqueSuffix("rq-c")}
 	for i, id := range ids {
 		state := datasubject.StateOpen
@@ -103,7 +108,12 @@ func TestRegulatoryRecord_IncidentListPagesEveryStateNewestFirst(t *testing.T) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
 	repo := NewIncidentRepository(db.DB)
-	at := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Second)
+	// Microsecond, Postgres's precision, not second: two runs in one second
+	// (-count=2, or a rerun against the persistent integration database)
+	// shared opened_at, and the id DESC tiebreaker interleaved the earlier
+	// run's rows with this run's (GitHub #897). Each run now sorts strictly
+	// newer than every earlier run; its own three rows still share one value.
+	at := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Microsecond)
 	ids := []string{uniqueSuffix("inc-a"), uniqueSuffix("inc-b"), uniqueSuffix("inc-c")}
 	for _, id := range ids {
 		if err := repo.Create(ctx, incident.Incident{ID: id, State: incident.StateDetected, BecameAwareAt: at}); err != nil {

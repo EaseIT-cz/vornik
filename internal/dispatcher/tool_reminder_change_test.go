@@ -812,3 +812,7 @@ func TestUpdateReminderTool_CarryForwardIgnoresStaleFireAt(t *testing.T) {
 		t.Fatalf("update = %+v", repo.updates)
 	}
 }
+
+func (r *reminderRepoForTools) MarkAttemptFailed(context.Context, string, string, persistence.ReminderAttemptOutcome) error {
+	return nil
+}

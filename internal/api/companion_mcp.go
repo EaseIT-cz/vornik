@@ -139,6 +139,10 @@ func (s *Server) CompanionMCPHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
+	// Before the body is read, so a refusal costs no read (design 26 §4.2).
+	if s.companionKeyRateLimited(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, companionMCPMaxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -883,6 +887,15 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 // AuthMiddleware), looks up the APIKey row, and verifies it carries
 // companion scope. Returned errors are operator-readable.
 func (s *Server) resolveCompanionKey(r *http.Request) (*persistence.APIKey, error) {
+	// The chain's row first (GitHub #792, design 27 §C3): a GitHub Actions
+	// token is served as its trust's key, and its raw bearer is a JWT that no
+	// hash would find.
+	if row := a2aKeyRow(r); row != nil {
+		if row.ClientKind == "" {
+			return nil, errors.New("bearer token is not a companion-scoped key")
+		}
+		return row, nil
+	}
 	if s.apiKeyRepo == nil {
 		return nil, errors.New("companion MCP server not wired (api-key repo missing)")
 	}

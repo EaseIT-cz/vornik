@@ -134,6 +134,7 @@ func (s *Server) applyConfigEdit(reason string) reloadResult {
 
 func (s *Server) markRestartPending(reason string) {
 	s.restartPending.mark(reason, time.Now())
+	s.bumpRestartGeneration()
 	// Observability: an edit was saved to disk but not applied live (reloader
 	// busy/wedged/slow, or activation gated/failed). Correlates the banner
 	// with the specific operation for debugging (companion review 2026-07-06).
@@ -194,4 +195,24 @@ func (s *Server) restartBanner() restartBannerView {
 		v.Since = since.Format("15:04 MST")
 	}
 	return v
+}
+
+// RestartGenerationBumper is the persisted restart generation (GitHub #799,
+// operations-API design §6.13 G1).
+type RestartGenerationBumper interface{ Bump() error }
+
+// WithRestartGeneration wires the counter every restart-pending mark bumps.
+func WithRestartGeneration(g RestartGenerationBumper) ServerOption {
+	return func(s *Server) { s.restartGen = g }
+}
+
+// bumpRestartGeneration counts a mark. A failed write is logged and the mark
+// stands: the control plane then judges that restart by its older rule.
+func (s *Server) bumpRestartGeneration() {
+	if s.restartGen == nil {
+		return
+	}
+	if err := s.restartGen.Bump(); err != nil {
+		s.logger.Error().Err(err).Msg("restart generation not counted; the control plane will judge this restart by restart_pending alone")
+	}
 }

@@ -12,7 +12,8 @@ import (
 // initToolAuditRedaction wraps every repository the redaction seam covers so
 // each writer's rows are scanned before they are persisted: tool_audit_log, and
 // the content stores — chat_audit_log with chat_system_prompts, step_prompts,
-// task_messages and execution_step_outcomes (its hallucination_signals).
+// task_messages, execution_step_outcomes (its hallucination_signals),
+// memory_retrieval_audit and autonomy_evaluations (its proposed_prompt, #602).
 //
 // MUST run after the repos exist and BEFORE any consumer captures them — the
 // same ordering constraint initLogship documents for its audit decorators. A
@@ -60,7 +61,7 @@ func (c *Container) initToolAuditRedaction() {
 	} else {
 		d, a, err := buildSecretsDetector(c.Config.Secrets)
 		if err != nil || d == nil {
-			c.Logger.Error().Err(err).Msg("secrets: redaction seams NOT scanning — detector failed to construct; tool_audit_log, chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes and memory_retrieval_audit rows may persist plaintext credentials")
+			c.Logger.Error().Err(err).Msg("secrets: redaction seams NOT scanning — detector failed to construct; tool_audit_log, chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes, memory_retrieval_audit and autonomy_evaluations rows may persist plaintext credentials")
 			reason = auditredact.ReasonDetectorUnavailable
 		} else {
 			detector, actions = d, a
@@ -135,6 +136,7 @@ func (c *Container) wireContentSeams(reason auditredact.Reason, detector secrets
 	c.wireTaskMessageSeam(reason, detector)
 	c.wireStepOutcomeSeam(reason, detector)
 	c.wireRetrievalAuditSeam(reason, detector)
+	c.wireAutonomyEvaluationSeam(reason, detector)
 }
 
 // wireRetrievalAuditSeam installs (or upgrades) the decorator over
@@ -160,6 +162,31 @@ func (c *Container) wireRetrievalAuditSeam(reason auditredact.Reason, detector s
 	}
 	ra.SetMetrics(c.auditRedactMetrics)
 	c.repos.MemoryRetrievalAudit = ra
+}
+
+// wireAutonomyEvaluationSeam installs (or upgrades) the decorator over
+// autonomy_evaluations, whose proposed_prompt column is the prompt an
+// observe-mode tick would have submitted (design 11, amendment 2026-11-20,
+// B4; GitHub #602). Wired before initAutonomy, so the manager writes through it.
+func (c *Container) wireAutonomyEvaluationSeam(reason auditredact.Reason, detector secrets.Detector) {
+	base := c.repos.AutonomyEvaluations
+	if base == nil {
+		return
+	}
+	if existing, ok := base.(*auditredact.AutonomyEvaluations); ok {
+		if keepExisting(existing, reason) {
+			return
+		}
+		base = existing.Inner()
+	}
+	var ae *auditredact.AutonomyEvaluations
+	if reason == auditredact.ReasonNone {
+		ae = auditredact.NewAutonomyEvaluations(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		ae = auditredact.NewAutonomyEvaluationsBypassed(base, reason, &c.Logger)
+	}
+	ae.SetMetrics(c.auditRedactMetrics)
+	c.repos.AutonomyEvaluations = ae
 }
 
 // wireStepOutcomeSeam installs (or upgrades) the decorator over
@@ -301,6 +328,7 @@ func (c *Container) redactionSeamsState() (auditredact.Reason, []string) {
 		{auditredact.StoreTaskMessages, c.repos.Messages != nil, asSeam(c.repos.Messages)},
 		{auditredact.StoreExecutionStepOutcomes, c.repos.StepOutcomes != nil, asSeam(c.repos.StepOutcomes)},
 		{auditredact.StoreMemoryRetrievalAudit, c.repos.MemoryRetrievalAudit != nil, asSeam(c.repos.MemoryRetrievalAudit)},
+		{auditredact.StoreAutonomyEvaluations, c.repos.AutonomyEvaluations != nil, asSeam(c.repos.AutonomyEvaluations)},
 	}
 	worst := auditredact.ReasonNone
 	var stores []string

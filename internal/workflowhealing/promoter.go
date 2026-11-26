@@ -11,8 +11,9 @@ package workflowhealing
 //  2. APPROVES the linked memetic WorkflowProposal (pending → approved)
 //     so the existing apply path's approved-only guard is satisfied —
 //     we do NOT write a second apply path;
-//  3. REUSES the memetic Applier (write WORKFLOW.md → validate → commit
-//     → hot-reload → proposal applied) — the same code the operator
+//  3. REUSES the memetic Applier (write WORKFLOW.md → validate →
+//     hot-reload → proposal applied; no git commit since 2026-09-26, the
+//     process-spawn law) — the same code the operator
 //     review UI calls;
 //  4. flips the candidate to promoted (stamps promoted_by/promoted_at).
 //
@@ -90,12 +91,12 @@ type WorkflowLookup interface {
 // ProposalApplier is the narrow seam over the memetic apply path the
 // Promoter reuses. Production wires this to *memetic.Applier.Apply; the
 // signature is identical so the service layer passes the Applier
-// directly. The Promoter NEVER reimplements write/validate/commit/reload
+// directly. The Promoter NEVER reimplements write/validate/reload
 // — it only calls through here.
 type ProposalApplier interface {
 	// Apply runs the approved-proposal apply turn: write WORKFLOW.md to
-	// both trees, validate, git-commit, hot-reload, stamp the proposal
-	// applied. Returns the updated proposal row. Errors propagate
+	// both trees, validate, hot-reload, stamp the proposal applied (the
+	// replaced file is kept on the row for rollback; no git commit). Returns the updated proposal row. Errors propagate
 	// (memetic.ErrProposalNotApproved, persistence.ErrNotFound, etc.).
 	Apply(ctx context.Context, proposalID, decidedBy string) (*persistence.WorkflowProposal, error)
 }
@@ -257,7 +258,7 @@ func (p *Promoter) Promote(ctx context.Context, candidateID, promotedBy string) 
 	}
 
 	// 2. Reuse the memetic apply path. This is the ONLY production
-	// mutation, and it runs the existing write→validate→commit→reload.
+	// mutation, and it runs the existing write→validate→reload.
 	if _, aerr := p.applier.Apply(ctx, cand.ProposalID, promotedBy); aerr != nil {
 		return nil, fmt.Errorf("workflowhealing.Promote: apply proposal %s: %w", cand.ProposalID, aerr)
 	}
@@ -292,8 +293,11 @@ func (p *Promoter) Promote(ctx context.Context, candidateID, promotedBy string) 
 }
 
 // Reject is the operator's "no" — it flips a non-terminal candidate to
-// rejected without touching the proposal or production. Invoked only by
-// the operator reject endpoint.
+// rejected without touching production. Its linked proposal, when still
+// pending, is rejected too: a pending proposal holds the workflow's one
+// pending slot, and a rejected candidate holding it blocked every later
+// candidate for the workflow (GitHub #921). Invoked by the operator reject
+// endpoint and by the bench autopilot after a failed trial.
 //
 //   - candidate missing → ErrCandidateNotFound;
 //   - candidate already terminal → ErrCandidateTerminal.
@@ -316,6 +320,7 @@ func (p *Promoter) Reject(ctx context.Context, candidateID string) (*persistence
 	if err := p.candidates.Reject(ctx, candidateID); err != nil {
 		return nil, fmt.Errorf("workflowhealing.Reject: mark candidate rejected: %w", err)
 	}
+	p.releaseProposal(ctx, cand)
 
 	p.log.Info().
 		Str("candidate_id", candidateID).
@@ -328,4 +333,22 @@ func (p *Promoter) Reject(ctx context.Context, candidateID string) (*persistence
 		return cand, nil
 	}
 	return updated, nil
+}
+
+// releaseProposal rejects a rejected candidate's proposal when it is still
+// pending (GitHub #921). Best effort: the candidate is already rejected, and
+// a proposal that cannot be released is logged, never a failed rejection.
+func (p *Promoter) releaseProposal(ctx context.Context, cand *persistence.HealingCandidate) {
+	if p.proposals == nil || cand.ProposalID == "" {
+		return
+	}
+	prop, err := p.proposals.Get(ctx, cand.ProposalID)
+	if err != nil || prop == nil || prop.Status != persistence.WorkflowProposalStatusPending {
+		return
+	}
+	if err := p.proposals.Decide(ctx, cand.ProposalID, persistence.WorkflowProposalStatusRejected, "workflowhealing",
+		"its healing candidate "+cand.ID+" was rejected"); err != nil {
+		p.log.Warn().Err(err).Str("candidate_id", cand.ID).Str("proposal_id", cand.ProposalID).
+			Msg("workflowhealing: the rejected candidate's proposal stays pending; it blocks new candidates for the workflow until it is decided")
+	}
 }

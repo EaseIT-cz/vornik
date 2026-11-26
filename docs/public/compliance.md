@@ -1,6 +1,6 @@
 # Compliance status
 
-**Last updated:** 16 November 2026
+**Last updated:** 23 November 2026
 
 Where Vornik stands on the EU AI Act and GDPR, including what is not done.
 
@@ -10,7 +10,7 @@ Where Vornik stands on the EU AI Act and GDPR, including what is not done.
 | **EU AI Act Art 50(2)** (machine-readable marking) | 🟢 Built: signed marks, a ledger and public detection; due 2 Dec 2026 under transitional relief |
 | **EU AI Act Art 4** (AI literacy) | 🟢 Documentation published for operators |
 | **EU AI Act high-risk (Annex III)** | ⚪ Not applicable today; obligations begin 2 Dec 2027 |
-| **GDPR, technical measures** | 🟡 In place, except that per-person rights reach only records linked to that person (see the gaps) |
+| **GDPR, technical measures** | 🟡 In place, except that per-person rights reach only records linked to that person, and erasure needs PostgreSQL (see the gaps) |
 | **GDPR, documentation** | 🟢 Templates for the record of processing, DPA and DPIA, and a statement of Vornik's own measures; ask for them |
 
 **We do not claim to be "GDPR compliant".** In a self-hosted deployment you
@@ -19,7 +19,8 @@ backups, access review) are yours.
 
 ## Self-hosting
 
-- Your data lives in your PostgreSQL, on your infrastructure.
+- Your data lives in your database (PostgreSQL, or SQLite for small
+  installs), on your infrastructure.
 - Data leaves your network only to services you configure: model providers,
   chat platforms, forges, MCP servers. With local models and no external
   services, nothing leaves.
@@ -77,36 +78,55 @@ such a deployment.
 
 ### In place (shipped code)
 
-- **Erasure.** Project-scoped hard deletion across all tables. Per-person
-  erasure with a preview: records only about that person are deleted; shared
-  memory records are redacted and re-embedded. Chunk-level eviction leaves a
-  tombstone, so a deletion can be evidenced.
+- **Erasure.** Project-scoped hard deletion across all tables, including the
+  cached embeddings of the project's memory. Per-person erasure with a
+  preview: records only about that person are deleted; shared memory records
+  are redacted and re-embedded. Chunk-level eviction leaves a tombstone, so a
+  deletion can be evidenced. Each run of an erasure, rectification or
+  restriction keeps its own report; a re-run adds to the stored report
+  instead of replacing it, so a request's whole history stays evidenced.
+  Per-person erasure and rectification need PostgreSQL; on SQLite they are
+  refused by name.
+- **Requests.** `vornikctl subject` records each request, its verification
+  and its one-month deadline (Art 12(3)), on PostgreSQL and SQLite. The
+  doctor warns nine days before a deadline.
 - **Retention.** A sweeper with per-table and per-project windows and
   evidence floors. **Off by default**, so an upgrade never deletes data: you
-  turn it on and choose the windows. `vornikctl doctor` warns while personal
-  data is kept indefinitely.
+  turn it on and choose the windows, starting from a recommended profile.
+  Once it is on, a class with no window of its own is pruned on its
+  compiled default, which `vornikctl doctor` lists. The doctor warns while
+  personal data is kept indefinitely.
 - **Breach handling.** A breach ledger (`vornikctl incident`): the 72-hour
   clock runs from awareness; the authority and data-subject thresholds are
-  asked separately.
+  asked separately. PostgreSQL only; SQLite: not yet.
 - **Purpose limitation.** Memory chunks carry a sensitivity and purpose
-  policy, evaluated on every retrieval; block decisions are kept for a year.
+  policy, evaluated on every retrieval; with retention on, block decisions
+  are kept for a year by default. Autonomy's proposals, whose prompts can
+  name a person, expire with the tool-audit window (`tool_audit_days`) and
+  are listed in the record of processing.
 - **Accountability.** Audit trails for tool calls, chat, retrieval and
   ingest.
 - **Access control.** User accounts, per-project scoping, API keys; OIDC
   single sign-on with group permissions in the Enterprise Edition.
 
-### Not in place
+### Gaps
 
 | Gap | Consequence | Status |
 |---|---|---|
 | **Per-person rights are partial** | `vornikctl subject` handles access, portability, erasure, rectification (Art 16) and restriction (Art 18), but only over records linked to that person. Rectification corrects memory records and knowledge-graph entities. Restriction withholds memory records and knowledge-graph entities with their relations; transcripts, profiles and files stay in use, and the graph extractor can still match a new mention against a restricted name. A record that mentions someone but was never linked to them is not reached | Rectification and restriction shipped 2026-10-12; limits in §8 of the DPA template |
 | **Erasure in conversation transcripts** | In a multi-person conversation, the person's own messages are replaced by a dated removal note and their identifiers masked elsewhere. What remains in others' messages is kept only on a ground the operator assesses per request. A record a running task still uses is deferred, and the request is reported as not fully actioned | Shipped 2026-10-30; limits in §8 of the DPA template |
-| **Retention off by default** | Personal data is kept indefinitely until you enable the sweeper | Recommended profile shipped; `vornikctl doctor` warns |
-| **Record of processing (Art 30)** | As controller, you keep your own | Template with a worked example; ask for it |
-| **DPIA (Art 35)** | Yours to perform as controller where it is triggered | Template, and a statement of Vornik's own measures (Art 32); ask for them |
-| **Data processing agreement (Art 28)** | Needed only where we process personal data for you (for example, support access) | Template meeting Art 28(3); ask for it |
+| **Retention off by default** | Personal data is kept indefinitely until you enable the sweeper. Cached search queries, which often name a person, are reached by no erasure; only the `embedding_cache_days` window removes them | Recommended profile shipped; `vornikctl doctor` warns |
+| **SQLite installs** | Per-person erasure, rectification and the breach ledger need PostgreSQL. On SQLite a request can be recorded, verified, refused and tracked, but not executed by the software | Erasure and rectification are PostgreSQL-only by design; the breach ledger on SQLite is planned |
 
 If you are evaluating Vornik for personal data at scale, weigh the first row.
+
+### Yours as controller, with our templates
+
+| Duty | What we provide |
+|---|---|
+| **Record of processing (Art 30)** | Template with a worked example; ask for it |
+| **DPIA (Art 35)**, where it is triggered | Template, and a statement of Vornik's own measures (Art 32); ask for them |
+| **Data processing agreement (Art 28)**, needed only where we process personal data for you (for example, support access) | Template meeting Art 28(3); ask for it |
 
 ### Sub-processors
 
@@ -125,4 +145,4 @@ was sent.
 Security issues: [security](security.md). Compliance and data protection:
 **enterprise@vornik.io**.
 
-<!-- summary-reviewed-through: 2026.11.7 -->
+<!-- summary-reviewed-through: 2026.11.8 -->

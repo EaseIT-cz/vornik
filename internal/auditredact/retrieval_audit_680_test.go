@@ -34,6 +34,9 @@ func (c *captureRetrievalAudit) List(context.Context, persistence.MemoryRetrieva
 func (c *captureRetrievalAudit) A2AChunksByCallerKey(context.Context, time.Time) ([]persistence.A2AKeyRetrieval, error) {
 	return nil, nil
 }
+func (*captureRetrievalAudit) StepRecallChunks(context.Context, string) ([]persistence.StepRecallChunk, error) {
+	return nil, nil
+}
 
 func TestRetrievalAudit680_RedactsTheQuery(t *testing.T) {
 	inner := &captureRetrievalAudit{}

@@ -130,6 +130,8 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `runtime.agent_llm.max_tokens` | int | Max output tokens per call. | — |
 | `runtime.agent_llm.timeout` | string | Bound on a single LLM call from inside an agent. | — |
 | `runtime.agent_llm.tool_result_max_bytes` | int | Max bytes of a tool result fed back to the model (0 = agent default 256 KiB). | — |
+| `runtime.agent_llm.tiers` | map | modelTier -> model and fallback for roles that name a tier. | — |
+| `runtime.agent_llm.roles` | map | "<swarm>/<role>" -> model and fallback, ahead of the tier map. | — |
 | `runtime.agent_llm.health.enabled` | bool | Activate the model-health circuit breaker (default on; false disables). | — |
 | `runtime.agent_llm.health.window` | string | Rolling failure window, e.g. 60s (default 60s). | — |
 | `runtime.agent_llm.health.min_samples` | int | Minimum in-window failures before the breaker can trip (default 5). | — |
@@ -193,7 +195,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `retention.enabled` | bool | Turn the background sweeper on. | — |
 | `retention.interval` | string | How often the sweeper runs. | — |
 | `retention.task_llm_usage_days` | int | Days to keep per-task LLM usage rows. | — |
-| `retention.tool_audit_days` | int | Days to keep tool-call audit rows and memory recall audit rows; clamped up to tool_audit_floor_days. | — |
+| `retention.tool_audit_days` | int | Days to keep tool-call audit rows, memory recall audit rows and autonomy evaluation rows; clamped up to tool_audit_floor_days. | — |
 | `retention.tool_audit_floor_days` | int | Minimum days to keep tool-call audit rows (0 = 180, six months). | — |
 | `retention.tool_audit_floor_override` | bool | Allow tool_audit_floor_days below six months (logs a warning). | — |
 | `retention.tool_audit_floor_override_basis` | string | Why six months does not apply (a law requiring less, or not a high-risk deployment); required for the override. | — |
@@ -202,7 +204,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `retention.artifacts_days` | int | Days to keep artifacts. | — |
 | `retention.response_cache_days` | int | Days to keep cached LLM responses (30d recommended on busy deployments). | — |
 | `retention.execution_ratings_days` | int | Days to keep execution ratings. 0 means the 400-day default, not forever. | — |
-| `retention.embedding_cache_days` | int | Days to keep cached embeddings before evicting cold entries (0 = keep forever; 30d recommended if the table grows large). | — |
+| `retention.embedding_cache_days` | int | Days to keep a cached embedding after its last use (0 = keep forever). Set it wherever personal data is processed: cached recall queries often name a person and no erasure reaches them (30 in the recommended profile). Postgres only. | — |
 | `retention.blackbox_trace_cache_days` | int | Days to keep assembled black-box traces (0 = 1 day, the cache TTL). | — |
 | `retention.project_gists_days` | int | Days a project gist or its narrative may go unrefreshed before it is removed (0 = 7). | — |
 | `retention.upgrade_dump_keep` | int | Upgrade database dumps kept at most, newest first (0 = 2). | — |
@@ -263,6 +265,9 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `api.rate_limit.per_ip.rps` | int | Per-IP sustained request rate (unauthenticated backstop). | — |
 | `api.rate_limit.per_ip.burst` | int | Per-IP burst capacity. | — |
 | `api.rate_limit.per_ip.trusted_proxies` | list | Deprecated: use server.real_ip.trusted_proxies. CIDRs/IPs trusted to set X-Forwarded-For. | — |
+| `api.rate_limit.companion_key.rps` | int | Default per-key request rate for companion keys with no limit of their own (0 = 5 per second). | — |
+| `api.rate_limit.companion_key.burst` | int | Default per-key burst for companion keys with no limit of their own (0 = 50). | — |
+| `api.rate_limit.companion_key.off` | bool | Turn the default companion-key limit off (the memory benchmark's daemon); a key's own row limit still applies. | — |
 
 ## a2a
 
@@ -608,7 +613,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `agent_admin.default_project_budget_usd` | float | Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device. | — |
 | `agent_admin.namespace_budget_usd` | float | Ceiling on the sum of an agent's project budgets until a device approves more (default 10). | — |
 | `agent_admin.agent_image` | string | Runtime image of the roles an agent defines (default the standard agent image). | — |
-| `agent_admin.private_api_hosts` | list | Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed. | — |
+| `agent_admin.private_api_hosts` | list | Intranet hosts an agent project's approved API or MCP server may reach on a private (RFC 1918, ULA or CGNAT 100.64.0.0/10) address. Each item is a host name or an IP literal, either with :port; an IPv6 literal takes its port in brackets. Hosts are compared without case or a trailing dot. The URL must be https, and an item with a port covers that port only. An item may instead be a mapping. host is as above. addresses lists CIDRs or addresses: every dial of the host must resolve inside them, public or private. projects lists the agent project IDs the item serves; absent, it serves every agent project, so name projects when more than one agent project exists. A listed host never reaches loopback, link-local or a metadata address, which cannot be listed. Each API or server still needs its approval on an approver device, which records the grant. Read at daemon start. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed. | — |
 | `agent_admin.models` | list | Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue). | — |
 | `agent_admin.max_concurrent_tasks` | int | Highest maxConcurrentTasks update_project may set on an agent project (default 2, below the scheduler's default cap of 4, so one project cannot take every slot). scheduler.max_concurrent_tasks still caps all projects together. Raising a project's value needs approval on an approver device. | — |
 | `agent_admin.max_role_tokens` | int | Highest max_tokens define_swarm may set on an agent role (default 32768). A value above the role's current one needs approval on an approver device. | — |

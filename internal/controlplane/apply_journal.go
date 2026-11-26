@@ -411,7 +411,7 @@ func (e *ApplyEngine) abortWrites(ctx context.Context, row *persistence.ConfigAp
 // confirm the resolved generation (§1.3), then land the journal's terminal
 // state with the ledger in one transaction. Any failure reverts.
 func (e *ApplyEngine) verifyAndCommit(ctx context.Context, row *persistence.ConfigApplyJournal, p *persistence.ControlPlaneProposal, actor string, resolved []resolvedOp) error {
-	if rerr := e.reload(); rerr != nil {
+	if rerr := e.reload(row.ProposalID); rerr != nil {
 		if verr := e.revertJournaled(ctx, row, resolved, "reload rejected: "+rerr.Error()); verr != nil {
 			return verr
 		}
@@ -514,10 +514,9 @@ func (e *ApplyEngine) revertJournaled(ctx context.Context, row *persistence.Conf
 			return derr
 		}
 	}
-	if rerr := e.reload(); rerr != nil {
-		e.Logger.Error().Err(rerr).Str("journal_id", row.ID).
-			Msg("control-plane: CRITICAL reload of restored pre-images failed; last-known-good left on disk")
-	}
+	// A failure is logged and recorded by restoreReload (#859); the revert
+	// still completes, leaving the pre-images on disk.
+	_ = e.restoreReload(row.ProposalID)
 	if terr := e.Journal.Transition(ctx, row.ID, persistence.JournalStateReverting, persistence.JournalStateReverted,
 		persistence.JournalPatch{GenerationAfter: e.generation(), Terminal: true}); terr != nil {
 		return fmt.Errorf("journal →REVERTED: %w", terr)

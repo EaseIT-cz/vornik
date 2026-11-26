@@ -117,11 +117,14 @@ const (
 	// StoreMemoryRetrievalAudit counts memory_retrieval_audit Record writes,
 	// whose query column the seam scans (GitHub #680).
 	StoreMemoryRetrievalAudit = "memory_retrieval_audit"
+	// StoreAutonomyEvaluations counts autonomy_evaluations Record writes,
+	// whose proposed_prompt and reason columns the seam scans (GitHub #602).
+	StoreAutonomyEvaluations = "autonomy_evaluations"
 )
 
 // SeamStores lists every content store the seam family counts, in the order
 // the doctor reports them.
-var SeamStores = []string{StoreChatAuditLog, StoreChatSystemPrompts, StoreStepPrompts, StoreTaskMessages, StoreExecutionStepOutcomes, StoreMemoryRetrievalAudit}
+var SeamStores = []string{StoreChatAuditLog, StoreChatSystemPrompts, StoreStepPrompts, StoreTaskMessages, StoreExecutionStepOutcomes, StoreMemoryRetrievalAudit, StoreAutonomyEvaluations}
 
 // SeamCount is one store's census since boot.
 type SeamCount struct {

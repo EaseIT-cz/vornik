@@ -41,3 +41,9 @@ func SubjectStoreDialect() subjectstore.Dialect {
 func NewDataSubjectRepository(db *sql.DB) *subjectstore.Repository {
 	return subjectstore.New(db, SubjectStoreDialect())
 }
+
+// NewIncidentRepository builds the shared Art 33/34 breach ledger over a SQLite
+// handle (GitHub #475; GDPR design §4.21).
+func NewIncidentRepository(db *sql.DB) *subjectstore.IncidentRepository {
+	return subjectstore.NewIncidentRepository(db, SubjectStoreDialect())
+}

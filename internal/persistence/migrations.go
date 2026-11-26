@@ -10059,4 +10059,92 @@ UPDATE trading_funnel_candidates
 `,
 		Down: `SELECT 1;`,
 	},
+	{
+		Version: 260,
+		Name:    "companion_key_oidc_trusts",
+		// GitHub #792 (design 27 §C1): a companion key bound to one GitHub
+		// Actions workflow. Every claim column is an exact match; the claim
+		// set is unique (event_names stored sorted), because the token never
+		// names a key. Deleting the key removes its trusts. SQLite: the same
+		// table in schemaSQL.
+		Up: `
+CREATE TABLE IF NOT EXISTS companion_key_oidc_trusts (
+    id               TEXT PRIMARY KEY,
+    key_id           TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    issuer           TEXT NOT NULL,
+    audience         TEXT NOT NULL,
+    repository_id    BIGINT NOT NULL,
+    repository       TEXT NOT NULL,
+    ref              TEXT NOT NULL,
+    job_workflow_ref TEXT NOT NULL,
+    event_names      TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL,
+    created_by       TEXT NOT NULL,
+    last_used_at     TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_companion_key_oidc_trusts_claims ON companion_key_oidc_trusts
+    (issuer, audience, repository_id, repository, ref, job_workflow_ref, event_names);
+CREATE INDEX IF NOT EXISTS idx_companion_key_oidc_trusts_key ON companion_key_oidc_trusts (key_id);
+`,
+		Down: `DROP TABLE IF EXISTS companion_key_oidc_trusts;`,
+	},
+	{
+		Version: 261,
+		Name:    "autonomy_evaluations_proposed_prompt",
+		// GitHub #602 (design 11, amendment 2026-11-20, B7): an observe-mode
+		// WOULD_START row stores the prompt it would have submitted. Null for
+		// every other outcome. SQLite: schemaSQL plus sqliteAdditiveColumns.
+		Up:   `ALTER TABLE autonomy_evaluations ADD COLUMN IF NOT EXISTS proposed_prompt TEXT;`,
+		Down: `ALTER TABLE autonomy_evaluations DROP COLUMN IF EXISTS proposed_prompt;`,
+	},
+	{
+		Version: 262,
+		Name:    "reminders_reset_pending_attempt_counts",
+		// GitHub #861 (scheduled-reminders design §11 R6): error_count now
+		// counts the failed attempts of the current occurrence. Before, it
+		// accumulated across a recurring row's occurrences and across
+		// sweeps, so a pending row could start with fewer than three
+		// attempts. Data only; firing rows keep their count (they have
+		// failed). Reminders are Postgres-only (the SQLite repository refuses
+		// every call), so there is no SQLite counterpart. Down is a no-op:
+		// the old counts are not recoverable and nothing reads them.
+		Up:   `UPDATE dispatcher_reminders SET error_count = 0 WHERE status = 'pending' AND error_count <> 0;`,
+		Down: `SELECT 1;`,
+	},
+	{
+		Version: 263,
+		Name:    "instincts_retire_tool_swap_learned_from_words",
+		// GitHub #886 S4 (instinct layer design, amendment 2026-11-22): the
+		// tool-swap rule judged a tool error by words in its output, so a
+		// successful read of source code counted as one, and its instincts
+		// ("swapping off tool X resolved the step") rest on false evidence.
+		// Retire them; the fixed rule relearns any that hold. Data only;
+		// retired rows stay for audit. Down is a no-op: which rows were active
+		// before is not recorded.
+		Up: `UPDATE instincts SET status = 'retired', updated_at = NOW()
+		      WHERE domain = 'workflow' AND action LIKE 'swapping off tool %' AND status <> 'retired';`,
+		Down: `SELECT 1;`,
+	},
+	{
+		Version: 264,
+		Name:    "instincts_domain_comment_names_the_list",
+		// GitHub #887 (instinct tool-budget seam design, amendment
+		// 2026-11-23): the column comment listed five domains and missed
+		// budget. It now names the list in code, so a new domain needs no
+		// migration.
+		Up:   `COMMENT ON COLUMN instincts.domain IS 'one of persistence.InstinctDomains() (no CHECK: new domains land with a code change)';`,
+		Down: `COMMENT ON COLUMN instincts.domain IS 'recovery | cost | quality | retrieval | workflow';`,
+	},
+	{
+		Version: 265,
+		Name:    "task_creation_source_add_handover",
+		// GitHub #920 (agent-administered design part 24 §24.3 B2): a task an
+		// agent job's hand_over starts records where it came from. Idempotent;
+		// ADD VALUE only extends the enum and the value is not used in this
+		// migration, so it is transaction-safe on PostgreSQL 12+.
+		Up: `ALTER TYPE task_creation_source ADD VALUE IF NOT EXISTS 'HANDOVER';`,
+		// Postgres enum values cannot be removed; the extra label is harmless
+		// if a later version rolls back.
+		Down: ``,
+	},
 }

@@ -66,7 +66,9 @@ func filesMatching(t *testing.T, files []string, re *regexp.Regexp) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if re.Match(b) {
+		// The #888 pre-filter: a file without a literal every match needs
+		// cannot match; skipping it saves the instrumented regex scan.
+		if regexMayMatch(re, b) && re.Match(b) {
 			hit = append(hit, f)
 		}
 	}
@@ -76,24 +78,7 @@ func filesMatching(t *testing.T, files []string, re *regexp.Regexp) []string {
 
 func TestProvenancePrincipalWriters(t *testing.T) {
 	files := nonTestGoFiles(t)
-	for _, law := range []struct {
-		name    string
-		re      *regexp.Regexp
-		allowed map[string]bool
-	}{
-		{"an AUTONOMOUS task is created", regexp.MustCompile(`CreationSource:\s*persistence\.TaskCreationSourceAutonomous`),
-			map[string]bool{"internal/autonomy/manager.go": true}},
-		{"the autonomy principal is stamped", regexp.MustCompile(`actor\.Autonomy\b`),
-			map[string]bool{"internal/autonomy/manager.go": true}},
-		{"a COMPANION task is created", regexp.MustCompile(`(?:CreationSource|source):\s*persistence\.TaskCreationSourceCompanion`),
-			map[string]bool{"internal/api/companion_mcp.go": true, "internal/api/companion_broker.go": true}},
-		{"the operator-key principal is stamped", regexp.MustCompile(`"operator_key:"`),
-			map[string]bool{"internal/api/task_principal.go": true}},
-		// Review 6262 F2: a chat task's principal is set from the request's
-		// context in one place, never from a decoded field.
-		{"a chat task's principal is set", regexp.MustCompile(`CreatorActor:\s|\.CreatorActor\s*=[^=]`),
-			map[string]bool{"internal/dispatcher/tools.go": true}},
-	} {
+	for _, law := range provenancePrincipalLaws {
 		for _, f := range filesMatching(t, files, law.re) {
 			if !law.allowed[f] {
 				t.Errorf("%s in %s: only %v may (design 22, part 8b)", law.name, f, keys(law.allowed))
@@ -112,6 +97,7 @@ var keyMintSites = map[string]string{
 	"internal/ui/project_keys.go":                 "the operator's project key (admin UI): plain, trusted",
 	"internal/taskkeys/minter.go":                 "agent per-task and warm-pool keys: agent: names, never plain",
 	"internal/api/broker_schedule_fire.go":        "an in-memory judge principal (agent_admin), never stored",
+	"internal/api/broker_handover_fire_920.go":    "an in-memory judge principal (agent_admin), never stored; the scheduled-run rule (#920)",
 	"internal/service/agentadmin_agents.go":       "an in-memory reader principal (agent_admin), never stored",
 	"internal/service/agentadmin_read.go":         "an in-memory grant principal (agent_admin), never stored",
 	"internal/persistence/models.go":              "the type's own definition and helpers",
@@ -119,8 +105,7 @@ var keyMintSites = map[string]string{
 
 func TestKeyMintSitesTagTheirClass(t *testing.T) {
 	files := nonTestGoFiles(t)
-	re := regexp.MustCompile(`persistence\.APIKey\{|[^.\w]APIKey\{`)
-	found := filesMatching(t, files, re)
+	found := filesMatching(t, files, apiKeyMintPattern)
 	t.Logf("examined %d files; %d build an APIKey", len(files), len(found))
 	seen := map[string]bool{}
 	for _, f := range found {
@@ -161,3 +146,29 @@ func TestOperatorKeyPredicateIsOneValue(t *testing.T) {
 		}
 	}
 }
+
+// provenancePrincipalLaws: who may create a task of each source, or stamp each
+// principal (design 22, part 8b). Package-level so the #888 pre-filter check
+// can run each regex against its example line.
+var provenancePrincipalLaws = []struct {
+	name    string
+	re      *regexp.Regexp
+	example string
+	allowed map[string]bool
+}{
+	{"an AUTONOMOUS task is created", regexp.MustCompile(`CreationSource:\s*persistence\.TaskCreationSourceAutonomous`), "CreationSource: persistence.TaskCreationSourceAutonomous,",
+		map[string]bool{"internal/autonomy/manager.go": true}},
+	{"the autonomy principal is stamped", regexp.MustCompile(`actor\.Autonomy\b`), "by := actor.Autonomy",
+		map[string]bool{"internal/autonomy/manager.go": true}},
+	{"a COMPANION task is created", regexp.MustCompile(`(?:CreationSource|source):\s*persistence\.TaskCreationSourceCompanion`), "source: persistence.TaskCreationSourceCompanion,",
+		map[string]bool{"internal/api/companion_mcp.go": true, "internal/api/companion_broker.go": true}},
+	{"the operator-key principal is stamped", regexp.MustCompile(`"operator_key:"`), "p := \"operator_key:\" + id",
+		map[string]bool{"internal/api/task_principal.go": true}},
+	// Review 6262 F2: a chat task's principal is set from the request's
+	// context in one place, never from a decoded field.
+	{"a chat task's principal is set", regexp.MustCompile(`CreatorActor:\s|\.CreatorActor\s*=[^=]`), "task.CreatorActor = actor",
+		map[string]bool{"internal/dispatcher/tools.go": true}},
+}
+
+// apiKeyMintPattern finds a place that builds an APIKey row (a key mint site).
+var apiKeyMintPattern = regexp.MustCompile(`persistence\.APIKey\{|[^.\w]APIKey\{`)

@@ -64,6 +64,9 @@ func (h *FetchDiffHandler) Name() string { return "forge.fetch_diff" }
 // `diff` field for any structured consumer.
 func (h *FetchDiffHandler) Execute(ctx context.Context, in executor.SystemStepInput) (executor.SystemStepResult, error) {
 	const name = "forge.fetch_diff"
+	if h != nil && isCanaryTask(in.Task) {
+		return h.canaryDiffResult(in) // GitHub #873: generate, never fetch
+	}
 	if h == nil || h.resolver == nil {
 		return executor.SystemStepResult{}, errors.New(name + ": handler is missing required dependencies (resolver)")
 	}

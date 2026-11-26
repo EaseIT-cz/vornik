@@ -282,6 +282,13 @@ func refineAgentFailureOutcomeErr(err error) (stepoutcome.Outcome, string) {
 	if code := containerExitCodeFromError(err); code != nil && *code == stepoutcome.AgentExitMountUnusable {
 		return stepoutcome.Failed, stepoutcome.ClassAgentMountUnusable
 	}
+	// The step ended before its container ran (a task-input write, a
+	// dependency mount, a start error): read from the type, so the ledger
+	// row says so and the bench's provenance check can tell it from a step
+	// that ran without an image identity (GitHub #924).
+	if isContainerNotStarted(err) {
+		return stepoutcome.Failed, stepoutcome.ClassContainerStartFailed
+	}
 	return refineAgentFailureOutcome(errorBeforeLogTail(err.Error()))
 }
 
@@ -788,7 +795,8 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// 0o600 — task.json holds the step prompt + any inline
 	// secrets / credentials passed from project config.
 	if err := os.WriteFile(filepath.Join(inputDir, "task.json"), input, 0o600); err != nil {
-		return "", nil, fmt.Errorf("failed to write task input: %w", err)
+		// Before the container: the model was never asked (GitHub #924).
+		return "", nil, &containerNotStartedError{err: fmt.Errorf("failed to write task input: %w", err)}
 	}
 
 	// No mcp.json: agent MCP goes only through the daemon (mcp-bridge
@@ -810,6 +818,9 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// agent gave no model, with no override, runs on the operator's global
 	// model and is not the namespace's reach (round 3 F6).
 	if err := e.checkModelReach(ctx, task.ProjectID, roleConfig, effectiveModel); err != nil {
+		return "", nil, err
+	}
+	if err := e.checkManagedCatalogue(roleConfig, effectiveModel); err != nil {
 		return "", nil, err
 	}
 	// A warm container keeps the model it first started with, whatever the
@@ -1087,7 +1098,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		_ = e.runtime.RemoveContainer(cleanupCtx, containerID, true)
 		cleanupCancel()
-		return "", nil, markRetryable(fmt.Errorf("failed waiting for container: %w", err))
+		return "", nil, markRetryable(agentWaitError(ctx, stepID, err))
 	}
 	// Always persist artifacts, even on failure — the step's
 	// {step}-response.md contains diagnostic output. stepStart +
@@ -2066,32 +2077,9 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 	if effectiveModel == "" {
 		effectiveModel = e.config.AgentLLMEnv["VORNIK_LLM_MODEL"]
 	}
-	if effectiveModel != "" {
-		if limit, ok := e.config.ModelLimits[effectiveModel]; ok {
-			if limit.MaxTokens > 0 {
-				roleEnv["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(limit.MaxTokens)
-			}
-			if limit.ContextSize > 0 {
-				roleEnv["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(limit.ContextSize)
-			}
-		}
-	}
-	// Role-level explicit overrides win over everything.
-	if roleConfig.MaxTokens > 0 {
-		roleEnv["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(roleConfig.MaxTokens)
-	}
-	if roleConfig.ContextSize > 0 {
-		roleEnv["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(roleConfig.ContextSize)
-	}
-	// Counterfactual budget tightens max_tokens when present. The
-	// "override only LOWERS" rule applies here too — if the
-	// override is larger than the role's existing cap, ignore it.
-	if cfBudget := counterfactual.ExtractPayload(task.Payload).Budget; cfBudget.MaxTokens > 0 {
-		current, _ := strconv.Atoi(roleEnv["VORNIK_LLM_MAX_TOKENS"])
-		if current == 0 || cfBudget.MaxTokens < current {
-			roleEnv["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(cfBudget.MaxTokens)
-		}
-	}
+	// One implementation for both launch paths, so the warm path cannot
+	// drift from the ephemeral one (slice 1 code review of GitHub #869).
+	e.applyTokenLimits(roleEnv, effectiveModel, task, roleConfig)
 	injectCostEnv(roleEnv, e.pricing, effectiveModel)
 	if _, err := injectBudgetEnv(ctx, roleEnv, e.llmUsageRepo, plan.project, time.Now().UTC()); err != nil {
 		// Budget snapshot failed (e.g. transient DB error). The agent
@@ -2421,11 +2409,56 @@ func (e *Executor) revokeTaskKey(taskID string) {
 
 // waitForCompletion waits for the container to finish.
 func (e *Executor) waitForCompletion(ctx context.Context, containerID string, timeout time.Duration) (int, error) {
-	// Use context with timeout
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	// The step's own budget carries its cause, so the error can say which
+	// deadline fired (GitHub #837): this one, or the execution's wall clock.
+	waitCtx, cancel := context.WithTimeoutCause(ctx, timeout, &agentStepBudget{d: timeout})
 	defer cancel()
 
-	return e.runtime.WaitForExit(ctx, containerID, timeout)
+	exit, err := e.runtime.WaitForExit(waitCtx, containerID, timeout)
+	if err != nil {
+		// WaitForExit arms its own timer of the same length, which can fire
+		// before this one records its cause (review 47eb F1). A deadline
+		// while the caller's context is still live is the step's budget
+		// either way; the caller's own deadline (the wall clock) or a
+		// cancel leaves ctx done and keeps its own text.
+		var budget *agentStepBudget
+		if errors.As(context.Cause(waitCtx), &budget) ||
+			(errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil) {
+			return exit, &agentStepBudgetError{d: timeout, err: err}
+		}
+	}
+	return exit, err
+}
+
+// agentStepBudget is the cause of an agent step's own wait deadline.
+type agentStepBudget struct{ d time.Duration }
+
+func (b *agentStepBudget) Error() string {
+	return fmt.Sprintf("the step's %s time budget ran out", b.d)
+}
+
+// agentStepBudgetError marks a wait that ended on the step's own budget.
+type agentStepBudgetError struct {
+	d   time.Duration
+	err error
+}
+
+func (e *agentStepBudgetError) Error() string { return e.err.Error() }
+func (e *agentStepBudgetError) Unwrap() error { return e.err }
+
+// agentWaitError is the error an agent step's failed container wait reports
+// (GitHub #837, outcome-quality design amendment 2026-11-20). It names the
+// deadline that fired; the chain keeps context.DeadlineExceeded, so the step
+// and task classes do not move.
+func agentWaitError(ctx context.Context, stepID string, err error) error {
+	var budget *agentStepBudgetError
+	if errors.As(err, &budget) {
+		return fmt.Errorf("step %s ran out of its %s time budget (the container was stopped): %w", stepID, budget.d, err)
+	}
+	if wc := wallClockCauseOf(ctx); wc != nil && errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("step %s was stopped because %s (the container was stopped): %w", stepID, wc, err)
+	}
+	return fmt.Errorf("failed waiting for container: %w", err)
 }
 
 // allowedStagingRoots returns the host paths the artifact-staging code
@@ -3020,8 +3053,12 @@ func (e *Executor) dependencyMounts(task *persistence.Task, plan *executionPlan,
 // effective model's configured limits (whichever source chose the model),
 // then the role's explicit overrides, then a counterfactual budget, which may
 // only LOWER max_tokens (mirroring the warm-pool path).
-func (e *Executor) applyTokenLimits(envVars map[string]string, task *persistence.Task, roleConfig *registry.SwarmRole) {
-	if effectiveModel := envVars["VORNIK_LLM_MODEL"]; effectiveModel != "" {
+//
+// effectiveModel is passed in: the ephemeral path reads it from envVars, the
+// warm path computes it (its roleEnv carries only the delta, so a global model
+// is not in it). It also sets the reasoning level (GitHub #869).
+func (e *Executor) applyTokenLimits(envVars map[string]string, effectiveModel string, task *persistence.Task, roleConfig *registry.SwarmRole) {
+	if effectiveModel != "" {
 		if limit, ok := e.config.ModelLimits[effectiveModel]; ok {
 			if limit.MaxTokens > 0 {
 				envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(limit.MaxTokens)
@@ -3031,6 +3068,7 @@ func (e *Executor) applyTokenLimits(envVars map[string]string, task *persistence
 			}
 		}
 	}
+	setReasoningEnv(envVars, effectiveModel, e.config.ModelLimits, roleConfig)
 	if roleConfig.MaxTokens > 0 {
 		envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(roleConfig.MaxTokens)
 	}
@@ -3101,7 +3139,7 @@ func (e *Executor) agentEnv(ctx context.Context, task *persistence.Task, executi
 	if m := e.effectiveRoleModelForTask(task, roleConfig); m != "" {
 		envVars["VORNIK_LLM_MODEL"] = m
 	}
-	e.applyTokenLimits(envVars, task, roleConfig)
+	e.applyTokenLimits(envVars, envVars["VORNIK_LLM_MODEL"], task, roleConfig)
 	applyMemorySearchPolicyEnv(envVars, roleConfig)
 	if e.config.LogLevel != "" {
 		envVars["VORNIK_LOG_LEVEL"] = e.config.LogLevel
@@ -3223,5 +3261,26 @@ func applyMemorySearchPolicyEnv(env map[string]string, role *registry.SwarmRole)
 	}
 	if p.Limit > 0 {
 		env["VORNIK_MEM_LIMIT"] = strconv.Itoa(p.Limit)
+	}
+}
+
+// reasoningLevelFor resolves the agent's reasoning level (GitHub #869,
+// reasoning control design B2): the role's, else the effective model's
+// model_limits entry, else "" (nothing sent). The route's own setting, the
+// third tier, applies in the provider when the request carries no level.
+func reasoningLevelFor(model string, limits map[string]ModelLimit, role *registry.SwarmRole) string {
+	if role != nil && role.Reasoning != "" {
+		return role.Reasoning
+	}
+	return limits[model].Reasoning
+}
+
+// setReasoningEnv writes the resolved level as VORNIK_LLM_REASONING, which
+// the agent sends as reasoning_effort. It is the one helper both the warm and
+// the ephemeral launch paths call, so the two cannot drift; an unset level is
+// not written at all.
+func setReasoningEnv(env map[string]string, model string, limits map[string]ModelLimit, role *registry.SwarmRole) {
+	if level := reasoningLevelFor(model, limits, role); level != "" {
+		env["VORNIK_LLM_REASONING"] = level
 	}
 }

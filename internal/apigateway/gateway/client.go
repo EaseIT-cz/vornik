@@ -51,8 +51,12 @@ func New(baseURL, token string, reg apigateway.Registry, timeout time.Duration) 
 		return nil, fmt.Errorf("gateway base url has no host: %q", baseURL)
 	}
 	// DialGuard blocks loopback/private by default; the gateway is local, so the
-	// gateway host is the single explicit allowlist entry (design §5, C2).
-	guard := integrations.DialGuard{AllowedHosts: []string{u.Hostname()}}
+	// gateway host is the one loopback grant (design §5, C2). Amended
+	// 2026-11-24 (GitHub #168, review 4dca): it was an AllowedHosts entry,
+	// dialled with no address check, so the NAME localhost went wherever the
+	// resolver said (the #494 gap). LoopbackURLGuard reaches the host only at
+	// a loopback address, whatever its spelling.
+	guard := integrations.LoopbackURLGuard(baseURL, nil)
 	hc := guard.HTTPClient(timeout)
 	// Follow only same-origin redirects (design §5.2). GitHub #96 (2026-10-04
 	// review): CheckRedirect compared only Hostname(), so a 3xx to the same

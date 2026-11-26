@@ -24,6 +24,7 @@ var configWriterSites = map[string]string{
 	"internal/ui/model_provider_794.go":            "modelProviderPost probes unlocked, then holds configlock.LockAsWriter across the read, write, validate and reload (#794)",
 	"internal/api/setup_handlers.go":               "writeChatConfig and writeDispatcherProjectConfig hold configlock",
 	"internal/api/setup_memory_handlers.go":        "writeMemoryConfig holds configlock",
+	"internal/api/models_profiles_880.go":          "routeModelProfilePath holds configlock across the read, patch and commitConfig (#880)",
 	"internal/api/featuredoctor_enable_handler.go": "passes the writer to featuredoctor.ApplyEnable, which holds LockConfigFile (configlock)",
 	"internal/service/fixit_dispatch_adapter.go":   "passes the writer to featuredoctor.ApplyEnable, which holds LockConfigFile (configlock)",
 	"internal/integrations/save.go":                "Save holds LockConfigFile (configlock) before it builds the writer",

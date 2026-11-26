@@ -90,8 +90,19 @@ func fileWrite(env Env, raw json.RawMessage) string {
 	// file_edit refuses it, so a staged broker document (0444, broker design
 	// §18.7 F6) stays unchanged even for a privileged user (review
 	// 20261003-6fec item 1).
-	if st, err := root.Lstat(rel); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o222 == 0 {
+	st, statErr := root.Lstat(rel)
+	if statErr == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o222 == 0 {
 		return "ERROR: the file is read-only: " + resolved
+	}
+	// GitHub #843: the bytes the file already holds used to be rewritten and
+	// answered "OK: wrote", so a weak model wrote them again until the loop
+	// detector killed the run (18 of 196 calibration runs). Read only when
+	// the sizes match; a symlink or directory falls through to the write.
+	if statErr == nil && st.Mode().IsRegular() && st.Size() == int64(len(content)) {
+		if cur, err := root.ReadFile(rel); err == nil && string(cur) == content {
+			return fmt.Sprintf("OK: %s already holds exactly this content (%d bytes); nothing was written. "+
+				"Do not write it again: go on with your next step.", resolved, len(content))
+		}
 	}
 	if err := root.WriteFile(rel, []byte(content), 0o644); err != nil {
 		return "ERROR: " + err.Error()

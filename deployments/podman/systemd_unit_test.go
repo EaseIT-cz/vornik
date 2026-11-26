@@ -87,3 +87,33 @@ func TestUnitSurvivesALongDependencyOutage(t *testing.T) {
 		t.Error("vornik.service must disable the start rate limit so a long database outage does not wedge the unit in `failed`")
 	}
 }
+
+// TestUnitStartIsBoundedByReadiness — GitHub #898: under Type=simple systemd
+// counted the unit started when the process forked, so a boot load that hung
+// (a project file that was a named pipe) showed `active (running)` forever and
+// TimeoutStartSec bounded only ExecStartPre. Type=notify ends the start at the
+// daemon's READY=1, sent once its listeners serve. The e2e lane plays
+// systemd's half against the real binary (test/e2e/boot_notify_898_test.go).
+func TestUnitStartIsBoundedByReadiness(t *testing.T) {
+	if typ := serviceType(readUnit(t)); typ != "notify" {
+		t.Errorf("vornik.service is Type=%s; it must be Type=notify so TimeoutStartSec bounds the whole boot, not only ExecStartPre", typ)
+	}
+}
+
+// serviceType returns the Type= of the unit's [Service] section, or "simple"
+// (systemd's default) when it names none. A comment line never matches. The
+// e2e lane carries the same parser (test/e2e/boot_notify_898_test.go).
+func serviceType(unit string) string {
+	inService := false
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			inService = line == "[Service]"
+			continue
+		}
+		if v, ok := strings.CutPrefix(line, "Type="); ok && inService {
+			return strings.TrimSpace(v)
+		}
+	}
+	return "simple"
+}

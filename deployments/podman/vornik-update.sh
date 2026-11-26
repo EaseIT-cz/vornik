@@ -23,9 +23,8 @@
 #      (scripts/config-deploy.sh: adds missing files, adds new shipped model
 #      rows to an edited pricing.yaml without changing a line, brings a canonical file
 #      nobody edited up to the release's version, never changes one you
-#      edited or acknowledged), starts it. Because the unit is Type=notify,
-#      systemd only reports "ready" AFTER the DB migrations applied and health
-#      checks passed.
+#      edited or acknowledged), starts it. Under the shipped Type=notify unit
+#      the start waits for READY=1; see UPDATING.md step 5.
 #   6. Verifies /readyz, prints the DB migration version bump, runs the
 #      installed `vornikctl doctor` (bounded at 300 s; a finding is a warning,
 #      never a failed update).
@@ -661,7 +660,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Cutover: stop, install, start (Type=notify -> migrations apply on boot).
+# 5. Cutover: stop, install, start (migrations apply on boot; under Type=notify
+#    the start waits for READY=1).
 # ---------------------------------------------------------------------------
 log "Stopping $SERVICE"
 systemctl --user stop "$SERVICE"
@@ -686,9 +686,6 @@ if ! VORNIK_DEPLOY_REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)" VORNIK_CTL="$
   warn "  VORNIK_DEPLOY_REVISION=\$(git -C $REPO_DIR rev-parse HEAD) VORNIK_CTL=$BIN_DIR/vornikctl $REPO_DIR/scripts/config-deploy.sh $CONFIG_ROOT"
 fi
 
-log "Starting $SERVICE (auto-applies additive migrations)"
-systemctl --user start "$SERVICE"
-
 # The rollback's checkout line names the INSTALLED commit (§15.1); with none
 # known it prints how to find it, never a guess.
 rollback_checkout() {
@@ -701,6 +698,36 @@ rollback_checkout() {
   fi
 }
 
+# A cutover that did not come up: the journal, the rollback, and the exit.
+fail_cutover() {
+  warn "$1. Recent logs:"
+  journalctl --user -u "$SERVICE" -n 30 --no-pager || true
+  echo
+  warn "ROLLBACK:"
+  warn "  systemctl --user stop $SERVICE"
+  warn "  install -m0755 $BK/vornik.prev $BIN_DIR/vornik"
+  warn "  install -m0755 $BK/vornikctl.prev $BIN_DIR/vornikctl"
+  rollback_checkout warn
+  warn "  systemctl --user start $SERVICE"
+  die "$2"
+}
+
+# Under Type=notify (#898) the start returns when the daemon sends READY=1, and
+# fails when it exits first or TimeoutStartSec passes. An older quickstart
+# installed a Type=simple unit, and the updater never rewrites a unit. Under
+# Type=simple the start returns at once and a hung boot is never bounded, so
+# say so.
+unit_type="$(systemctl --user show -p Type --value "$SERVICE" 2>/dev/null || true)"
+if [[ -n "$unit_type" && "$unit_type" != notify ]]; then
+  warn "$SERVICE is Type=$unit_type: systemd reports it started before it serves, and never times out a hung boot (#898)."
+  warn "  Set Type=notify in it, or install the shipped unit:"
+  warn "  install -m 0644 $REPO_DIR/deployments/podman/systemd/vornik.service ~/.config/systemd/user/$SERVICE && systemctl --user daemon-reload"
+fi
+log "Starting $SERVICE (auto-applies additive migrations; waits for READY=1 under Type=notify)"
+if ! systemctl --user start "$SERVICE"; then
+  fail_cutover "$SERVICE did not start" "start failed"
+fi
+
 # ---------------------------------------------------------------------------
 # 6. Verify
 # ---------------------------------------------------------------------------
@@ -711,16 +738,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [[ "$ready" != 1 ]]; then
-  warn "Service did not report ready within 60s. Recent logs:"
-  journalctl --user -u "$SERVICE" -n 30 --no-pager || true
-  echo
-  warn "ROLLBACK:"
-  warn "  systemctl --user stop $SERVICE"
-  warn "  install -m0755 $BK/vornik.prev $BIN_DIR/vornik"
-  warn "  install -m0755 $BK/vornikctl.prev $BIN_DIR/vornikctl"
-  rollback_checkout warn
-  warn "  systemctl --user start $SERVICE"
-  die "readiness check failed"
+  fail_cutover "Service did not report ready within 60s" "readiness check failed"
 fi
 
 # The upgrade succeeded. Say so in the backup's own record: a dump whose run

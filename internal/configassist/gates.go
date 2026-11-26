@@ -41,11 +41,16 @@ const (
 	RefuseOutputCap         = "MAX_OUTPUT_BYTES"
 	RefuseTurnCap           = "MAX_TOOL_TURNS"
 	RefuseNoChange          = "NO_CHANGE"
-	RefusePlaceholder       = "SECRET_PLACEHOLDER_TAMPERED"
-	RefuseIdentity          = "IDENTITY_UNAVAILABLE"
-	RefuseBudget            = "BUDGET"
-	RefuseModelFamily       = "JUDGE_SAME_FAMILY"
-	RefuseAdmission         = "ADMISSION"
+	// RefuseTruncated is a reply cut off at the model's output-token limit
+	// before it answered (finish_reason=length, no tool call). It is never
+	// read as a final answer: a reasoning model that spends its whole budget
+	// thinking returns empty content, which read as NO_CHANGE (GitHub #911).
+	RefuseTruncated   = "ASSISTANT_REPLY_TRUNCATED"
+	RefusePlaceholder = "SECRET_PLACEHOLDER_TAMPERED"
+	RefuseIdentity    = "IDENTITY_UNAVAILABLE"
+	RefuseBudget      = "BUDGET"
+	RefuseModelFamily = "JUDGE_SAME_FAMILY"
+	RefuseAdmission   = "ADMISSION"
 	// RefuseIdempotencyConflict is returned when an idempotency key that
 	// already names a filed proposal is presented with a DIFFERENT request
 	// (audit 2026-09-15 CA-16). Replaying the stored proposal would answer

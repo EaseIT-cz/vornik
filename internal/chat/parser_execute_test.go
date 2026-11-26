@@ -318,59 +318,46 @@ func TestExecuteAction_RetryTask_MissingID(t *testing.T) {
 	}
 }
 
+// #916 item 2: retry_task re-queues through the atomic RequeueTerminalTask
+// (attempt bump 1, the task's max attempts) and never writes the row back.
 func TestExecuteAction_RetryTask_HappyPath(t *testing.T) {
-	last := ""
-	var updated *persistence.Task
+	var gotID string
+	var gotAttempt, gotMax int
 	repo := &mocks.MockTaskRepository{
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
-			last = "got"
-			return &persistence.Task{
-				ID:        id,
-				Status:    persistence.TaskStatusFailed,
-				Attempt:   3,
-				LastError: stringPtr("boom"),
-			}, nil
+			return &persistence.Task{ID: id, Status: persistence.TaskStatusFailed, Attempt: 3, MaxAttempts: 3}, nil
 		},
-		UpdateFunc: func(_ context.Context, task *persistence.Task) error {
-			updated = task
+		RequeueTerminalTaskFunc: func(_ context.Context, id string, attempt, maxAttempts int) (bool, error) {
+			gotID, gotAttempt, gotMax = id, attempt, maxAttempts
+			return true, nil
+		},
+		UpdateFunc: func(context.Context, *persistence.Task) error {
+			t.Fatal("retry_task must not write the row back")
 			return nil
 		},
 	}
 	res, err := ExecuteAction(context.Background(),
 		Action{Type: ActionRetryTask, TaskID: "t-1", Confirm: true}, repo, nil, nil)
-	if err != nil {
-		t.Fatalf("ExecuteAction: %v", err)
+	if err != nil || !res.Success {
+		t.Fatalf("ExecuteAction: %v %q", err, res.Message)
 	}
-	if !res.Success {
-		t.Fatalf("Success=false; msg=%q", res.Message)
-	}
-	if last != "got" {
-		t.Error("GetFunc not invoked")
-	}
-	if updated == nil {
-		t.Fatal("UpdateFunc not invoked")
-	}
-	if updated.Status != persistence.TaskStatusQueued {
-		t.Errorf("status: got %s, want QUEUED", updated.Status)
-	}
-	if updated.Attempt != 0 {
-		t.Errorf("attempt: got %d, want 0", updated.Attempt)
-	}
-	if updated.LastError != nil {
-		t.Errorf("LastError must be cleared on retry, got %v", *updated.LastError)
+	if gotID != "t-1" || gotAttempt != 1 || gotMax != 3 {
+		t.Fatalf("RequeueTerminalTask(%q, %d, %d), want (t-1, 1, 3)", gotID, gotAttempt, gotMax)
 	}
 }
 
+// The conditional write refuses an in-flight task; the reply names its status.
 func TestExecuteAction_RetryTask_WrongStatus(t *testing.T) {
 	repo := &mocks.MockTaskRepository{
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, Status: persistence.TaskStatusRunning}, nil
 		},
+		RequeueTerminalTaskFunc: func(context.Context, string, int, int) (bool, error) { return false, nil },
 	}
 	res, err := ExecuteAction(context.Background(),
 		Action{Type: ActionRetryTask, TaskID: "t-1", Confirm: true}, repo, nil, nil)
-	if err == nil || res.Success {
-		t.Errorf("not FAILED: err=%v success=%v", err, res.Success)
+	if err == nil || res.Success || !strings.Contains(res.Message, "RUNNING") {
+		t.Errorf("in flight: err=%v success=%v msg=%q", err, res.Success, res.Message)
 	}
 }
 
@@ -387,19 +374,20 @@ func TestExecuteAction_RetryTask_NotFound(t *testing.T) {
 	}
 }
 
+// A store error is not quoted (#916 item 3).
 func TestExecuteAction_RetryTask_UpdateError(t *testing.T) {
 	repo := &mocks.MockTaskRepository{
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, Status: persistence.TaskStatusFailed}, nil
 		},
-		UpdateFunc: func(context.Context, *persistence.Task) error {
-			return errors.New("constraint")
+		RequeueTerminalTaskFunc: func(context.Context, string, int, int) (bool, error) {
+			return false, errors.New("constraint")
 		},
 	}
 	res, err := ExecuteAction(context.Background(),
 		Action{Type: ActionRetryTask, TaskID: "t-1", Confirm: true}, repo, nil, nil)
-	if err == nil || res.Success {
-		t.Errorf("update error: err=%v success=%v", err, res.Success)
+	if err == nil || res.Success || strings.Contains(res.Message, "constraint") {
+		t.Errorf("requeue error: err=%v success=%v msg=%q", err, res.Success, res.Message)
 	}
 }
 
@@ -467,8 +455,6 @@ func TestExecuteAction_GetStatus_GetError(t *testing.T) {
 		t.Errorf("get error: err=%v success=%v", err, res.Success)
 	}
 }
-
-func stringPtr(s string) *string { return &s }
 
 // GitHub #347 (learning-loop design, amendment 2026-10-13): every chat
 // channel (Telegram, Slack, email, web chat, voice) creates tasks here, and

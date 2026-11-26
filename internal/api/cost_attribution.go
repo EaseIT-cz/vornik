@@ -23,9 +23,11 @@ func boundedUA(r *http.Request) string {
 }
 
 // AttributionSource describes which input the project ID for a
-// cost row was derived from. Surfaced on the persistence row so
-// operators can grep for `attribution_source: "anonymous"` to
-// find keys that should be migrated to the DB-backed flow.
+// cost row was derived from. It is counted by source
+// (APIMetrics.RecordCostAttribution) and an "anonymous" one is
+// warned about (warnOnAnonymousAttribution); it is not stored on
+// the usage row, which the per-project API keys design once planned
+// (corrected 2026-11-25, #857).
 type AttributionSource string
 
 const (

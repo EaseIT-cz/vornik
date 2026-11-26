@@ -13,6 +13,11 @@ broker: true
 
 budget:
   monthly_hard_usd: {{.MonthlyUSD}}
+{{- if .SharedMemory}}
+
+memory:
+  shared_with_namespace: true
+{{- end}}
 {{- if .Servers}}
 
 mcp:

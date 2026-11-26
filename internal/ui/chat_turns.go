@@ -397,7 +397,9 @@ type chatTurnInput struct {
 // data to render, the status and a message; otherwise the turn's input.
 func (s *Server) prepareChatTurn(w http.ResponseWriter, r *http.Request, projectID string) (chatTurnInput, ChatPageData, int, string) {
 	if err := r.ParseForm(); err != nil {
-		return chatTurnInput{}, ChatPageData{}, http.StatusBadRequest, "Failed to parse form: " + err.Error()
+		// Fixed text, as every page-facing chat message (web chat design §8).
+		s.logger.Debug().Err(err).Str("project", projectID).Msg("web chat: the send's form could not be read")
+		return chatTurnInput{}, ChatPageData{}, http.StatusBadRequest, "The message could not be read. Send it again."
 	}
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	data := s.chatPageData(r, projectID)
@@ -498,7 +500,11 @@ func (s *Server) runChatTurn(ctx context.Context, cancel func(), release func(),
 		Text: in.prompt, Timestamp: time.Now(),
 	}
 	if err := receiver.Receive(ctx, inbound); err != nil {
-		state, msg := chatTurnFailed, "Chat dispatch failed: "+err.Error()
+		// The raw error can carry an upstream body, an endpoint or a key
+		// fragment: it goes to the log, never the page (web chat design §8,
+		// #862). The page says what the streaming channels say.
+		s.logger.Warn().Err(err).Str("project", in.projectID).Msg("web chat: the turn failed")
+		state, msg := chatTurnFailed, dispatcher.FailureNotice(ctx, err, false)
 		switch {
 		case reg.stopAsked(t):
 			state, msg = chatTurnCancelled, ""

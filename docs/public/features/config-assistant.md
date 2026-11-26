@@ -111,6 +111,7 @@ apply journal relies on; and `config_assistant.model` and
 | `config_assistant.max_output_bytes` | `262144` | overlay cap; exceeding it refuses |
 | `config_assistant.max_tool_turns` | `40` | edit-loop cap per request |
 | `config_assistant.request_timeout` | `5m` | per-request deadline |
+| `config_assistant.reasoning` | — | reasoning level asked of the model on every call: `off`, `low`, `medium` or `high`; empty keeps the model's default |
 | `config_assistant.class_e_daily_cap` | `5` | class-E proposals per credential per day |
 | `config_assistant.auto_apply.<project>.classes` | — | opt-in for A, B1, B2 |
 | `config_assistant.chat_entrypoint` | `false` | enable the chat entrypoint (A, B2) |

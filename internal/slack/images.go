@@ -279,10 +279,7 @@ func (c *Channel) dispatchImageFile(ctx context.Context, p eventPayload, inst *i
 			Msg("slack: image received but no Receiver bound; dropping")
 		return
 	}
-	if err := recv.Receive(ctx, msg); err != nil {
-		c.logger.Warn().Err(err).Str("event_id", p.EventID).
-			Msg("slack: image Receiver.Receive returned error")
-	}
+	c.receive(ctx, recv, msg, "image")
 }
 
 // FetchAttachment implements conversation.AttachmentFetcher so the dispatcher's vision

@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/registry"
 )
@@ -45,6 +46,8 @@ type tree struct {
 	credentialSet map[string]bool
 	// agentTokens is State.AgentMaxTokens (§6.9).
 	agentTokens int
+	// privateHosts is State.PrivateHosts (§6.10, GitHub #403).
+	privateHosts []dialguard.PrivateHost
 }
 
 func newTree(t *testing.T, ns string) *tree {
@@ -90,6 +93,7 @@ func (tr *tree) state() *State {
 		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations, CredentialSet: tr.credentialSet,
 		// The config defaults (§6.9); tr.agentTokens is the agent LLM's max_tokens.
 		MaxConcurrentTasksCap: 2, MaxRoleTokensCap: 32768, MaxRoleToolIterationsCap: 120, AgentMaxTokens: tr.agentTokens,
+		PrivateHosts: tr.privateHosts,
 	}
 	for _, c := range tr.pending {
 		for _, l := range c.Locks {

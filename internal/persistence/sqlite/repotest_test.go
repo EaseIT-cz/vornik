@@ -367,6 +367,19 @@ func TestA2AKeyRetrieval_Contract(t *testing.T) {
 		sqlite.NewTaskRepository(db.DB), sqlite.NewAPIKeyRepository(db.DB))
 }
 
+// #858: the chunks each recall of a task returned. SQLite keeps no class.
+func TestStepRecallChunks_Contract(t *testing.T) {
+	db := newTestDB(t)
+	seed := func(t *testing.T, id, projectID, _ string) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO project_memory_chunks (id, project_id, created_at) VALUES (?, ?, ?)`,
+			id, projectID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repotest.RunStepRecallChunksSuite(t, sqlite.NewMemoryRetrievalAuditRepository(db.DB), seed, false)
+}
+
 // Round-2 trading-event contracts.
 func TestTradingFillRepository_Contract(t *testing.T) {
 	db := newTestDB(t)

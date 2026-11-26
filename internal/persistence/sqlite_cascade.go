@@ -55,6 +55,8 @@ type FKEdge struct {
 // GitHub #361 (2026-10-13).
 // see LLD § https://docs.vornik.io §6
 var SQLiteCascadeGraph = []FKEdge{
+	// api_keys (GitHub #792, migration 260)
+	{Child: "companion_key_oidc_trusts", Column: "key_id", Parent: "api_keys", Action: FKCascade},
 	// tasks
 	{Child: "tasks", Column: "parent_task_id", Parent: "tasks", Action: FKSetNull},
 	{Child: "executions", Column: "task_id", Parent: "tasks", Action: FKCascade},

@@ -38,7 +38,7 @@
                     {{range .Devices}}
                         <tr data-device="{{.ID}}">
                             <td class="px-5 py-2 text-gray-200">{{.Label}}</td>
-                            <td class="px-3 py-2 font-mono text-gray-400">{{.ID}}</td>
+                            <td class="px-3 py-2 font-mono text-gray-400" title="{{.ID}}">{{shortID .ID}}</td>
                             <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{.PairedAt.Format "2006-01-02 15:04"}}</td>
                             <td class="px-3 py-2 text-gray-400 whitespace-nowrap">{{.LastUsedAt.Format "2006-01-02 15:04"}}</td>
                             <td class="px-3 py-2">{{if .RevokedAt}}<span class="text-gray-500">revoked</span>{{else}}<span class="text-emerald-800 dark:text-emerald-400">live</span>{{end}}</td>

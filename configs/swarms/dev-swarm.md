@@ -5,6 +5,7 @@ leadRole: "lead"
 rolePrelude: "You are part of a multi-agent coding swarm. Another role will\r\nreview your work — never fabricate test output, commit hashes, or\r\nfile diffs. If a check couldn't be run, say so explicitly.\r\n"
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Plans code tasks and schedules autonomous work"
     count: 1
     # 2026-05-13: forced ephemeral. Warm containers bind-mounted the
@@ -13,14 +14,6 @@ roles:
     # blocked ephemeral tasks' worktree merges. Fixed since: warm
     # containers get no project mount at all (S6-D5, 04072e055).
     runtimePolicy: "ephemeral"
-    # Strategic planning — GLM-5 via Bedrock (rank 1 on open-LLM
-    # leaderboard, $1.00/$3.20). Lead fires once per task and
-    # output is capped so the $3.20/M output rate is bounded.
-    # Reverted from Gemini 3.1 Pro 2026-05-07 — the
-    # Vertex `-preview` alias works but emits a "thought_signature
-    # missing" tool-call contract error on multi-round agent runs
-    # (see exec_20260507153509). Fallback to Kimi K2.5 via
-    # Bedrock for outage resilience — different vendor, no GPT.
     # 2026-07-09: 4096 → 8192. issue-fix's decompose lead emits a
     # multi-subtask delegatedTasks plan (one entry per scope item);
     # a 7-item plan overran the 4096 cap and TRUNCATED mid-JSON, so
@@ -30,8 +23,6 @@ roles:
     # when needed — normal small completions cost the same (you pay
     # per token generated, not per cap). Pair with the issue-fix
     # prompt's "cite the spec file, don't paste it" rule.
-    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-    modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 8192
     runtime:
       image: "ghcr.io/easeit-cz/vornik-agent:latest"
@@ -66,18 +57,10 @@ roles:
       # more child tasks for partial-completion continuations.
       maxDelegations: 20
   - name: "feasibility"
+    modelTier: "trivial"
     description: "Checks whether requested code work is blocked"
     count: 1
     runtimePolicy: "ephemeral"
-    # Cheap gate decision — GLM-4.7 Flash via Bedrock.
-    # $0.07/$0.40 per 1M, the cheapest tier that still handles a
-    # JSON verdict cleanly. Reverted from Gemini 3.1 Flash-Lite
-    # 2026-05-07 — Vertex 3.x preview alias unreliable on this
-    # account. Fallback to DeepSeek v3.2 via Bedrock so an
-    # outage on either side keeps the gate flowing — no GPT
-    # spend on this hot path.
-    model: "zai.glm-4.7"
-    modelFallback: "deepseek.v3.2"
     maxTokens: 2048
     # outputSchema replaces requiredOutputKeys + the prose Output
     # block. feasibility is invoked only via the lead's adaptive
@@ -130,19 +113,10 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "analyst"
+    modelTier: "complex"
     description: "Selects/specs the next code task in CURRENT_TASK.md"
     count: 1
     runtimePolicy: "ephemeral"
-    # Spec writing — GLM-5 via Bedrock. Specs determine
-    # downstream code quality; vague or wrong CURRENT_TASK.md
-    # was a recurring source of bad implementations, so a top-
-    # tier model is worth the $1.00/$3.20 per 1M. Output is
-    # capped at 4096 tokens so output spend per call is
-    # bounded. Reverted from Gemini 3.1 Pro 2026-05-07.
-    # Fallback to Kimi K2.5 via Bedrock — GPT deliberately
-    # excluded from fallback to preserve subscription tokens.
-    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-    modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 6144
     # outputSchema replaces the legacy requiredOutputKeys + prose
     # Output blocks. The analyst is invoked at three different
@@ -242,6 +216,7 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "coder"
+    modelTier: "coding"
     description: "Implements focused code changes and commits them"
     aliases:
       - "developer"
@@ -250,21 +225,10 @@ roles:
       - "writer"
     count: 1
     runtimePolicy: "ephemeral"
-    # Code generation — Kimi K2.5 via Bedrock ($0.60/$6.00, open-
-    # weight). 2026-07-09: flipped from qwen.qwen3-next-80b-a3b
-    # (+ qwen3-coder-30b-a3b fallback). BOTH prior models were A3B
-    # (~3B active params) and too weak for real TDD implementation:
-    # on headmatch #34 (task_…fefedb subtask "Task 2") qwen3
-    # HALLUCINATED a `headmatch/types.py` path (the type it needed,
-    # SweepSpec, actually lives in headmatch/signals.py), failed to
-    # grep for the real definition, and then CHURNED to the 20-min
-    # podman container cap twice on retry instead of failing fast.
-    # Kimi K2.5 is a strong agentic coder; fallback GLM-5 (the lead
-    # model, top open-weight) — both non-A3B, both open-weight per
-    # the OSS-model preference. codex/GPT tiers deliberately avoided
-    # on this hot path.
-    model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
+    # 2026-07-09: a ~3B-active MoE model invented a file path on
+    # headmatch #34 (task_…fefedb), never grepped for the real definition,
+    # and churned to the 20-min container cap twice. Real TDD work needs a
+    # strong agentic coder as the setup model.
     maxTokens: 16384
     # outputSchema replaces requiredOutputKeys + prose Output blocks.
     # The coder is invoked at workflow steps that pin different
@@ -319,6 +283,7 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "tester"
+    modelTier: "coding"
     description: "Runs focused tests and reports JSON pass/fail"
     aliases:
       - "qa"
@@ -326,19 +291,10 @@ roles:
       - "verifier"
     count: 1
     runtimePolicy: "ephemeral"
-    # Test authoring + execution — kimi-k2.5 (Bedrock), matching the
-    # coder's model (tester is code-adjacent: writes + runs tests, frames
-    # failures for the coder, so vendor/behaviour consistency helps).
-    # 2026-07-11: moved off qwen.qwen3-coder-30b-a3b — that 3B-active MoE
-    # could not reliably drive the Bedrock tool_calls API (it emitted tool
-    # calls as TEXT every iteration, "nudging" until the 50-iteration limit,
-    # so every test step FAILED → rework loop → execution failed; evidence
-    # task_20260711203744_fc9874bee9417765). The coder/reviewer run the
-    # SAME Bedrock tool path on kimi-k2.5 with no such issue. Fallback
-    # zai.glm-5 (proven — the analyst/lead's model) replaces the flaky
-    # glm-4.7, keeping cross-vendor diversity (moonshotai → zai).
-    model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
+    # Test authoring + execution. 2026-07-11: a small MoE model emitted
+    # tool calls as TEXT every iteration until the 50-iteration limit, so
+    # every test step failed (task_20260711203744_fc9874bee9417765). The
+    # setup model must drive native tool calls.
     maxTokens: 8192
     # outputSchema pins testing.passed:bool because every workflow
     # step that uses this role gates on it (dev-pipeline branches
@@ -462,6 +418,7 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "reviewer"
+    modelTier: "coding"
     description: "Reviews the latest code change against the spec"
     aliases:
       - "code_reviewer"
@@ -469,20 +426,11 @@ roles:
       - "checker"
     count: 1
     runtimePolicy: "ephemeral"
-    # Reviewer — Kimi K2.5 via Bedrock (open-weight, NO session
-    # limits). 2026-07-09 (evening): reverted from gpt-5.5. The
-    # gpt-5.5 codex-subscription pick ran the hardened adversarial
-    # rubric to 96 tool iterations on ONE PR review (task_…b19f,
-    # PR #35): 3.88M prompt tokens, ~$20, and it exhausted the
-    # operator's ENTIRE codex session limit in a single review
-    # before falling back to Kimi anyway. Bedrock open-weight
-    # models have no session cap, so the reviewer runs on Kimi K2.5
-    # (which handled that same review cleanly in ~16 iterations as
-    # the fallback), with GLM-5 as the cross-vendor fallback.
+    # 2026-07-09: one model ran the hardened adversarial rubric to 96
+    # tool iterations on ONE PR review (task_…b19f, PR #35): 3.88M prompt
+    # tokens, ~$20. Another did the same review in ~16 iterations.
     # Paired with the iteration-cap cut below (120 → 40). See
     # https://docs.vornik.io §C3.
-    model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     maxTokens: 8192
     # outputSchema pins review.approved AND review.all_done because
     # dev-pipeline gates on BOTH. Two of its three gate conditions read
@@ -541,10 +489,10 @@ roles:
         # case cross-checking against testing.cases[] + verifying
         # tests landed in the same commit as the implementation.
         # 80 → 120 → 40 (2026-07-09). The 120 cap let the hardened
-        # rubric RUN AWAY: gpt-5.5 hit 96 iterations on one PR
-        # review (task_…b19f) — 3.88M prompt tokens, ~$20, the whole
-        # codex session gone. A review converges well under 40 (the
-        # Kimi fallback did that same review in ~16); 40 leaves
+        # rubric RUN AWAY: one model hit 96 iterations on one PR
+        # review (task_…b19f) — 3.88M prompt tokens, ~$20.
+        # A review converges well under 40 (another model did that
+        # same review in ~16); 40 leaves
         # headroom for a large diff without a thrash budget. See
         # https://docs.vornik.io §C3.
         VORNIK_MAX_TOOL_ITERATIONS: "40"
@@ -569,6 +517,7 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "scout"
+    modelTier: "trivial"
     description: "Writes concise PROJECT_CONTEXT.md for a project"
     # Aliases for lead hallucinations — task_20260504155225 +
     # task_20260502154603 both failed with the lead naming
@@ -581,14 +530,6 @@ roles:
       - "investigator"
     count: 1
     runtimePolicy: "ephemeral"
-    # Codebase exploration + summarisation — GLM-4.7 via
-    # Bedrock. $0.60/$2.20 per 1M; PROJECT_CONTEXT.md quality
-    # propagates to every downstream role so this is worth a
-    # mid-tier model not a flash. Reverted from Gemini 3 Flash
-    # 2026-05-07. Fallback to DeepSeek v3.2 via Bedrock — no
-    # GPT in fallback.
-    model: "zai.glm-4.7"
-    modelFallback: "deepseek.v3.2"
     maxTokens: 4096
     # outputSchema replaces requiredOutputKeys + the prose Output
     # block. produced_files is verified by the executor — every
@@ -646,17 +587,10 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "architect"
+    modelTier: "trivial"
     description: "Updates roadmap/backlog from recent progress"
     count: 1
     runtimePolicy: "ephemeral"
-    # Roadmap reasoning — GLM-4.7 Flash via Bedrock.
-    # $0.07/$0.40 per 1M; architect commits a single file edit
-    # per run with bounded scope, so the cheap tier is
-    # sufficient. Reverted from Gemini 3.1 Flash-Lite
-    # 2026-05-07. Fallback to DeepSeek v3.2 via Bedrock — no
-    # GPT in fallback.
-    model: "zai.glm-4.7"
-    modelFallback: "deepseek.v3.2"
     maxTokens: 4096
     # outputSchema replaces requiredOutputKeys + the prose Output
     # block. architect runs only via the lead's adaptive plan, so
@@ -714,6 +648,7 @@ roles:
         - "memory_search"
       delegationAllowed: false
   - name: "github-classifier"
+    modelTier: "complex"
     description: "Classifies a GitHub event, rebases the workspace, then delegates code work to dev-pipeline or posts a PR review"
     count: 1
     runtimePolicy: "ephemeral"
@@ -721,8 +656,6 @@ roles:
     # gh review). The authoritative instructions live in the github-router
     # step prompt; this role just needs the tools + a permissive schema.
     # delegationAllowed: routes via selected_workflow to dev-pipeline.
-    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
-    modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 4096
     injectSchemaIntoPrompt: true
     outputSchema:

@@ -32,6 +32,8 @@ func mutationRepo(status persistence.TaskStatus, mutated *bool) *mocks.MockTaskR
 		},
 		UpdateStatusFunc: func(context.Context, string, persistence.TaskStatus) error { *mutated = true; return nil },
 		UpdateFunc:       func(context.Context, *persistence.Task) error { *mutated = true; return nil },
+		// retry_task re-queues atomically since #916.
+		RequeueTerminalTaskFunc: func(context.Context, string, int, int) (bool, error) { *mutated = true; return true, nil },
 	}
 }
 

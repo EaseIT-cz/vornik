@@ -149,12 +149,22 @@ func (c *ClaudeSubscriptionClient) buildRequestBodyCtx(ctx context.Context, mess
 	// 09-agent-runtime-contract.md §8.4). With extended thinking the API
 	// requires max_tokens > budget_tokens, so a request value that would not
 	// clear the budget is ignored and the route's value is sent as before.
+	//
+	// A request's reasoning level, when set, replaces the route's
+	// thinking_budget (GitHub #869): the budget is derived from the level and
+	// kept below max_tokens, so the max_tokens fallback above is for the
+	// route budget only.
+	level := ReasoningEffortFromContext(ctx)
 	maxTokens := EffectiveMaxTokens(ctx, c.maxTokens)
-	if c.thinkingBudget > 0 && maxTokens <= c.thinkingBudget {
+	if level == "" && c.thinkingBudget > 0 && maxTokens <= c.thinkingBudget {
 		maxTokens = c.maxTokens
 	}
 	if maxTokens <= 0 {
 		maxTokens = claudeDefaultMaxTokens
+	}
+	budget := c.thinkingBudget
+	if level != "" {
+		budget = claudeBudgetForLevel(level, maxTokens)
 	}
 
 	body := map[string]any{
@@ -162,10 +172,10 @@ func (c *ClaudeSubscriptionClient) buildRequestBodyCtx(ctx context.Context, mess
 		"stream":     true,
 		"max_tokens": maxTokens,
 	}
-	if c.thinkingBudget > 0 {
+	if budget > 0 {
 		body["thinking"] = map[string]any{
 			"type":          "enabled",
-			"budget_tokens": c.thinkingBudget,
+			"budget_tokens": budget,
 		}
 	}
 

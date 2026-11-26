@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/firstvalue"
 	"vornik.io/vornik/internal/onboarding"
+	"vornik.io/vornik/internal/rolelibrary"
 )
 
 // IssuerProbe checks that an OpenID issuer answers discovery. The OpenID
@@ -57,6 +59,11 @@ type managedModels struct {
 		ID      string `json:"id"`
 		GoodFor string `json:"good_for"`
 	} `json:"catalogue"`
+	// Tiers and Roles map model tiers and "<swarm>/<role>" keys to catalogue
+	// models (GitHub #880; operations API 1.6.0). Optional: left out, the
+	// instance's mappings stay as they are.
+	Tiers map[string]config.ModelChoice `json:"tiers,omitempty"`
+	Roles map[string]config.ModelChoice `json:"roles,omitempty"`
 }
 
 type managedSetupRequest struct {
@@ -396,6 +403,32 @@ func validateManagedModels(m *managedModels) string {
 	if !seen[m.DefaultModel] {
 		return "models.default_model must be one of the catalogue's ids"
 	}
+	return validateManagedTiers(m, seen)
+}
+
+// validateManagedTiers checks models.tiers and models.roles: known tiers,
+// plain role keys, and every model and fallback a catalogue id (#880).
+func validateManagedTiers(m *managedModels, catalogue map[string]bool) string {
+	inCatalogue := func(c config.ModelChoice) bool {
+		return catalogue[c.Model] && (c.Fallback == "" || catalogue[c.Fallback])
+	}
+	for k, c := range m.Tiers {
+		if !rolelibrary.ValidModelTier(k) {
+			return fmt.Sprintf("models.tiers: %q is not a tier (%s)", k, rolelibrary.ModelTierList())
+		}
+		if !inCatalogue(c) {
+			return fmt.Sprintf("models.tiers.%s: model and fallback must be catalogue ids", k)
+		}
+	}
+	for k, c := range m.Roles {
+		sw, role, ok := strings.Cut(k, "/")
+		if !ok || sw == "" || role == "" || strings.ContainsAny(k, ". ") || strings.Contains(role, "/") || len(k) > 128 {
+			return fmt.Sprintf("models.roles: %q is not a <swarm>/<role> key", k)
+		}
+		if !inCatalogue(c) {
+			return fmt.Sprintf("models.roles[%q]: model and fallback must be catalogue ids", k)
+		}
+	}
 	return ""
 }
 
@@ -450,7 +483,27 @@ func managedConfigCurrent(content []byte, req *managedSetupRequest, name, owner 
 			return false
 		}
 	}
-	return true
+	return managedTiersUnchanged(content, req.Models)
+}
+
+// managedTiersUnchanged reports whether the file already holds the tiers and
+// roles the request sends. A request without them changes none (#880).
+func managedTiersUnchanged(content []byte, m *managedModels) bool {
+
+	var cur struct {
+		Runtime struct {
+			AgentLLM struct {
+				Tiers map[string]config.ModelChoice `yaml:"tiers"`
+				Roles map[string]config.ModelChoice `yaml:"roles"`
+			} `yaml:"agent_llm"`
+		} `yaml:"runtime"`
+	}
+	if yaml.Unmarshal(content, &cur) != nil {
+		return false
+	}
+	// A map left out changes nothing; a map sent must equal the file's.
+	same := func(file, sent map[string]config.ModelChoice) bool { return sent == nil || maps.Equal(file, sent) }
+	return same(cur.Runtime.AgentLLM.Tiers, m.Tiers) && same(cur.Runtime.AgentLLM.Roles, m.Roles)
 }
 
 func managedSetupContent(content []byte, req *managedSetupRequest, name, owner string, admins []string, dispatcher string) ([]byte, error) {
@@ -502,6 +555,18 @@ func managedSetupContent(content []byte, req *managedSetupRequest, name, owner s
 	for _, m := range req.Models.Catalogue {
 		out, err = config.AppendYAMLListItem(out, "agent_admin.models", []config.YAMLListField{{Key: "id", Value: m.ID}, {Key: "good_for", Value: m.GoodFor}})
 		if err != nil {
+			return nil, err
+		}
+	}
+	// Validated against the catalogue above. Each map is replaced whole when
+	// sent and kept when left out (#880, operations API 1.6.0).
+	if req.Models.Tiers != nil {
+		if out, err = config.ReplaceModelChoices(out, "runtime.agent_llm.tiers", req.Models.Tiers); err != nil {
+			return nil, err
+		}
+	}
+	if req.Models.Roles != nil {
+		if out, err = config.ReplaceModelChoices(out, "runtime.agent_llm.roles", req.Models.Roles); err != nil {
 			return nil, err
 		}
 	}

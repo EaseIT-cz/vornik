@@ -103,3 +103,25 @@ func TestPrimaryChain_JoinsTheDoorFromTheAccountsService(t *testing.T) {
 		t.Error("a server with no accounts service must not claim a door it cannot enforce")
 	}
 }
+
+// GitHub #792 (design 27): a server with a trust store and a key repository
+// puts the GitHub Actions token backend last in the production chain; without
+// a trust store the chain has no such backend.
+func TestPrimaryChain_IncludesTheOIDCTrustBackend792(t *testing.T) {
+	s := NewServer(WithAPIKeyRepository(&memAPIKeyRepo{}), WithCompanionOIDCTrusts(&memOIDCTrusts792{}))
+	cfg := BuildAuthConfig(&config.Config{}, serverAuthOptions(s)...)
+	backends := authBackends(cfg)
+	if got := backends[len(backends)-1].Name(); got != "oidc-trust" {
+		t.Fatalf("last backend is %q, want oidc-trust", got)
+	}
+	bare := NewServer(WithAPIKeyRepository(&memAPIKeyRepo{}))
+	for _, b := range authBackends(BuildAuthConfig(&config.Config{}, serverAuthOptions(bare)...)) {
+		if b.Name() == "oidc-trust" {
+			t.Fatal("a server with no trust store must not wire the token backend")
+		}
+	}
+}
+
+type memOIDCTrusts792 struct {
+	persistence.CompanionOIDCTrustRepository
+}

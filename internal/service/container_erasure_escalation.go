@@ -50,14 +50,23 @@ func (c *Container) initErasureEscalation() {
 		c.Logger.With().Str("component", "erasure-escalation").Logger())
 	st.pass.SetUnsent = func(n int) { st.unsent.Set(float64(n)) }
 
+	st.elector = c.initWorkerElector("erasure_escalation")
+	c.erasureEscalation = st
+}
+
+// startErasureEscalation starts the constructed loop and its elector;
+// startWork is its only caller (GitHub #586).
+func (c *Container) startErasureEscalation() {
+	st := c.erasureEscalation
+	if st == nil || st.cancel != nil {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	st.cancel, st.done = cancel, make(chan struct{})
-	st.elector = c.initWorkerElector("erasure_escalation")
 	if st.elector != nil {
 		st.elector.BootstrapAcquire(ctx)
 		go st.elector.Run(ctx)
 	}
-	c.erasureEscalation = st
 	go func() {
 		defer close(st.done)
 		c.runErasureEscalationLoop(ctx, st)

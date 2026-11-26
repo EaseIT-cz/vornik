@@ -154,6 +154,10 @@ cat > "$WORK/bin/systemctl" <<SYSTEMCTL
 case "\$*" in
   *" stop "*|*" start "*) printf '%s\n' "\$*" | awk '{print \$2}' >> "$WORK/order.log" ;;
 esac
+case "\$*" in
+  *" show -p Type "*) echo "\${UNIT_TYPE:-notify}" ;;
+  *" start "*) [ -n "\${START_FAILS:-}" ] && exit 1 ;;
+esac
 exit 0
 SYSTEMCTL
 mkdir -p "$REPO/scripts"
@@ -511,5 +515,32 @@ TEST_PATH="$NOREADY:$WORK/bin:$PATH" run_updater --yes --no-build
 grep -qx 'doctor' "$WORK/vornikctl.log" 2>/dev/null && \
   fail "a run whose readiness failed must not run the post-cutover doctor"
 echo 'update: a failed upgrade does not run the post-cutover doctor — OK'
+
+# ---------------------------------------------------------------------------
+# 12. GitHub #898: the shipped unit is Type=notify, so `systemctl start` fails
+#     when the daemon exits or times out before READY=1. Under set -e that
+#     used to end the run at the start line with no rollback printed. A start
+#     that fails now prints the rollback, stamps nothing and prunes nothing.
+#     An older Type=simple unit gets a warning naming the replacement.
+# ---------------------------------------------------------------------------
+rm -f "$WORK/vornikctl.log"
+START_FAILS=1 run_updater --yes --no-build
+grep -q 'did not start' "$WORK/out" || fail "a failed start must say the service did not start"
+grep -q 'ROLLBACK:' "$WORK/out" || fail "a failed start must print the rollback"
+grep -q 'start failed' "$WORK/out" || fail "a failed start must end the run with 'start failed'"
+grep -q 'Upgrade complete' "$WORK/out" && fail "a failed start must not report the upgrade complete"
+state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+grep -q '^upgrade_completed_at=' <<<"$state" && fail "a run whose start failed must not stamp upgrade_completed_at"
+grep -q 'retention upgrade-dumps' "$WORK/vornikctl.log" 2>/dev/null && \
+  fail "a run whose start failed must not prune dumps"
+echo 'update: a start that fails prints the rollback — OK'
+
+UNIT_TYPE=simple run_updater --yes --no-build
+grep -q 'is Type=simple' "$WORK/out" || fail "a Type=simple unit must be warned about (#898)"
+grep -q 'deployments/podman/systemd/vornik.service' "$WORK/out" || fail "the warning must name the shipped unit"
+grep -q 'Upgrade complete' "$WORK/out" || fail "a Type=simple unit is a warning, not a failed upgrade"
+run_updater --yes --no-build
+grep -q 'is Type=' "$WORK/out" && fail "a Type=notify unit must not be warned about"
+echo 'update: a Type=simple unit is warned about, a notify one is not — OK'
 
 echo 'update_test.sh: PASS'

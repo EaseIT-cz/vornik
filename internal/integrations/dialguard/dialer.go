@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -47,8 +48,9 @@ type DialGuard struct {
 	// for the same host wins (the operator vouches for it).
 	LoopbackHosts []string
 
-	// AllowPrivate admits loopback and private (RFC 1918, ULA) addresses
-	// and refuses everything else isBlockedIP refuses: link-local (the
+	// AllowPrivate admits loopback and private (RFC 1918, ULA, and CGNAT
+	// 100.64.0.0/10 since GitHub #893) addresses and refuses everything else
+	// isBlockedIP refuses: link-local (the
 	// metadata service among them), 0.0.0.0/8, broadcast, multicast and
 	// every embedded IPv4 form (GitHub #502, 18-security-and-tenancy.md
 	// "Amendment 2026-10-22 (#502)", S3). It is for a probe an admin-class
@@ -57,11 +59,20 @@ type DialGuard struct {
 	AllowPrivate bool
 
 	// PrivateHosts are host names that may resolve to a private (RFC 1918,
-	// ULA) address, and to nothing else isBlockedIP refuses: never loopback,
-	// link-local or a metadata address. Narrower than AllowedHosts, which
+	// ULA, CGNAT since GitHub #893) address, and to nothing else isBlockedIP
+	// refuses: never loopback, link-local or a metadata address. Narrower than AllowedHosts, which
 	// skips the address check: rebinding a listed name to the metadata
 	// service is still refused (GitHub #560, M1c D4).
 	PrivateHosts []string
+
+	// PrivatePort, when set, limits the PrivateHosts grant to dials on that
+	// port, and PrivatePins, when set, refuse every dial of a PrivateHosts
+	// name outside them, public or private. AgentURLGuard sets both for an
+	// agent_admin.private_api_hosts grant: the URL's own port and the entry's
+	// pinned addresses (agent-administered design part 06 §6.12, GitHub
+	// #403). Neither widens anything.
+	PrivatePort string
+	PrivatePins []netip.Prefix
 
 	// ExactAddrs are addresses dialled with no address check, matched as an
 	// exact netip.AddrPort against the dial's own host:port before any other
@@ -102,12 +113,41 @@ func (g DialGuard) NoRedirectHTTPClient(timeout time.Duration) *http.Client {
 	return c
 }
 
-// IsLoopbackHost reports whether host is the name localhost or a loopback IP
-// literal (IPv4-mapped forms included). Only these literal forms count: a name
-// that merely resolves to loopback ("localhost.", "x.localhost") does not.
+// IsLoopbackHost reports whether host names the local machine: the name
+// localhost in any case, or an IP literal in 127.0.0.0/8, ::1 or their
+// IPv4-mapped forms. host may be bare, a bracketed IPv6 literal, or carry a
+// port ("localhost:8080", "[::1]:8080"). Brackets enclose an IPv6 literal
+// only (RFC 3986 IP-literal): "[localhost]" and "[127.0.0.1]" are refused.
+// Only these literal forms count: a name that merely resolves to loopback
+// ("localhost.", "x.localhost") does not, nor does 0.0.0.0, ::, an IP with a
+// zone, or surrounding space. It is the daemon's one loopback-host rule
+// (GitHub #168, integrations-hub-design "Amendment 2026-11-24 (#168)"); do
+// not add a copy.
 func IsLoopbackHost(host string) bool {
+	bracketed := strings.HasPrefix(host, "[")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	} else if bracketed && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if !bracketed && strings.EqualFold(host, "localhost") {
+		return true
+	}
 	ip := net.ParseIP(host)
-	return host == "localhost" || (ip != nil && ip.IsLoopback())
+	return ip != nil && ip.IsLoopback() && (!bracketed || strings.Contains(host, ":"))
+}
+
+// IsLoopbackHostForPlainDial is IsLoopbackHost for a URL hostname (no port,
+// no brackets) that its caller dials with a client which does not check the
+// resolved address (GitHub #168, review 4dca item 1): a loopback IP literal,
+// which is dialled as itself, or exactly "localhost", the one name such a
+// caller accepted before #168. Another spelling of the name is refused here,
+// because only a guarded dial (LoopbackURLGuard) checks where it resolves.
+func IsLoopbackHostForPlainDial(hostname string) bool {
+	if hostname == "localhost" {
+		return true
+	}
+	return net.ParseIP(hostname) != nil && IsLoopbackHost(hostname)
 }
 
 // LoopbackURLGuard is the guard for a configured server URL that may name a
@@ -192,7 +232,7 @@ func (g DialGuard) Dialer(host string) *net.Dialer {
 	}
 	return &net.Dialer{
 		Control: func(_, address string, _ syscall.RawConn) error {
-			ipHost, _, splitErr := net.SplitHostPort(address)
+			ipHost, port, splitErr := net.SplitHostPort(address)
 			if splitErr != nil {
 				ipHost = address
 			}
@@ -200,13 +240,17 @@ func (g DialGuard) Dialer(host string) *net.Dialer {
 			if ip == nil {
 				return fmt.Errorf("dial guard: could not parse resolved address %q", address)
 			}
+			// GitHub #403 (§6.12): a pinned name reaches only its pins.
+			if g.privateHost(host) && len(g.PrivatePins) > 0 && !inPins(ip, g.PrivatePins) {
+				return fmt.Errorf("%w address %s outside the addresses pinned for host %s", ErrDialRefused, ip, host)
+			}
 			// GitHub #502: AllowPrivate admits a DIRECT loopback or private
 			// address only; everything else isBlockedIP refuses stays refused.
 			// A cloud metadata address is never admitted (#505).
-			admitted := g.AllowPrivate && (ip.IsLoopback() || ip.IsPrivate()) && !isCloudMetadata(ip)
+			admitted := g.AllowPrivate && AllowPrivateAdmits(ip)
 			// GitHub #560 (M1c D4): a PrivateHosts name may reach a private
 			// address, never loopback or a metadata address.
-			if !admitted && g.privateHost(host) && ip.IsPrivate() && !ip.IsLoopback() && !isCloudMetadata(ip) {
+			if !admitted && g.privateHost(host) && (g.PrivatePort == "" || port == g.PrivatePort) && isGrantablePrivate(ip) && !ip.IsLoopback() && !isCloudMetadata(ip) {
 				admitted = true
 			}
 			if isBlockedIP(ip) && !admitted {
@@ -262,6 +306,12 @@ func (g DialGuard) hostAllowed(host string) bool {
 // default: RFC1918 private, loopback, link-local (unicast or multicast),
 // or unspecified (0.0.0.0 / ::).
 //
+// Amended 2026-11-24 (GitHub #893, option A; agent-administered design part
+// 06 §6.11): also CGNAT 100.64.0.0/10, where Tailscale assigns tailnet
+// addresses. It is private like RFC 1918: the AllowPrivate and PrivateHosts
+// grants admit it (isGrantablePrivate), so a tailnet host on
+// agent_admin.private_api_hosts keeps working.
+//
 // Amended 2026-10-21 (GitHub #434, review e89f F2/F4): also the rest of
 // 0.0.0.0/8 ("this network"; Linux delivers 0.0.0.0 to the local host, so it
 // is a loopback alias), the limited broadcast, every multicast scope, and an
@@ -299,6 +349,7 @@ func isBlockedIP(ip net.IP) bool {
 		}
 	}
 	return ip.IsPrivate() ||
+		IsSharedAddressSpace(ip) ||
 		ip.IsLoopback() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
@@ -310,7 +361,8 @@ func isBlockedIP(ip net.IP) bool {
 // runs on, refused by every guard whatever AllowPrivate says (GitHub #505,
 // automated security review of a708bd96a): AWS's IPv6 IMDS and GCP's IPv6
 // metadata server sit in the ULA range fc00::/7 that AllowPrivate admits, and
-// Alibaba Cloud's sits in 100.64.0.0/10, which no other rule here refuses.
+// Alibaba Cloud's sits in 100.64.0.0/10, which AllowPrivate and PrivateHosts
+// admit since #893.
 // 169.254.169.254 (AWS, Azure, GCP, OCI over IPv4) is link-local and listed
 // for completeness. isBlockedIP's embedded-IPv4 recursion covers their NAT64,
 // 6to4 and IPv4-compatible forms; To4 covers the IPv4-mapped one.
@@ -321,6 +373,12 @@ var cloudMetadataIPs = []net.IP{
 	net.ParseIP("100.100.100.200"),
 }
 
+// IsCloudMetadata reports whether ip is one of the instance-metadata
+// addresses every guard refuses, whatever grant applies. Exported for the
+// doctor finding agent_connections_cgnat (GitHub #893), which does not count
+// 100.100.100.200 as a CGNAT host a private_api_hosts entry could fix.
+func IsCloudMetadata(ip net.IP) bool { return isCloudMetadata(ip) }
+
 func isCloudMetadata(ip net.IP) bool {
 	for _, m := range cloudMetadataIPs {
 		if m.Equal(ip) {
@@ -328,6 +386,63 @@ func isCloudMetadata(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// sharedAddressSpace is RFC 6598's carrier-grade NAT range, where Tailscale
+// assigns tailnet addresses.
+var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
+// IsSharedAddressSpace reports whether ip is in 100.64.0.0/10 (IPv4 or
+// IPv4-mapped). Since GitHub #893 option A (agent-administered design part
+// 06 §6.11) isBlockedIP refuses the range and the grants admit it; the
+// doctor finding agent_connections_cgnat names the approved agent
+// connections there that no grant admits. Agent model locality excludes it
+// (agentadmin.destinationOf): a tailnet model stays remote.
+func IsSharedAddressSpace(ip net.IP) bool {
+	ip4 := ip.To4()
+	return ip4 != nil && sharedAddressSpace.Contains(ip4)
+}
+
+// CarriesSharedAddressSpace is IsSharedAddressSpace, plus an IPv6 address
+// that embeds a 100.64.0.0/10 address in the forms isBlockedIP unwraps
+// (NAT64 64:ff9b::/96, IPv4-compatible ::/96, 6to4 2002::/16). Agent model
+// locality excludes these (review 0a2f F2): such an endpoint is refused at
+// the dial and must not count as local either. No grant calls it: an
+// embedded form is never granted.
+func CarriesSharedAddressSpace(ip net.IP) bool {
+	if IsSharedAddressSpace(ip) {
+		return true
+	}
+	if len(ip) != net.IPv6len || ip.To4() != nil {
+		return false
+	}
+	switch {
+	case nat64WellKnown.Contains(ip), ipv4Compatible.Contains(ip):
+		return IsSharedAddressSpace(ip[12:16])
+	case sixToFour.Contains(ip):
+		return IsSharedAddressSpace(ip[2:6])
+	}
+	return false
+}
+
+// AllowPrivateAdmits is what the AllowPrivate grant admits: a direct loopback
+// or grantable private address, never a cloud metadata address. Model
+// locality (agentadmin.destinationOf) reads it too, so an endpoint called
+// local is one the model dial can reach (GitHub #907).
+func AllowPrivateAdmits(ip net.IP) bool {
+	return (ip.IsLoopback() || isGrantablePrivate(ip)) && !isCloudMetadata(ip)
+}
+
+// IsGrantablePrivate is isGrantablePrivate, exported for companion push
+// (GitHub #904), whose allowed_cidrs grant opens the same ranges as
+// DialGuard's grants.
+func IsGrantablePrivate(ip net.IP) bool { return isGrantablePrivate(ip) }
+
+// isGrantablePrivate is what the AllowPrivate and PrivateHosts grants treat
+// as private: RFC 1918, ULA and, since GitHub #893, CGNAT 100.64.0.0/10. The
+// callers still refuse loopback (PrivateHosts) and metadata addresses.
+func isGrantablePrivate(ip net.IP) bool {
+	return ip.IsPrivate() || IsSharedAddressSpace(ip)
 }
 
 // The IPv6 prefixes that embed an IPv4 address isBlockedIP checks: RFC 6052's
@@ -338,6 +453,21 @@ var (
 	ipv4Compatible = &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(96, 128)}
 	sixToFour      = &net.IPNet{IP: net.ParseIP("2002::"), Mask: net.CIDRMask(16, 128)}
 )
+
+// inPins reports whether ip is inside one of pins.
+func inPins(ip net.IP, pins []netip.Prefix) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	a = a.Unmap()
+	for _, p := range pins {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
 
 // privateHost reports whether host is a PrivateHosts entry (the dial's own
 // exact match, as hostAllowed).

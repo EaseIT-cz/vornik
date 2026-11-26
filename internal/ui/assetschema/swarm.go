@@ -84,11 +84,13 @@ func swarmRoleItemSchema() AssetSchema {
 			{
 				Title: "Model",
 				Fields: []Field{
-					{Path: "model", Label: "Model", Kind: KindString, Help: "Overrides the daemon model for this role. Empty = daemon default."},
+					{Path: "modelTier", Label: "Model tier", Kind: KindEnum, Enum: []string{"trivial", "standard", "complex", "coding", "vision"}, Help: "What the role needs from a model, without naming one. The instance's runtime.agent_llm.tiers maps it to a model; unmapped, the setup model runs it. A Model set below wins (GitHub #880)."},
+					{Path: "model", Label: "Model", Kind: KindString, Help: "Overrides the tier and the daemon model for this role. Empty = the tier's model, else the daemon default."},
 					{Path: "modelFallback", Label: "Model fallback", Kind: KindString, Help: "Backup model on a model-shaped failure (schema/plausibility/iteration). Prefer a different vendor."},
 					{Path: "requiredModalities", Label: "Required modalities", Kind: KindStringList, Help: "What this role must be able to PERCEIVE: text, vision, audio. Config load refuses a model or fallback that cannot — so a role whose prompt promises sight can't be pointed at a blind model. Empty = unchecked."},
 					{Path: "maxTokens", Label: "Max output tokens", Kind: KindInt, Help: "0 = daemon/model default."},
 					{Path: "contextSize", Label: "Context size", Kind: KindInt, Help: "0 = daemon/model default."},
+					{Path: "reasoning", Label: "Reasoning", Kind: KindEnum, Enum: []string{"off", "low", "medium", "high"}, Help: "How much the model reasons before answering. Empty = the model's model_limits default, else the model's own. Off saves output tokens; each provider maps the level to its own field (GitHub #869)."},
 					{Path: "responseFormat", Label: "Response format", Kind: KindString, Help: `Gateway output constraint. "json_object" enforces a parseable JSON envelope; empty = free-form.`},
 				},
 			},

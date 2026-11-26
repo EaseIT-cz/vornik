@@ -112,17 +112,15 @@ func checkJudgeFamilySeparation(_ context.Context, d Deps) PrereqResult {
 			Detail:      "config_assistant.model (or chat.model) and config_assistant.judge_model must both be set",
 			Remediation: "set config_assistant.judge_model to a cheap hosted model of a different family from the assistant (design §7.3), e.g. nvidia.nemotron-nano-9b-v2 or openai.gpt-oss-20b against a GLM assistant"}
 	}
+	// One rule with the engine and the healing checks (GitHub #891).
+	if reason, unclassifiable := modelfamily.PairProblem(assistant, judge); reason != "" {
+		remedy := "set config_assistant.judge_model to a model from a different provider family than config_assistant.model"
+		if unclassifiable {
+			remedy = "use model ids whose vendor prefix is recognisable (anthropic/claude, openai/gpt, google/gemini/gemma, nvidia/nemotron, glm, qwen, deepseek, mistral, llama, …) or extend internal/modelfamily"
+		}
+		return PrereqResult{OK: false, Fixable: false, Detail: reason + "; refusing rather than self-judging", Remediation: remedy}
+	}
 	fa, fj := modelfamily.Family(assistant), modelfamily.Family(judge)
-	if fa == modelfamily.Unknown || fj == modelfamily.Unknown {
-		return PrereqResult{OK: false, Fixable: false,
-			Detail:      fmt.Sprintf("cannot classify the model family of %q (%s) / %q (%s); refusing rather than assuming they differ", assistant, fa, judge, fj),
-			Remediation: "use model ids whose vendor prefix is recognisable (anthropic/claude, openai/gpt, google/gemini/gemma, nvidia/nemotron, glm, qwen, deepseek, mistral, llama, …) or extend internal/modelfamily"}
-	}
-	if fa == fj {
-		return PrereqResult{OK: false, Fixable: false,
-			Detail:      fmt.Sprintf("assistant %q and judge %q are the SAME family (%s) — a same-family judge shares the author's blind spots", assistant, judge, fa),
-			Remediation: "set config_assistant.judge_model to a model from a different provider family than config_assistant.model"}
-	}
 	return PrereqResult{OK: true, Detail: fmt.Sprintf("assistant %s (%s) judged by %s (%s)", assistant, fa, judge, fj)}
 }
 

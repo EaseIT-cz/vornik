@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -337,14 +338,10 @@ func (c *Connector) RedirectURI() (string, error) {
 	// OAuth 2.1 requires https, with loopback the only exception. Fail BEFORE the
 	// operator is sent to the vendor's consent screen: failing after consent wastes
 	// their time and strands an authorization code (§7.1).
-	if u.Scheme != "https" && !isLoopback(u.Hostname()) {
+	if u.Scheme != "https" && !dialguard.IsLoopbackHost(u.Hostname()) {
 		return "", fmt.Errorf("%w: %q is neither https nor loopback", ErrNoPublicBaseURL, base)
 	}
 	return base + CallbackPath, nil
-}
-
-func isLoopback(host string) bool {
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // Begin starts an authorization attempt: discover, resolve or register a client, and build the

@@ -4,9 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/datasubject"
+	"vornik.io/vornik/internal/incident"
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
@@ -55,6 +57,54 @@ func TestDoctorSubjectLedger_WiredOnTheResolvedDriver(t *testing.T) {
 
 	unknown := api.NewDoctorHandlers(db.DB)
 	wireDoctorSubjectLedger(unknown, "mysql", db.DB)
+	if c := find(unknown); c.Status != "SKIPPED" {
+		t.Fatalf("an unknown driver leaves the check SKIPPED, got %s %q", c.Status, c.Message)
+	}
+}
+
+// audit 2026-10-21 (#115, GDPR design §4.20.1 item 20; GitHub #475): the
+// breach ledger was wired for the page only on Postgres, and the doctor built a
+// Postgres repository on whatever handle it had, so on SQLite neither could
+// see a breach. Both read the driver-resolved ledger now.
+func TestIncidentLedgerFor_WiresTheLedgerOnBothDrivers(t *testing.T) {
+	db := sqlitetest.File(t, "incidents.db")
+	ledger := incidentLedgerFor("sqlite", db.DB)
+	if ledger == nil {
+		t.Fatal("the breach ledger must be wired on SQLite")
+	}
+	ctx := context.Background()
+	if err := ledger.Create(ctx, incident.Incident{ID: "inc_wire", State: incident.StateDetected,
+		BecameAwareAt: time.Now().UTC().Add(-80 * time.Hour)}); err != nil {
+		t.Fatalf("the wired ledger must work on SQLite: %v", err)
+	}
+	// The constructor only; the Postgres lane runs the ledger itself.
+	if incidentLedgerFor("postgres", db.DB) == nil {
+		t.Error("the breach ledger must be wired on Postgres")
+	}
+	if incidentLedgerFor("sqlite", nil) != nil {
+		t.Error("no database: nothing to wire")
+	}
+	if incidentLedgerFor("mysql", db.DB) != nil {
+		t.Error("an unknown driver must not be wired")
+	}
+
+	find := func(dh *api.DoctorHandlers) api.DoctorCheck {
+		t.Helper()
+		for _, c := range dh.RunReportReadOnly(ctx).Checks {
+			if c.Name == "breach_deadlines" {
+				return c
+			}
+		}
+		t.Fatal("breach_deadlines is not in the doctor report")
+		return api.DoctorCheck{}
+	}
+	wired := api.NewDoctorHandlers(db.DB)
+	wireDoctorBreachLedger(wired, "sqlite", db.DB)
+	if c := find(wired); c.Status != "ERROR" {
+		t.Fatalf("wired on SQLite, the check must see the overdue incident: %s %q", c.Status, c.Message)
+	}
+	unknown := api.NewDoctorHandlers(db.DB)
+	wireDoctorBreachLedger(unknown, "mysql", db.DB)
 	if c := find(unknown); c.Status != "SKIPPED" {
 		t.Fatalf("an unknown driver leaves the check SKIPPED, got %s %q", c.Status, c.Message)
 	}

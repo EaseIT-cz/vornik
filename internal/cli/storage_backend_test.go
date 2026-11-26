@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/datasubject"
+	"vornik.io/vornik/internal/incident"
 	"vornik.io/vornik/internal/persistence/postgres"
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/storage"
@@ -75,6 +77,35 @@ func TestSubjectStoreOpensOnSQLite(t *testing.T) {
 	}
 	if _, err := subjectStoreFor(nil, "subject"); err == nil {
 		t.Fatal("a nil backend must be refused")
+	}
+}
+
+// audit 2026-10-21 (#115, GDPR design §4.20.1 item 20; GitHub #475): every
+// `vornikctl incident` verb refused SQLite, so on Community's default backend a
+// personal-data breach could not be recorded. The ledger opens on either driver.
+func TestIncidentStoreOpensOnSQLite(t *testing.T) {
+	db := sqlitetest.File(t, "incidents.db")
+	repo, err := incidentStoreFor(&storage.Backend{Driver: "sqlite", DB: db.DB})
+	if err != nil {
+		t.Fatalf("incidentStoreFor(sqlite): %v", err)
+	}
+	ctx := context.Background()
+	aware := time.Now().UTC().Add(-60 * time.Hour)
+	if err := repo.Create(ctx, incident.Incident{ID: "inc_cli", State: incident.StateDetected, BecameAwareAt: aware}); err != nil {
+		t.Fatalf("Create on SQLite: %v", err)
+	}
+	overdue, soon, err := repo.CountLiveByDeadline(ctx, time.Now())
+	if err != nil || overdue != 0 || soon != 1 {
+		t.Fatalf("CountLiveByDeadline on SQLite = %d, %d, %v; want 0, 1", overdue, soon, err)
+	}
+	if _, err := incidentStoreFor(&storage.Backend{Driver: "mysql"}); err == nil {
+		t.Fatal("an unknown driver must be refused")
+	}
+	if _, err := incidentStoreFor(nil); err == nil {
+		t.Fatal("a nil backend must be refused")
+	}
+	if _, err := incidentStoreFor(&storage.Backend{Driver: "sqlite"}); err == nil {
+		t.Fatal("an uninitialised sqlite backend must be refused")
 	}
 }
 

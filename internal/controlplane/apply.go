@@ -9,15 +9,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+
 	"vornik.io/vornik/internal/configlock"
 
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/modelcheck"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -162,12 +166,22 @@ type resolvedOp struct {
 // Deps are funcs/interfaces so tests can drive every path.
 type ApplyEngine struct {
 	Proposals persistence.ProposalRepository
+	// ModelCheck checks the role models an apply changes (GitHub #881,
+	// registry design §12.2 C2) and returns its warnings, or an error that
+	// refuses the apply. Nil: models are not checked.
+	ModelCheck func(ctx context.Context, changed []string) (warnings []string, err error)
 	// ConfigDir is the deployed config tree root; apply_target is resolved
 	// relative to it (path-traversal-guarded).
 	ConfigDir string
 	// Reload performs a synchronous config reload; a non-nil error means the
 	// new config was rejected (→ auto-rollback).
 	Reload func() error
+	// ReloadTimeout bounds each reload; zero is DefaultReloadTimeout (#859).
+	ReloadTimeout time.Duration
+	// ReloadGuard is the reload state shared by every engine of the daemon
+	// (reload_bound.go, #859). Nil gives the engine its own.
+	ReloadGuard *ReloadGuard
+	guardOnce   sync.Once
 	// Validate parses + lints the proposed content for its target BEFORE any
 	// write; a non-nil error aborts the apply with no file touched.
 	Validate func(relTarget, content string) error
@@ -344,6 +358,12 @@ func (e *ApplyEngine) namedRoot(rel string) (string, string, bool) {
 // Apply applies an APPROVED proposal. Returns nil only after the new config
 // reloaded cleanly and the ledger recorded APPLIED.
 func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon bool) error {
+	// GitHub #881: check every role model the proposal changes BEFORE the
+	// config lock, so no model call runs under it. An approved proposal's
+	// content is fixed, so the check still holds when the lock is taken.
+	if err := e.checkProposalModels(ctx, id); err != nil {
+		return err
+	}
 	// PROCESS-WIDE first, then per-engine. ApplyEngine.mu only ever
 	// serialised ONE engine, and the daemon builds several — the API surface
 	// and the UI surface each construct their own (container_http.go). The
@@ -542,15 +562,15 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 	for _, ro := range resolved {
 		if werr := writePost(ro); werr != nil {
 			e.reverseWrites(written)
-			_ = e.reload()
+			_ = e.restoreReload(id)
 			return fmt.Errorf("apply write failed for %s (reversed): %w", ro.op.Path, werr)
 		}
 		written = append(written, ro)
 	}
 	// Reload; on failure reverse every write, restore known-good, stay APPROVED.
-	if rerr := e.reload(); rerr != nil {
+	if rerr := e.reload(id); rerr != nil {
 		e.reverseWrites(written)
-		_ = e.reload()
+		_ = e.restoreReload(id)
 		e.Logger.Warn().Err(rerr).Str("proposal_id", id).
 			Msg("control-plane: apply reload rejected; reversed all writes, proposal stays APPROVED")
 		return fmt.Errorf("apply reload rejected (reversed): %w", rerr)
@@ -559,7 +579,7 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 	// so file+ledger never diverge.
 	if merr := e.Proposals.MarkApplied(ctx, id, actor, snapshot); merr != nil {
 		e.reverseWrites(written)
-		_ = e.reload()
+		_ = e.restoreReload(id)
 		return fmt.Errorf("apply recorded failed, reversed writes: %w", merr)
 	}
 	e.Logger.Info().Str("proposal_id", id).Int("ops", len(written)).Str("applied_by", actor).
@@ -904,11 +924,9 @@ func (e *ApplyEngine) Rollback(ctx context.Context, id string) error {
 	if err := e.restoreSnapshot(p); err != nil {
 		return err
 	}
-	if rerr := e.reload(); rerr != nil {
+	if rerr := e.restoreReload(id); rerr != nil {
 		// The restored snapshot itself failed to reload — leave it on disk
-		// (last-known-good) and alert; don't half-apply.
-		e.Logger.Error().Err(rerr).Str("proposal_id", id).
-			Msg("control-plane: CRITICAL rollback reload failed; last-known-good left on disk")
+		// (last-known-good); restoreReload logged it and recorded it (#859).
 		return fmt.Errorf("rollback reload failed: %w", rerr)
 	}
 	if err := e.Proposals.MarkRolledBack(ctx, id); err != nil {
@@ -975,13 +993,6 @@ func (e *ApplyEngine) restoreSnapshot(p *persistence.ControlPlaneProposal) error
 		}
 	}
 	return nil
-}
-
-func (e *ApplyEngine) reload() error {
-	if e.Reload == nil {
-		return nil
-	}
-	return e.Reload()
 }
 
 // atomicWrite writes data to a temp file in the target's dir (0600), fsyncs,
@@ -1054,4 +1065,56 @@ var stdioMCPChange = config.StdioMCPChange
 
 func isYAMLPath(p string) bool {
 	return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml")
+}
+
+// checkProposalModels runs ModelCheck over the models an approved proposal's
+// swarm writes add: those in the new content that the file on disk does not
+// already name. It reads only.
+func (e *ApplyEngine) checkProposalModels(ctx context.Context, id string) error {
+	if e.ModelCheck == nil {
+		return nil
+	}
+	p, err := e.Proposals.GetByID(ctx, id)
+	if err != nil || p.Status != persistence.ProposalStatusApproved {
+		return nil // Apply reports these itself
+	}
+	ops, err := e.buildOps(p)
+	if err != nil {
+		return nil
+	}
+	var changed []string
+	for _, op := range ops {
+		if op.Op == applyOpDelete || !isSwarmFile(op.Path) {
+			continue
+		}
+		before := map[string]bool{}
+		if abs, rerr := e.resolveTarget(op.Path); rerr == nil {
+			if raw, ferr := os.ReadFile(abs); ferr == nil {
+				for _, m := range modelcheck.SwarmFileModels(raw, op.Path) {
+					before[m] = true
+				}
+			}
+		}
+		for _, m := range modelcheck.SwarmFileModels([]byte(op.Content), op.Path) {
+			if !before[m] && !slices.Contains(changed, m) {
+				changed = append(changed, m)
+			}
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	sort.Strings(changed)
+	warnings, err := e.ModelCheck(ctx, changed)
+	if err != nil {
+		return fmt.Errorf("the proposal's models were checked before applying, and one did not answer; nothing was applied: %w", err)
+	}
+	for _, w := range warnings {
+		e.Logger.Warn().Str("proposal_id", id).Msg("control-plane: model check: " + w)
+	}
+	return nil
+}
+
+func isSwarmFile(rel string) bool {
+	return strings.HasSuffix(rel, ".md") && (strings.HasPrefix(rel, "swarms/") || strings.Contains(rel, "/swarms/"))
 }

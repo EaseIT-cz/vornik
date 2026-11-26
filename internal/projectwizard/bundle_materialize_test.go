@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/rolelibrary"
 )
 
@@ -375,5 +376,30 @@ func TestParseBundleSwarmAndWorkflow_EmptyMap(t *testing.T) {
 	}
 	if wfDoc.WorkflowID != "" {
 		t.Errorf("expected zero-value doc, got %+v", wfDoc)
+	}
+}
+
+// GitHub #880, project and swarm registry design §11.2 R9: a composed role
+// carries its archetype's model tier into the swarm, so the instance's tier
+// map picks its model; the composer names no model.
+func TestMaterializeBundle_880_WritesModelTier(t *testing.T) {
+	mb, _, err := materializeBundle(validComposedBundle(), testArchetypes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range mb.Swarm.Roles {
+		if r.ModelTier != mb.RoleModelTiers[r.Name] || r.ModelTier == "" {
+			t.Errorf("role %s: modelTier %q, archetype tier %q", r.Name, r.ModelTier, mb.RoleModelTiers[r.Name])
+		}
+		if r.Model != "" {
+			t.Errorf("role %s names model %q; composed roles name a tier only", r.Name, r.Model)
+		}
+	}
+	out, err := registry.MarshalSwarmMarkdown(mb.Swarm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "modelTier: standard") {
+		t.Errorf("serialised swarm lacks the tier:\n%s", out)
 	}
 }

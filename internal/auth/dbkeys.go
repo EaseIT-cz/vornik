@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/persistence"
@@ -123,6 +124,22 @@ func (b *DBKeysBackend) Authenticate(ctx context.Context, cred Credential) (*Ide
 	// is a hard reject — identical to the inline path's 401.
 	claimedProject, _, parseErr := apikey.Parse(cred.BearerToken)
 	if parseErr != nil || !apikey.MatchesProject(claimedProject, row.ProjectID) {
+		return nil, ErrUnauthorized
+	}
+	return b.admitRow(ctx, row)
+}
+
+// admitRow is everything after a key row is found: the row is active, the
+// owner gate passes, last_used_at is touched once, and the identity is built.
+// The DB-keys backend reaches it from a hash lookup; the OIDC trust backend
+// (GitHub #792, design 27 §C2 step 4) from a trust's key id. It does not
+// cover the sk-vornik- prefix, the lookup or the project-in-key check, which
+// belong to the bearer path only.
+func (b *DBKeysBackend) admitRow(ctx context.Context, row *persistence.APIKey) (*Identity, error) {
+	// The hash lookup returns only active rows; a lookup by id does not.
+	// time.Now, not an injected clock: a key's expiry is days, not the
+	// token's minutes, so no test needs to steer it.
+	if row.RevokedAt != nil || (row.ExpiresAt != nil && !row.ExpiresAt.After(time.Now())) {
 		return nil, ErrUnauthorized
 	}
 	// The owner check runs AFTER the key is authenticated and validated, and

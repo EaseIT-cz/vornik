@@ -1,0 +1,22 @@
+# Provider profile: Ollama Cloud (GitHub #880, project and swarm registry
+# design §11.2 R5). Every ID here ran in this repository's shipped swarms
+# before #880 and was probed live before it shipped. Apply it with
+#   vornikctl models profile apply ollama-cloud
+# which copies tiers and roles into runtime.agent_llm. After that they are
+# your instance's config: edit them there, and upgrades never rewrite them.
+# A tier left out uses the setup model: no Ollama Cloud model was measured
+# for the trivial tier, so it is left out. standard is left out too:
+# minimax-m2.7 was retired upstream on 2026-11-09 (HTTP 410, probe
+# 2026-11-22), and its suggested successor has not been measured here.
+description: "Ollama Cloud: GLM-5.2 for planning, Kimi K2.6 for code."
+endpoint_hosts:
+  - "ollama.com"
+  - "*.ollama.com"
+tiers:
+  complex:  {model: "glm-5.2", fallback: "kimi-k2.6"}
+  coding:   {model: "kimi-k2.6", fallback: "glm-5.2"}
+  vision:   {model: "gemma4:31b"}
+roles:
+  # GLM proposed sub-floor opens on the strategize step, which the scorecard
+  # floor rejected, failing the tick (2026-07-25). Keep the strategist off GLM.
+  trading-swarm/strategist: {model: "kimi-k2.6"}

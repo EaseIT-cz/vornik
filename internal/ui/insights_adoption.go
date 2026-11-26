@@ -18,11 +18,14 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/actor"
 	"vornik.io/vornik/internal/persistence"
@@ -551,8 +554,8 @@ func (s *Server) InsightsAdoption(w http.ResponseWriter, r *http.Request) {
 	s.collectKeyActivity(ctx, &data.Stats, queryIDs, data.AllowedProjects, since)
 	s.resolveEphemeralKeys(ctx, &data.Stats, concreteProjects(queryIDs, data.AllowedProjects))
 	data.Capabilities = s.collectCapabilities(ctx, since, queryIDs)
-	data.Stats.Activity.ChatTurns, data.Stats.Activity.ChatTurnsCounted = countActivity(ctx, s.chatAudit, queryIDs, since)
-	data.Stats.Activity.ToolCalls, data.Stats.Activity.ToolCallsCounted = countActivity(ctx, s.auditRepo, queryIDs, since)
+	data.Stats.Activity.ChatTurns, data.Stats.Activity.ChatTurnsCounted = countActivity(ctx, s.logger, "chat_turns", s.chatAudit, queryIDs, since)
+	data.Stats.Activity.ToolCalls, data.Stats.Activity.ToolCallsCounted = countActivity(ctx, s.logger, "tool_calls", s.auditRepo, queryIDs, since)
 
 	switch {
 	case data.Stats.Activity.Tasks == 0 && data.Stats.Activity.RAGQueries == 0 &&
@@ -1170,8 +1173,12 @@ func (s *Server) addMemoryWrites(ctx context.Context, st *adoptionStats, project
 // countActivity sums repo's persistence.ActivityCounter over the session's
 // projects (one global count for an all-access session) since `since`
 // (GitHub #261). counted is false when repo is nil, does not count, or any
-// count fails: the panel then says "not counted here" instead of 0.
-func countActivity(ctx context.Context, repo any, queryIDs []string, since time.Time) (total int64, counted bool) {
+// count fails: the panel then says "not counted here" instead of 0. A failure
+// other than ErrActivityNotCounted (a database error) also logs one warning
+// naming the surface, so an outage is not silent (GitHub #749). The
+// count stops at the first failing project, so an outage across every
+// project logs one warning, naming the first.
+func countActivity(ctx context.Context, logger zerolog.Logger, surface string, repo any, queryIDs []string, since time.Time) (total int64, counted bool) {
 	ac, ok := repo.(persistence.ActivityCounter)
 	if !ok || repo == nil {
 		return 0, false
@@ -1179,6 +1186,10 @@ func countActivity(ctx context.Context, repo any, queryIDs []string, since time.
 	for _, pid := range projectsToIterate(queryIDs) {
 		n, err := ac.CountSince(ctx, pid, since)
 		if err != nil {
+			if !errors.Is(err, persistence.ErrActivityNotCounted) {
+				logger.Warn().Err(err).Str("surface", surface).Str("project_id", pid).
+					Msg("adoption: activity count failed; the panel shows not counted here")
+			}
 			return 0, false
 		}
 		total += n

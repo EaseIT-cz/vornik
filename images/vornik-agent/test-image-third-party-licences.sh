@@ -234,6 +234,102 @@ if [ -x "$SCRIPT" ]; then
     fi
 fi
 
+# 7b. Rebuilding from a previously published archive (GitHub #851): when an
+# upstream archive disappears (microsoft/onnxruntime answered 404 at
+# 2026.11.7), each row's member is taken from our own earlier copy and still
+# checked against sources.tsv. A curl stub fails every codeload call and
+# serves only the piper bundle, which the espeak-ng data check downloads.
+if [ -x "$SCRIPT" ]; then
+    px="$WORK/px"; E=0123456789abcdef0123456789abcdef01234567
+    mkdir -p "$px/src/espeak-ng-$E/espeak-ng-data/lang" "$px/bundle/piper/espeak-ng-data/lang" "$px/cache" "$px/bin" "$px/ref"
+    printf 'name English\n' > "$px/src/espeak-ng-$E/espeak-ng-data/lang/en"
+    cp "$px/src/espeak-ng-$E/espeak-ng-data/lang/en" "$px/bundle/piper/espeak-ng-data/lang/en"
+    tar -czf "$px/cache/espeak-ng-$E.tar.gz" -C "$px/src" "espeak-ng-$E"
+    tar -czf "$px/bundle.tar.gz" -C "$px/bundle" piper
+    cp "$px/bundle.tar.gz" "$px/cache/piper_linux_x86_64.tar.gz"
+    esum="$(sha256sum "$px/cache/espeak-ng-$E.tar.gz" | cut -d' ' -f1)"
+    bsum="$(sha256sum "$px/bundle.tar.gz" | cut -d' ' -f1)"
+    printf '# piper-release: 9.9.9-1\nespeak-ng\tx/espeak-ng\tmaster\t%s\t%s\n' "$E" "$esum" > "$px/sources.tsv"
+    printf 'ARG PIPER_RELEASE=9.9.9-1\n      amd64) arch=x86_64;  sum=%s ;;\n' "$bsum" > "$px/Containerfile"
+    NAME=vornik-agent-third-party-source-piper-9.9.9-1.tar
+    # The reference archive, built from the cache as a release would be.
+    CONTAINERFILE="$px/Containerfile" THIRD_PARTY_MANIFEST="$px/sources.tsv" THIRD_PARTY_SRC_CACHE="$px/cache" "$SCRIPT" --out "$px/ref" >/dev/null 2>&1
+    # curl stub: the bundle URL is served, every other URL fails.
+    cat > "$px/bin/curl" <<STUB
+#!/usr/bin/env bash
+out=""; url=""
+while [ \$# -gt 0 ]; do case "\$1" in -o) out="\$2"; shift 2 ;; -*) shift ;; *) url="\$1"; shift ;; esac; done
+case "\$url" in *rhasspy/piper/releases/download/*) cp "$px/bundle.tar.gz" "\$out" ;; *) exit 22 ;; esac
+STUB
+    chmod +x "$px/bin/curl"
+    run_px() { PATH="$px/bin:$PATH" CONTAINERFILE="$px/Containerfile" THIRD_PARTY_MANIFEST="$px/sources.tsv" THIRD_PARTY_SRC_PRIOR="$1" "$SCRIPT" --out "$2"; }
+
+    pn="$(CONTAINERFILE="$px/Containerfile" THIRD_PARTY_MANIFEST="$px/sources.tsv" "$SCRIPT" --print-name 2>&1)"
+    if [ "$pn" = "$NAME" ] && [ -f "$px/ref/$pn" ]; then ok "--print-name prints the name the script writes ($pn)"
+    else bad "--print-name printed '$pn'; the script wrote $(ls "$px/ref")"; fi
+
+    mkdir -p "$px/o1"; run_px "$px/ref/$NAME" "$px/o1" >"$WORK/px1.log" 2>&1; rc=$?
+    if [ "$rc" -eq 0 ] && cmp -s "$px/ref/$NAME" "$px/o1/$NAME"; then
+        ok "rebuilt from the prior archive with every upstream archive unreachable, byte-identical"
+    else bad "prior rebuild: exit $rc, $(tail -3 "$WORK/px1.log")"; fi
+
+    # Without the prior, the same run fails: the stub is what makes upstream unreachable.
+    mkdir -p "$px/o0"; PATH="$px/bin:$PATH" CONTAINERFILE="$px/Containerfile" THIRD_PARTY_MANIFEST="$px/sources.tsv" "$SCRIPT" --out "$px/o0" >/dev/null 2>&1; rc=$?
+    if [ "$rc" -eq 3 ]; then ok "without the prior archive the same run fails (exit 3)"; else bad "no-prior run with upstream down: exit $rc"; fi
+
+    # A prior whose member was altered: refused by the manifest's sha256.
+    mkdir -p "$px/alt/x" "$px/o2"; tar -xf "$px/ref/$NAME" -C "$px/alt/x"
+    printf 'tampered' >> "$px/alt/x/vornik-agent-third-party-source-piper-9.9.9-1/sources/espeak-ng-$E.tar.gz"
+    tar -cf "$px/alt/$NAME" -C "$px/alt/x" vornik-agent-third-party-source-piper-9.9.9-1
+    run_px "$px/alt/$NAME" "$px/o2" >"$WORK/px2.log" 2>&1; rc=$?
+    if [ "$rc" -eq 3 ] && grep -q 'sha256 mismatch' "$WORK/px2.log" && [ -z "$(ls -A "$px/o2")" ]; then
+        ok "a prior archive with an altered member is refused (exit 3), nothing written"
+    else bad "altered prior member: exit $rc, $(tail -2 "$WORK/px2.log")"; fi
+
+    # Not a tar: refused.
+    mkdir -p "$px/o3"; printf 'not a tar' > "$px/notatar.tar"
+    run_px "$px/notatar.tar" "$px/o3" >"$WORK/px3.log" 2>&1; rc=$?
+    if [ "$rc" -eq 3 ] && [ -z "$(ls -A "$px/o3")" ]; then ok "a prior that is not a tar is refused (exit 3)"
+    else bad "non-tar prior: exit $rc, $(tail -2 "$WORK/px3.log")"; fi
+
+    # The row's member is a symlink: refused, nothing written.
+    mkdir -p "$px/sl/x/vornik-agent-third-party-source-piper-9.9.9-1/sources" "$px/o4"
+    ln -s /etc/passwd "$px/sl/x/vornik-agent-third-party-source-piper-9.9.9-1/sources/espeak-ng-$E.tar.gz"
+    tar -cf "$px/sl/$NAME" -C "$px/sl/x" vornik-agent-third-party-source-piper-9.9.9-1
+    run_px "$px/sl/$NAME" "$px/o4" >"$WORK/px4.log" 2>&1; rc=$?
+    if [ "$rc" -eq 3 ] && grep -q 'not a regular file' "$WORK/px4.log" && [ -z "$(ls -A "$px/o4")" ]; then
+        ok "a prior whose member is a symlink is refused (exit 3), nothing written"
+    else bad "symlink member: exit $rc, $(tail -2 "$WORK/px4.log")"; fi
+
+    # An extra ../ member is never extracted: only the manifest's names are.
+    mkdir -p "$px/esc/x" "$px/o5"; tar -xf "$px/ref/$NAME" -C "$px/esc/x"; printf 'x' > "$px/esc/escape"
+    tar -cf "$px/esc/$NAME" -C "$px/esc/x" vornik-agent-third-party-source-piper-9.9.9-1
+    tar --append -f "$px/esc/$NAME" -P --transform 's#.*escape#../escape-851#' "$px/esc/escape" 2>/dev/null
+    run_px "$px/esc/$NAME" "$px/o5" >"$WORK/px5.log" 2>&1; rc=$?
+    if [ "$rc" -eq 0 ] && [ ! -e "$WORK/../escape-851" ] && [ ! -e "$px/escape-851" ] && cmp -s "$px/ref/$NAME" "$px/o5/$NAME"; then
+        ok "an extra ../ member in the prior is never extracted; the archive is the same"
+    else bad "escape member: exit $rc, $(tail -2 "$WORK/px5.log")"; fi
+
+    # A row the prior lacks is downloaded upstream (the stub serves it here).
+    mkdir -p "$px/lack/x/vornik-agent-third-party-source-piper-9.9.9-1/sources" "$px/o6"
+    tar -cf "$px/lack/$NAME" -C "$px/lack/x" vornik-agent-third-party-source-piper-9.9.9-1
+    cat > "$px/bin/curl" <<STUB
+#!/usr/bin/env bash
+out=""; url=""
+while [ \$# -gt 0 ]; do case "\$1" in -o) out="\$2"; shift 2 ;; -*) shift ;; *) url="\$1"; shift ;; esac; done
+case "\$url" in *rhasspy/piper/releases/download/*) cp "$px/bundle.tar.gz" "\$out" ;; *codeload.github.com/x/espeak-ng/tar.gz/$E) cp "$px/cache/espeak-ng-$E.tar.gz" "\$out" ;; *) exit 22 ;; esac
+STUB
+    run_px "$px/lack/$NAME" "$px/o6" >"$WORK/px6.log" 2>&1; rc=$?
+    if [ "$rc" -eq 0 ] && cmp -s "$px/ref/$NAME" "$px/o6/$NAME"; then ok "a row the prior lacks is downloaded upstream"
+    else bad "row absent from prior: exit $rc, $(tail -2 "$WORK/px6.log")"; fi
+
+    # Both inputs: a usage error.
+    mkdir -p "$px/o7"
+    THIRD_PARTY_SRC_CACHE="$px/cache" run_px "$px/ref/$NAME" "$px/o7" >/dev/null 2>&1; rc=$?
+    if [ "$rc" -eq 2 ]; then ok "THIRD_PARTY_SRC_PRIOR with THIRD_PARTY_SRC_CACHE is a usage error (exit 2)"
+    else bad "both inputs: exit $rc"; fi
+fi
+
 # 8. The aggregate premise (review cb7c F5): Vornik's Go binaries in the image
 # are built without cgo, so none can link libespeak-ng in-process. Every
 # `go build` in the Containerfile must say CGO_ENABLED=0.

@@ -11,7 +11,7 @@ import (
 // pre-approval listing's mask both read.
 
 func TestPrivateHostGranted_740(t *testing.T) {
-	hosts := []string{"intranet.example", "10.0.0.5", "*.corp.example"}
+	hosts := names("intranet.example", "10.0.0.5", "*.corp.example")
 	for _, c := range []struct {
 		url  string
 		want bool
@@ -20,7 +20,7 @@ func TestPrivateHostGranted_740(t *testing.T) {
 		{"https://Intranet.Example./mcp", true},
 		{"http://intranet.example/mcp", false}, // https only
 		{"https://other.example/mcp", false},   // not listed
-		{"https://10.0.0.5/mcp", false},        // an IP-literal entry is not valid
+		{"https://10.0.0.5/mcp", true},         // an IP-literal entry grants since #403 (§6.12)
 		{"https://a.corp.example/mcp", false},  // a wildcard entry is not valid
 		{"://intranet.example", false},         // unparsable
 		{"https:///mcp", false},                // no host
@@ -36,14 +36,14 @@ func TestPrivateHostGranted_740(t *testing.T) {
 
 func TestPrivateHostGranted_740_ManagedPolicyGrantsNothing(t *testing.T) {
 	withPolicy(t, &ManagedPolicy{})
-	if PrivateHostGranted("https://intranet.example/mcp", []string{"intranet.example"}) {
+	if PrivateHostGranted("https://intranet.example/mcp", names("intranet.example")) {
 		t.Fatal("a managed policy granted a private host")
 	}
 }
 
 // The guard adds PrivateHosts exactly when the predicate is true.
 func TestAgentURLGuard_740_FollowsThePredicate(t *testing.T) {
-	hosts := []string{"intranet.example"}
+	hosts := names("intranet.example")
 	for _, u := range []string{"https://intranet.example/mcp", "http://intranet.example/mcp", "https://other.example/", "https://10.0.0.5/"} {
 		g := AgentURLGuard(u, hosts)
 		if granted := len(g.PrivateHosts) > 0; granted != PrivateHostGranted(u, hosts) {

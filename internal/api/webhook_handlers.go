@@ -17,6 +17,7 @@ import (
 
 	"vornik.io/vornik/internal/actor"
 	"vornik.io/vornik/internal/budget"
+	forgeh "vornik.io/vornik/internal/executor/handlers/forge"
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/forgereview"
 	"vornik.io/vornik/internal/persistence"
@@ -196,6 +197,15 @@ func (s *Server) enqueueVerifiedWebhook(ctx context.Context, w http.ResponseWrit
 		eventID := webhookEventID(event, source.EventIDPath, deliveryID, body)
 		s.recordWebhookEvent(ctx, projectID, sourceName, eventID, body, persistence.WebhookEventStatusRejected, nil, "template_error", "failed to render task template")
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "failed to render task template")
+		return
+	}
+	// GitHub #873: a canary task runs the App review on a planted diff and
+	// needs no forge job, so a webhook may not start one; the template can
+	// read event fields a sender controls.
+	if forgeh.IsCanaryTaskType(taskType) {
+		eventID := webhookEventID(event, source.EventIDPath, deliveryID, body)
+		s.recordWebhookEvent(ctx, projectID, sourceName, eventID, body, persistence.WebhookEventStatusRejected, nil, "reserved_task_type", "task type canary is reserved for the review canary")
+		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "task type canary is reserved for the review canary")
 		return
 	}
 

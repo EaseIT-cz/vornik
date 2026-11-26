@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"vornik.io/vornik/internal/aimark"
+	"vornik.io/vornik/internal/controlplane"
 
 	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
@@ -19,6 +20,7 @@ import (
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/mcpconnect"
+	"vornik.io/vornik/internal/modelcheck"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/registry"
@@ -86,6 +88,14 @@ func (h *DoctorHandlers) resolveDaemonRevision() string {
 
 // DoctorHandlers provides the /api/v1/doctor endpoint.
 type DoctorHandlers struct {
+	// undeclaredConfigKeys: config.yaml keys this daemon does not read
+	// (SetUndeclaredConfigKeys, GitHub #869).
+	undeclaredConfigKeys []string
+	// healingJudge reports whether the config assistant is wired as the
+	// healing producer and, if so, why its judge cannot judge it ("" when it
+	// can). SetHealingJudge, GitHub #891.
+	healingJudge              func() (wired bool, problem string)
+	undeclaredConfigKeysWired bool
 	// lastReport keeps the last report's error checks for the overview
 	// (GitHub #603); set by RunReportReadOnly and RunDoctor.
 	lastReport doctorLastReport
@@ -179,7 +189,14 @@ type DoctorHandlers struct {
 	// rather than the routing side. chat.api_key is ALSO snapshotted into
 	// secretFields below for the hygiene check; this is a dedicated copy.
 	chatEndpoint string
-	chatAPIKey   string
+	// agentTiers and agentRoles are runtime.agent_llm.tiers and .roles, for
+	// the model_tiers check (GitHub #880).
+	agentTiers, agentRoles map[string]config.ModelChoice
+	// modelChecker probes a model before a save (GitHub #881). Nil: saves
+	// are not checked.
+	modelChecker     *modelcheck.Checker
+	managedCatalogue func() []string
+	chatAPIKey       string
 	// chatProvider is cfg.Chat.Provider. When it delegates to sub-providers
 	// ("router"), the top-level chat.api_key/chat.endpoint are NOT the
 	// credential path — each sub-provider carries its own — so the
@@ -223,12 +240,22 @@ type DoctorHandlers struct {
 	// agentReadHolds is the held set's store and re-list state (amendment
 	// #481); nil omits it from the check.
 	agentReadHolds func() mcp.ReadHoldState
+	// unconfirmedReload backs control_plane_restore_reload (GitHub #859).
+	unconfirmedReload func() *controlplane.UnconfirmedReload
+	// reminderLister backs reminders_undelivered (GitHub #861).
+	reminderLister func(ctx context.Context, f persistence.ReminderListFilter) ([]*persistence.Reminder, error)
 	// agentRollbackFailures backs agent_change_stays_applied
 	// (agent-administered design §23.9). Nil: SKIPPED.
 	agentRollbackFailures func(ctx context.Context) (AgentRollbackFailures, error)
 	// agentModels classifies agent_admin.models now (agent_model_catalogue,
 	// agent-administered design §18.6 item 2).
 	agentModels func() AgentModelCatalogueStatus
+	// agentCGNAT backs agent_connections_cgnat (agent-administered design
+	// part 06 §6.11, GitHub #893). Nil: SKIPPED.
+	agentCGNAT func(ctx context.Context) (AgentCGNATStatus, error)
+	// agentPrivateHosts backs agent_private_hosts_unused (part 06 §6.12,
+	// GitHub #403). Nil: SKIPPED.
+	agentPrivateHosts func(ctx context.Context) (AgentPrivateHostsStatus, error)
 	// provenanceClones reports the daemon-only provenance clones
 	// (memory_provenance_clone, GitHub #499). Nil = SKIPPED.
 	provenanceClones func() []ProvenanceCloneStatus
@@ -407,6 +434,9 @@ type DoctorHandlers struct {
 	// subjectRequests backs checkSubjectRequestDeadlines (GDPR Art 12(3)).
 	// Wired by the container on the resolved driver; nil → SKIPPED.
 	subjectRequests SubjectRequestLedger
+	// breachLedger backs checkBreachDeadlines (GDPR Art 33(1), GitHub #475).
+	// Wired by the container on the resolved driver; nil → SKIPPED.
+	breachLedger BreachLedger
 	// aiMarker backs checkAIOutputMarking (Art 50(2), GitHub #117).
 	aiMarker    *aimark.Marker
 	aiMarkerSet bool
@@ -522,6 +552,7 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.defaultNetwork = cfg.Runtime.DefaultNetwork
 	h.unixSocketPath = cfg.DaemonSocketPath()
 	h.chatEndpoint = cfg.Chat.Endpoint
+	h.agentTiers, h.agentRoles = cfg.Runtime.AgentLLM.Tiers, cfg.Runtime.AgentLLM.Roles
 	h.chatAPIKey = cfg.Chat.APIKey
 	h.chatProvider = cfg.Chat.Provider
 	h.chatModel = cfg.Chat.Model
@@ -697,6 +728,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkLeaderLocksHealth())
 	report.Checks = append(report.Checks, h.checkModelHealth(ctx))
 	report.Checks = append(report.Checks, h.checkModelCallsLive())
+	report.Checks = append(report.Checks, h.checkHealingJudgeFamily())
 	report.Checks = append(report.Checks, h.checkModelCircuits())
 	report.Checks = append(report.Checks, h.checkAgentModelCircuits())
 	report.Checks = append(report.Checks, h.checkConnectorAuth(ctx))
@@ -723,9 +755,13 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
 	report.Checks = append(report.Checks, h.checkA2ACorpusWalk(ctx))
+	report.Checks = append(report.Checks, h.checkRemindersUndelivered(ctx))
+	report.Checks = append(report.Checks, h.checkRestoreReload(ctx))
 	report.Checks = append(report.Checks, h.checkMemorySensitivityCap(ctx))
 	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
+	report.Checks = append(report.Checks, h.checkAgentCGNATConnections(ctx))
+	report.Checks = append(report.Checks, h.checkAgentPrivateHostsUnused(ctx))
 	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkBrokerAuditChannel(ctx))
@@ -733,6 +769,8 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
+	report.Checks = append(report.Checks, h.checkUndeclaredConfigKeys())
+	report.Checks = append(report.Checks, h.checkStartHeld())
 	appendTemplateDriftPointer(report.Checks)
 	issues := 0
 	for _, c := range report.Checks {
@@ -811,11 +849,13 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkToolAuditRedaction())
 	report.Checks = append(report.Checks, h.checkRedactionSeams())
 	report.Checks = append(report.Checks, h.checkDispatcherRole(fix))
+	report.Checks = append(report.Checks, h.runModelTiersCheck())
 	report.Checks = append(report.Checks, h.checkWorkspaceCanonical())
 	report.Checks = append(report.Checks, h.checkCostAttribution())
 	report.Checks = append(report.Checks, h.checkLeaderLocksHealth())
 	report.Checks = append(report.Checks, h.checkModelHealth(ctx))
 	report.Checks = append(report.Checks, h.checkModelCallsLive())
+	report.Checks = append(report.Checks, h.checkHealingJudgeFamily())
 	report.Checks = append(report.Checks, h.checkModelCircuits())
 	report.Checks = append(report.Checks, h.checkAgentModelCircuits())
 	report.Checks = append(report.Checks, h.checkConnectorAuth(ctx))
@@ -842,9 +882,13 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
 	report.Checks = append(report.Checks, h.checkA2ACorpusWalk(ctx))
+	report.Checks = append(report.Checks, h.checkRemindersUndelivered(ctx))
+	report.Checks = append(report.Checks, h.checkRestoreReload(ctx))
 	report.Checks = append(report.Checks, h.checkMemorySensitivityCap(ctx))
 	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
+	report.Checks = append(report.Checks, h.checkAgentCGNATConnections(ctx))
+	report.Checks = append(report.Checks, h.checkAgentPrivateHostsUnused(ctx))
 	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkBrokerAuditChannel(ctx))
@@ -852,6 +896,8 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
+	report.Checks = append(report.Checks, h.checkUndeclaredConfigKeys())
+	report.Checks = append(report.Checks, h.checkStartHeld())
 	appendTemplateDriftPointer(report.Checks)
 
 	issues := 0
@@ -1409,12 +1455,8 @@ func (h *DoctorHandlers) checkAPISecurityPosture() DoctorCheck {
 	if h.serverAddress == "" {
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "server address not captured; skipping"}
 	}
-	// serverAddress is host:port. Split defensively.
-	host := h.serverAddress
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
-	}
-	loopback := host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+	// serverAddress is host:port; a bare ":port" listens everywhere.
+	loopback := listensOnlyOnLoopback(h.serverAddress)
 	if h.apiAuthEnabled {
 		return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("API auth enabled on %s", h.serverAddress)}
 	}
@@ -2018,4 +2060,11 @@ func (h *DoctorHandlers) SecretFieldsSnapshot() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// SetModelChecker installs the check a save runs before writing a model, and
+// on a managed instance the catalogue a model must be in (GitHub #881). Nil
+// leaves saves unchecked; a nil catalogue means not managed.
+func (h *DoctorHandlers) SetModelChecker(c *modelcheck.Checker, managedCatalogue func() []string) {
+	h.modelChecker, h.managedCatalogue = c, managedCatalogue
 }

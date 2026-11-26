@@ -197,7 +197,7 @@
                                class="w-full px-3 py-1.5 rounded-lg bg-surface-800 border border-control text-sm text-ink-200 placeholder:text-ink-600">
                     </label>
                     <p class="text-xs text-ink-600">
-                        Your verdict on execution <code>{{.Rating.ExecutionID}}</code>. Changing it
+                        Your verdict on execution <code title="{{.Rating.ExecutionID}}">{{shortID .Rating.ExecutionID}}</code>. Changing it
                         replaces your previous one; another operator's rating is separate.
                         {{if not .Rating.RatedAt.IsZero}}First rated {{.Rating.RatedAt.Format "2006-01-02 15:04"}} UTC.{{end}}
                     </p>
@@ -1038,7 +1038,7 @@
             <details class="vk-disc" {{if not .IsRoleUser}}open{{end}}>
                 <summary class="vk-disc-sum"><h2 class="vk-disc-title">Lease</h2></summary>
                 <div class="px-5 py-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <dl><dt class="text-xs text-ink-500 mb-1">Lease ID</dt><dd class="text-sm text-ink-100 font-mono text-xs">{{.Task.LeaseID}}</dd></dl>
+                    <dl><dt class="text-xs text-ink-500 mb-1">Lease ID</dt><dd class="text-sm text-ink-100 font-mono text-xs"{{with .Task.LeaseID}} title="{{.}}">{{shortID .}}{{else}}>{{end}}</dd></dl>
                     <dl><dt class="text-xs text-ink-500 mb-1">Leased By</dt><dd class="text-sm text-ink-100 font-mono">{{if .Task.LeasedBy}}{{.Task.LeasedBy}}{{else}}-{{end}}</dd></dl>
                     <dl><dt class="text-xs text-ink-500 mb-1">Leased At</dt><dd class="text-sm text-ink-100">{{if .Task.LeasedAt}}{{.Task.LeasedAt.Format "15:04:05"}}{{else}}-{{end}}</dd></dl>
                     <dl><dt class="text-xs text-ink-500 mb-1">Expires At</dt><dd class="text-sm text-ink-100">{{if .Task.LeaseExpiresAt}}{{.Task.LeaseExpiresAt.Format "15:04:05"}}{{else}}-{{end}}</dd></dl>

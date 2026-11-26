@@ -263,7 +263,7 @@ func (c *CodexSubscriptionClient) call(ctx context.Context, messages []Message, 
 		return nil, fmt.Errorf("codex subscription: %w", err)
 	}
 
-	body, err := c.buildRequestBody(messages, tools)
+	body, err := c.buildRequestBodyEffort(messages, tools, codexEffort(ctx, c.effortLevel))
 	if err != nil {
 		return nil, fmt.Errorf("codex subscription: build request: %w", err)
 	}

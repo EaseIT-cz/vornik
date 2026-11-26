@@ -37,6 +37,9 @@ func (r *recordingAudit) FeedbackStats(context.Context, string, time.Time) (*per
 func (*recordingAudit) A2AChunksByCallerKey(context.Context, time.Time) ([]persistence.A2AKeyRetrieval, error) {
 	return nil, nil
 }
+func (*recordingAudit) StepRecallChunks(context.Context, string) ([]persistence.StepRecallChunk, error) {
+	return nil, nil
+}
 
 func (r *recordingAudit) UnretrievedChunkIDs(context.Context, string, time.Time, int) ([]string, error) {
 	return nil, nil

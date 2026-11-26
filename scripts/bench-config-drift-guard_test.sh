@@ -114,8 +114,50 @@ if ! MODEL=vllm/gemma4-26b run && grep -q 'modelFallback' "$TMP/err" && grep -q 
     ok "a same-provider fallback to another model refuses"
 else bad "a fallback to another model passed: $(cat "$TMP/out" "$TMP/err")"; fi
 
-# The reproduce script runs the guard as preflight 3c with the arm's swarm and task set.
-if grep -q 'bench_assert_config_matches_build "$CFGDIR" "$_repo/configs" "$SWARM" "$TASKS" "${VORNIK_BENCH_MODEL:-}"' "$HERE/agentbench-reproduce.sh"; then
+# GitHub #890 (design §12.37, part 3): a learning arm's measured pass runs the
+# workflow it promoted. The guard accepts a differing workflow only at the
+# SHA-256 of its latest promotion (a file of "<workflow> <sha256>" lines).
+# Found at: production, the #809 2x2 study, where 3c would refuse a blackbox
+# arm's own promotion.
+runp() { bench_assert_config_matches_build "$TMP/cfg" "$TMP/tpl" dev-swarm "$TMP/tasks.json" "${MODEL:-}" "$TMP/promoted" > "$TMP/out" 2> "$TMP/err"; }
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+fresh
+workflow "$TMP/cfg/workflows/dev-pipeline.md" dev-pipeline "Repaired by the arm."
+printf 'dev-pipeline %s\n' "$(sha "$TMP/cfg/workflows/dev-pipeline.md")" > "$TMP/promoted"
+if runp && grep -q 'dev-pipeline.md accepted as promoted' "$TMP/out" && grep -q "$(sha "$TMP/cfg/workflows/dev-pipeline.md")" "$TMP/out"; then
+    ok "a promoted workflow at its promotion's hash is accepted, and the hash is printed"
+else bad "a promoted workflow was refused: $(cat "$TMP/out" "$TMP/err")"; fi
+
+printf 'dev-pipeline %s\n' "$(sha "$TMP/cfg/workflows/dev-pipeline.md")" > "$TMP/promoted"
+workflow "$TMP/cfg/workflows/dev-pipeline.md" dev-pipeline "Repaired by the arm, then edited by hand."
+if ! runp && grep -q 'dev-pipeline.md' "$TMP/err" && grep -q 'hand edit' "$TMP/err"; then
+    ok "a promoted workflow edited after its promotion refuses"
+else bad "a hand edit to a promoted workflow passed: $(cat "$TMP/out" "$TMP/err")"; fi
+
+fresh
+workflow "$TMP/cfg/workflows/dev-pipeline.md" dev-pipeline "Left by an earlier arm."
+: > "$TMP/promoted"
+if ! runp && grep -q 'workflows/dev-pipeline.md' "$TMP/err" && grep -q 'body' "$TMP/err"; then
+    ok "a differing workflow this arm did not promote (a leftover) refuses"
+else bad "a leftover promotion passed: $(cat "$TMP/out" "$TMP/err")"; fi
+
+fresh
+workflow "$TMP/cfg/workflows/dev-pipeline.md" dev-pipeline "Promoted, hash unreadable."
+printf 'dev-pipeline -\n' > "$TMP/promoted"
+if ! runp && grep -q 'dev-pipeline.md' "$TMP/err"; then
+    ok "a promotion with no readable hash refuses"
+else bad "a promotion with no hash passed: $(cat "$TMP/out" "$TMP/err")"; fi
+
+fresh
+printf 'dev-pipeline 0000\n' > "$TMP/promoted"
+if runp && grep -q '3 file(s) compared' "$TMP/out"; then
+    ok "a promoted workflow back at its template still passes as the template"
+else bad "an unchanged promoted workflow refused: $(cat "$TMP/out" "$TMP/err")"; fi
+
+# The reproduce script runs the guard as preflight 3c with the arm's swarm,
+# task set and, for a measured pass, the promoted files.
+if grep -q 'bench_assert_config_matches_build "$CFGDIR" "$_repo/configs" "$SWARM" "$TASKS" "${VORNIK_BENCH_MODEL:-}" "$_promoted"' "$HERE/agentbench-reproduce.sh"; then
     ok "the reproduce script calls the guard with the arm's swarm and task set"
 else bad "the reproduce script does not call the guard (preflight 3c)"; fi
 

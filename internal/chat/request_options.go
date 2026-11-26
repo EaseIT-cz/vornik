@@ -1,6 +1,10 @@
 package chat
 
-import "context"
+import (
+	"context"
+
+	"vornik.io/vornik/internal/registry"
+)
 
 // Per-request options threaded through context.Context. The
 // chat-proxy reads the corresponding fields off the incoming
@@ -147,16 +151,19 @@ type reasoningEffortContextKey struct{}
 //
 // Providers that have no notion of reasoning effort ignore this.
 func WithReasoningEffort(ctx context.Context, effort string) context.Context {
-	switch effort {
-	case ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh:
-		return context.WithValue(ctx, reasoningEffortContextKey{}, effort)
-	default:
+	// One list of levels for the whole daemon: registry.ValidReasoningLevel,
+	// which also validates a role's and a model's setting (GitHub #869).
+	if effort == "" || !registry.ValidReasoningLevel(effort) {
 		return ctx
 	}
+	return context.WithValue(ctx, reasoningEffortContextKey{}, effort)
 }
 
 // Reasoning-effort levels accepted by WithReasoningEffort.
 const (
+	// ReasoningEffortOff asks for no reasoning. Before GitHub #869 the
+	// allowlist dropped it, so an "off" never reached a provider.
+	ReasoningEffortOff    = "off"
 	ReasoningEffortLow    = "low"
 	ReasoningEffortMedium = "medium"
 	ReasoningEffortHigh   = "high"
@@ -309,4 +316,17 @@ func IsBestEffort(ctx context.Context) bool {
 // 2026-07-11-model-health-circuit-breaker §5.3b).
 func RetryAllowed(ctx context.Context) error {
 	return ctx.Err()
+}
+
+// openAIReasoningEffort is the OpenAI-compatible wire value for the request's
+// reasoning level (reasoning control design B4, GitHub #869): the level
+// itself, "none" for off, and "" (the field omitted) when no level is set, so
+// a request without one is sent exactly as before.
+func openAIReasoningEffort(ctx context.Context) string {
+	switch effort := ReasoningEffortFromContext(ctx); effort {
+	case ReasoningEffortOff:
+		return "none"
+	default:
+		return effort
+	}
 }

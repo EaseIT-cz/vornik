@@ -16,32 +16,32 @@ import (
 
 	"vornik.io/vornik/internal/approval"
 	"vornik.io/vornik/internal/httpx/realip"
+	"vornik.io/vornik/internal/idfmt"
 	"vornik.io/vornik/internal/persistence"
 )
 
 //go:embed templates/*.html
 var templateFS embed.FS
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{
+var pageFuncs = template.FuncMap{
 	"page": func(title string, refresh int) map[string]any {
 		return map[string]any{"Title": title, "Refresh": refresh}
 	},
-	// shortID is the last 6 characters of a device id: enough for a person to
-	// tell two same-labelled devices apart; the full id stays the identifier.
-	"shortID": func(id string) string {
-		if len(id) <= 6 {
-			return id
-		}
-		return "dev_…" + id[len(id)-6:]
-	},
-	"when": func(t time.Time) string { return t.Format("2 Jan 2006 15:04 MST") },
+	// shortID is "dev_…" and the last 6 characters of a device id: enough for
+	// a person to tell two same-labelled devices apart; the full id stays the
+	// identifier. idfmt.Short owns the form, so the console's approvers page
+	// prints the same label (UI design §24, #854).
+	"shortID": idfmt.Short,
+	"when":    func(t time.Time) string { return t.Format("2 Jan 2006 15:04 MST") },
 	"whenp": func(t *time.Time) string {
 		if t == nil {
 			return ""
 		}
 		return t.Format("2 Jan 2006 15:04 MST")
 	},
-}).ParseFS(templateFS, "templates/*.html"))
+}
+
+var pages = template.Must(template.New("").Funcs(pageFuncs).ParseFS(templateFS, "templates/*.html"))
 
 // Route is one path this package serves. The refusal matrix (plan P2.7)
 // iterates Routes, so a route added here is covered without being copied

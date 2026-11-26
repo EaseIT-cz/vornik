@@ -50,6 +50,10 @@ type stubRepo struct {
 	// a test can pin the grace-window cutoff the runner computes.
 	reclaimCalls     int
 	reclaimOlderThan time.Time
+	// attempts records MarkAttemptFailed's outcome per reminder (#861).
+	// The message also lands in errored, so a test asserting "the failure
+	// was recorded" holds on either write.
+	attempts map[string]persistence.ReminderAttemptOutcome
 }
 
 type rescheduleCall struct {
@@ -57,7 +61,17 @@ type rescheduleCall struct {
 	NextFireAt time.Time
 }
 
-func newStubRepo() *stubRepo { return &stubRepo{errored: map[string]string{}} }
+func newStubRepo() *stubRepo {
+	return &stubRepo{errored: map[string]string{}, attempts: map[string]persistence.ReminderAttemptOutcome{}}
+}
+
+func (s *stubRepo) MarkAttemptFailed(_ context.Context, id, msg string, o persistence.ReminderAttemptOutcome) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errored[id] = msg
+	s.attempts[id] = o
+	return nil
+}
 
 func (s *stubRepo) Insert(_ context.Context, _ *persistence.Reminder) error { panic("not used") }
 func (s *stubRepo) Get(_ context.Context, _ string) (*persistence.Reminder, error) {

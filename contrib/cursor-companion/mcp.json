@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vornik": {
+      "command": "vornikctl",
+      "args": ["companion", "mcp-bridge", "--name", "vornik"]
+    }
+  }
+}

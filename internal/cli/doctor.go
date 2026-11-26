@@ -95,10 +95,14 @@ Security:
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
+  agent_connections_cgnat Approved agent API and MCP servers resolving to CGNAT 100.64.0.0/10 (a Tailscale peer); ERROR for each not on private_api_hosts, which the dial refuses; states how many it examined
+  agent_private_hosts_unused agent_admin.private_api_hosts entries no approved agent connection uses (reach an agent could still ask for); states how many it examined
   memory_provenance_clone Daemon-only provenance clones (memory.provenance_clone): usable or refused, and the sweep's last fetch of the trusted branch
   agent_refusal_burst   Agent namespaces with 20 or more refused agent-admin calls in the last hour (a loop or a probe); states how many it examined
   memory_sensitivity_cap Roles with memorySearch.maxSensitivity: how many of their project's chunks carry each tier and how many the cap admits; warns when a cap admits none
   a2a_corpus_walk       A2A caller keys whose tasks retrieved more than 500 distinct memory chunks in the last 24 hours; names the key and count, never the chunks; states how many it examined
+  control_plane_restore_reload The last config reload the control plane made and could not confirm (rejected, timed out, or stuck), with its remedy; ERROR until a later one succeeds
+  reminders_undelivered Reminders that expired undelivered (three failed sends, a task that could not be created, or a schedule that could not re-arm) and were due in the last 7 days; states how many it examined
   agent_change_stays_applied Agent-admin changes refused to the agent whose rollback failed and that are still applied (last 30 days); states how many it examined
 
 Models:
@@ -108,11 +112,16 @@ Models:
   model_calls_live      Model calls failing SINCE DAEMON START, per (model, call
                         site). Covers EVERY call site, including the memory
                         workers (classifier/titler/reranker/graph) that
-                        model_health does not enumerate
+                        model_health does not enumerate. One HTTP 410 (the
+                        provider retired the model) is reported at once:
+                        ERROR while a role or tier still uses it
   model_route_coverage  Role-pinned models that don't resolve to a chat
                         model_route prefix or are missing from pricing.yaml
   chat_model_fallback   chat.model with no twin in chat.router.model_fallbacks,
                         or a twin on the same provider (one quota for both)
+  model_tiers           What each model tier roles name resolves to; warns on
+                        a tier or role mapping that cannot take effect. A role
+                        on the setup model is never a warning
 
 Cost & budget:
   pricing_coverage      Models in swarm configs missing from pricing.yaml
@@ -225,10 +234,13 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println(report.Summary)
 
-	// Exit code 1 if there are unfixed issues
+	// Exit 1 when any check is an issue. OK and SKIPPED are not issues, the
+	// rule the summary follows (doctor skipped-vs-OK design, #867). The
+	// report already said what failed, so the error prints nothing. Upper-cased
+	// as statusIcon does, so the exit code agrees with the display (review 0ed7).
 	for _, check := range report.Checks {
-		if check.Status != "OK" {
-			os.Exit(1)
+		if s := strings.ToUpper(check.Status); s != "OK" && s != "SKIPPED" {
+			return &exitCodeError{code: 1}
 		}
 	}
 

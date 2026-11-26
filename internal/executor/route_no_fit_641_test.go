@@ -65,10 +65,14 @@ func assertNoFitFailure(t *testing.T, tr *MockTaskRepo, rec *recordingNotifier) 
 	assert.Contains(t, rec.calls[0].message, "needs verse writing")
 }
 
-func TestRouteNoFit_FailsAtOnce_641(t *testing.T) {
-	tr, rt, rec := runRouteNoFit(t, `{"selected_workflow": "none", "reason": "needs verse writing"}`)
+// Since #889 a first "none" gets one corrective re-run; a second "none" is
+// final (delegation-engine design, "A first none gets one corrective re-run").
+func TestRouteNoFit_FailsAfterOneRerun_641(t *testing.T) {
+	tr, rt, rec := runRouteNoFit(t,
+		`{"selected_workflow": "none", "reason": "needs verse writing"}`,
+		`{"selected_workflow": "none", "reason": "needs verse writing"}`)
 	assertNoFitFailure(t, tr, rec)
-	assert.Equal(t, 1, rt.startCalls, "\"none\" is final: no corrective re-run")
+	assert.Equal(t, 2, rt.startCalls, "one corrective re-run, then \"none\" is final (#889)")
 	task, _ := tr.Get(context.Background(), "t-parent")
 	assert.Equal(t, 1, task.Attempt, "ROUTE_NO_FIT is permanent: no task-level retry")
 }
@@ -83,7 +87,7 @@ func TestRouteNoFit_AfterCorrectiveRerun_641(t *testing.T) {
 
 func TestRouteNoFit_SchemaHintAndClass_641(t *testing.T) {
 	var opts agentInputOpts
-	applyStrictRouteContract(&opts, []string{"research", "summary"})
+	applyStrictRouteContract(&opts, []string{"research", "summary"}, nil)
 	enum := opts.ResponseSchema["properties"].(map[string]any)["selected_workflow"].(map[string]any)["enum"].([]any)
 	assert.Contains(t, enum, any(routeNoFit), "the router must be able to answer that nothing fits")
 	assert.Contains(t, routerSystemPrompt, `"none"`)
@@ -99,7 +103,7 @@ func TestRouteNoFit_SchemaHintAndClass_641(t *testing.T) {
 
 // With no reason the message says so (review 33ea F6).
 func TestRouteNoFit_NoReason_641(t *testing.T) {
-	tr, _, _ := runRouteNoFit(t, `{"selected_workflow": "none"}`)
+	tr, _, _ := runRouteNoFit(t, `{"selected_workflow": "none"}`, `{"selected_workflow": "none"}`)
 	task, _ := tr.Get(context.Background(), "t-parent")
 	require.NotNil(t, task.LastError)
 	assert.Contains(t, *task.LastError, "the router gave no reason")
@@ -130,7 +134,7 @@ func TestRouteNoFit_CandidateNamedNoneDelegates_641(t *testing.T) {
 	require.NotNil(t, children[0].WorkflowID)
 	assert.Equal(t, "none", *children[0].WorkflowID)
 	var opts agentInputOpts
-	applyStrictRouteContract(&opts, []string{"research", "none"})
+	applyStrictRouteContract(&opts, []string{"research", "none"}, nil)
 	enum := opts.ResponseSchema["properties"].(map[string]any)["selected_workflow"].(map[string]any)["enum"].([]any)
 	assert.Len(t, enum, 2, "\"none\" is listed once")
 }
@@ -138,7 +142,8 @@ func TestRouteNoFit_CandidateNamedNoneDelegates_641(t *testing.T) {
 // The reason is capped at routeNoFitReasonMax runes (review afb6 F2).
 func TestRouteNoFit_ReasonCapped_641(t *testing.T) {
 	long := strings.Repeat("ž", 2*routeNoFitReasonMax)
-	tr, _, _ := runRouteNoFit(t, `{"selected_workflow": "none", "reason": "`+long+`"}`)
+	answer := `{"selected_workflow": "none", "reason": "` + long + `"}`
+	tr, _, _ := runRouteNoFit(t, answer, answer)
 	task, _ := tr.Get(context.Background(), "t-parent")
 	require.NotNil(t, task.LastError)
 	assert.Contains(t, *task.LastError, strings.Repeat("ž", routeNoFitReasonMax))

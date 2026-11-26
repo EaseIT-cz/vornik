@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -172,7 +170,7 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 	_, _ = fmt.Fprintf(out, "Pairing code:  %s\n", shown)
 	_, _ = fmt.Fprintf(out, "Open on the phone:  %s/ui/pair\n", origin)
 	_, _ = fmt.Fprintf(out, "Expires:  %s (single use)\n", expires.Local().Format("15:04:05 MST"))
-	if plainHTTPNonLoopback(origin) {
+	if approverdevice.PlainHTTPNonLoopbackOrigin(origin) { // the gate's own rule (#168)
 		_, _ = fmt.Fprintln(out, "Warning: pairing needs HTTPS. The approver pages refuse plain http to a non-loopback host: serve Vornik over HTTPS (or behind a TLS proxy listed in server.real_ip.trusted_proxies), or pair on this machine through localhost.")
 	}
 	if exists {
@@ -182,21 +180,6 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 		_, _ = fmt.Fprintln(out, "Warning: no alert channel is configured (steering_operator_alert), so pairings and approval requests are not pushed. Approvals still work from the page.")
 	}
 	return nil
-}
-
-// plainHTTPNonLoopback reports whether origin is an http URL whose host is not
-// the local machine (design §9.2, T12: the approver pages refuse it).
-func plainHTTPNonLoopback(origin string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || !strings.EqualFold(u.Scheme, "http") {
-		return false
-	}
-	h := strings.TrimSuffix(u.Hostname(), ".")
-	if strings.EqualFold(h, "localhost") {
-		return false
-	}
-	ip := net.ParseIP(h)
-	return ip == nil || !ip.IsLoopback()
 }
 
 type deviceListRow struct {

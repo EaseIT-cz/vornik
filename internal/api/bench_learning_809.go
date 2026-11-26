@@ -12,6 +12,7 @@ package api
 // replay trial, promote); these add only what those lack.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -76,6 +77,12 @@ type benchPromotedCand struct {
 	CandidateID string `json:"candidate_id"`
 	WorkflowID  string `json:"workflow_id"`
 	GenomeHash  string `json:"genome_hash"`
+	// FileSHA256 is the SHA-256 of the file the promotion applied (its
+	// proposal's YAML, written verbatim), or "" when that proposal cannot be
+	// read. Check 3c accepts a promoted workflow only at this hash (GitHub
+	// #890, design §12.37). PromotedAt orders a workflow's promotions.
+	FileSHA256 string     `json:"file_sha256"`
+	PromotedAt *time.Time `json:"promoted_at,omitempty"`
 }
 
 // benchRoute admits a request to a learning-study route: admin-gated, and
@@ -137,7 +144,8 @@ func (s *Server) AdminBenchLearnedState(w http.ResponseWriter, r *http.Request) 
 		for _, c := range rows {
 			st.Candidates = append(st.Candidates, benchCandidate{ID: c.ID, TriggerID: c.TriggerID, Status: string(c.Status)})
 			if c.Status == persistence.HealingCandidatePromoted {
-				st.Promoted = append(st.Promoted, benchPromotedCand{CandidateID: c.ID, WorkflowID: c.WorkflowID, GenomeHash: c.CandidateGenomeHash})
+				st.Promoted = append(st.Promoted, benchPromotedCand{CandidateID: c.ID, WorkflowID: c.WorkflowID, GenomeHash: c.CandidateGenomeHash,
+					FileSHA256: s.promotedFileSHA256(r.Context(), c.ProposalID), PromotedAt: c.PromotedAt})
 			}
 		}
 	}
@@ -224,4 +232,18 @@ func (s *Server) AdminBenchCreateTrigger(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	respondJSON(w, http.StatusCreated, map[string]any{"trigger_id": t.ID})
+}
+
+// promotedFileSHA256 is the SHA-256 of a promotion's proposal YAML, which the
+// applier writes to the workflow file unchanged, or "" when it cannot be read.
+func (s *Server) promotedFileSHA256(ctx context.Context, proposalID string) string {
+	if s.workflowProposals == nil || proposalID == "" {
+		return ""
+	}
+	p, err := s.workflowProposals.Get(ctx, proposalID)
+	if err != nil || p == nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(p.ProposalYAML))
+	return hex.EncodeToString(sum[:])
 }

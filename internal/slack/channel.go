@@ -773,9 +773,7 @@ func (c *Channel) handleSlashCommandWebhook(w http.ResponseWriter, r *http.Reque
 	go func() {
 		defer cancel()
 		c.beginProgressSignal(dispatchCtx, sessionID)
-		if err := recv.Receive(dispatchCtx, msg); err != nil {
-			c.logger.Warn().Err(err).Str("trigger_id", triggerID).Msg("slack: slash command Receiver.Receive returned error")
-		}
+		c.receive(dispatchCtx, recv, msg, "slash command")
 	}()
 }
 
@@ -866,9 +864,7 @@ func (c *Channel) handleMessageEvent(ctx context.Context, p eventPayload, inst *
 		c.logger.Error().Str("event_id", p.EventID).Msg("slack: bound Receiver does not implement conversation.Receiver; dropping")
 		return
 	}
-	if err := recv.Receive(ctx, msg); err != nil {
-		c.logger.Warn().Err(err).Str("event_id", p.EventID).Msg("slack: Receiver.Receive returned error")
-	}
+	c.receive(ctx, recv, msg, "message")
 }
 
 // addressedToUs decides whether a SHARED-channel message that did not arrive as an
@@ -1132,6 +1128,7 @@ func (c *Channel) Send(ctx context.Context, msg conversation.ChannelMessage) (st
 	if c.shouldReplyAsVoice(msg.SessionID) {
 		sentID, used, err := c.sendVoiceForSession(ctx, msg)
 		if used {
+			conversation.MarkReplied(ctx)
 			return sentID, nil
 		}
 		if err != nil {
@@ -1140,7 +1137,11 @@ func (c *Channel) Send(ctx context.Context, msg conversation.ChannelMessage) (st
 		}
 		// Fall through to text.
 	}
-	return c.sendChatPostMessage(ctx, msg)
+	id, err := c.sendChatPostMessage(ctx, msg)
+	if err == nil {
+		conversation.MarkReplied(ctx) // #914: the turn has an answer
+	}
+	return id, err
 }
 
 // sendVoiceForSession resolves the installation from the SessionID

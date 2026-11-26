@@ -94,16 +94,20 @@ func TestRoutePickOutsideCandidatesIsNotOK_649(t *testing.T) {
 	assert.Equal(t, string(stepoutcome.OK), retry.Outcome, "the attempt the delegation used is ok")
 }
 
-// The router's "none" (#641): the model answered correctly; the task fails
-// ROUTE_NO_FIT and the row ends ok, not as a model failure.
+// The router's "none" (#641): the used answer is correct; the task fails
+// ROUTE_NO_FIT and that row ends ok, not as a model failure. Since #889 a
+// first "none" is re-run once, so the used "none" is the re-run's, and the
+// first attempt is recorded as an unused answer, like an out-of-list pick.
 func TestRouteNoFitRowIsOK_649(t *testing.T) {
 	tr, repo := runDelegation(t, strictAdaptiveResolver([]string{"research", "summary"}),
+		`{"selected_workflow": "none", "reason": "needs verse writing"}`,
 		`{"selected_workflow": "none", "reason": "needs verse writing"}`)
 	waitStatus(t, tr, persistence.TaskStatusFailed)
 	task, _ := tr.Get(context.Background(), "t-parent")
 	require.NotNil(t, task.LastErrorClass)
 	assert.Equal(t, persistence.TaskFailureClassRouteNoFit, *task.LastErrorClass)
-	assert.Equal(t, []string{string(stepoutcome.OK)}, outcomeOf(t, repo, "route"))
+	assert.Equal(t, []string{string(stepoutcome.OK)}, outcomeOf(t, repo, "route_route_retry"))
+	assert.Equal(t, []string{string(stepoutcome.SchemaViolation)}, outcomeOf(t, repo, "route"))
 }
 
 // A delegatedTasks step that creates its children is ok as well.

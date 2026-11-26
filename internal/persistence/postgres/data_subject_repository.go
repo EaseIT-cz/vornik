@@ -3,7 +3,6 @@ package postgres
 import (
 	"database/sql"
 	"strings"
-	"time"
 
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/persistence/subjectstore"
@@ -50,12 +49,4 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
-}
-
-// nullTimeIfZero binds a zero time as NULL.
-func nullTimeIfZero(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t
 }

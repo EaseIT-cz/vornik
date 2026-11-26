@@ -158,11 +158,11 @@ configuration, not a recording — so they can gate before any gold pass.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--include-warmup` | `false` | read a learning study's warm-up journal (refused by default: a warm-up pass is not scored; GitHub #809) |
+| `--include-warmup` | `false` | read a learning study's warm-up journal (refused by default: a warm-up pass is not scored) |
 
 ## vornikctl bench agent autopilot
 
-Run the blackbox arm's auto mode once: trigger, generate, replay-trial, promote (GitHub #809)
+Run the blackbox arm's auto mode once: trigger, generate, replay-trial, promote
 
 Reads the warm-up journals in --run-dir, finds each workflow whose failure
 rate since its last trigger is at or above bench.learning.trigger.threshold
@@ -252,7 +252,7 @@ vornikctl bench agent compare <journal-a> <journal-b> [flags]
 
 ## vornikctl bench agent freeze
 
-Freeze learning before the measured pass and record the learned state (GitHub #809)
+Freeze learning before the measured pass and record the learned state
 
 ```
 vornikctl bench agent freeze [flags]
@@ -329,7 +329,7 @@ vornikctl bench agent gold-merge <batch.json>... [flags]
 
 ## vornikctl bench agent learned-state
 
-Record the learned state; with --verify, fail if it moved since the freeze (GitHub #809)
+Record the learned state; with --verify, fail if it moved since the freeze
 
 ```
 vornikctl bench agent learned-state [flags]
@@ -337,6 +337,9 @@ vornikctl bench agent learned-state [flags]
 
 | Flag | Default | Description |
 |---|---|---|
+| `--check-phase` |  | warmup or measure: refuse a pass whose phase does not match the freeze; reads --daemon-config, writes nothing |
+| `--daemon-config` |  | the bench daemon's config, for the arm's learning switches (with --check-phase) |
+| `--promoted-files` | `false` | print each promoted workflow and the SHA-256 of its latest promoted file, for preflight check 3c; writes nothing |
 | `--run-dir` |  | the arm's run directory |
 | `--verify` | `false` | fail if the learned state moved since the freeze |
 
@@ -450,10 +453,10 @@ vornikctl bench agent run [flags]
 | `--i-know-this-wipes` |  | must equal --database; this run bulk-writes and clears it |
 | `--journal` | `journal.json` | where to write the run journal |
 | `--noise-floor` |  | release noise-floor artifact pinned by the pre-registration |
-| `--phase` |  | "warmup" for a learning study's warm-up pass: journaled, and refused by every scoring reader unless --include-warmup (GitHub #809) |
+| `--phase` |  | "warmup" for a learning study's warm-up pass: journaled, and refused by every scoring reader unless --include-warmup |
 | `--preregistration` |  | REQUIRED: committed manifest stating the run kind, arms, metric, intended delta and computed n. A comparison (the default) names two or more arms; a calibration or noise_floor pass names one and declares no sigma. --arm must be a declared arm |
 | `--project` |  | project to run in |
-| `--published-task-set` | `false` | run a release gate on a published task set (outside tasksets/unreleased/); the journal records it (#790) |
+| `--published-task-set` | `false` | run a release gate on a published task set (outside tasksets/unreleased/); the journal records it |
 | `--repeat-offset` | `0` | shift the repeat index this invocation stamps, so a run split across several invocations produces globally unique (task, repeat) pairs. Pass chunk_index * repeat_batch. Without it every chunk numbers its repeats from 1, and calibration refuses the collision rather than counting one repeat many times |
 | `--repeats` | `1` | runs per task; repeats shrink a task's contribution to sigma_d but add no pairs |
 | `--run-id` |  | identifier for this run |
@@ -604,11 +607,31 @@ same way regardless of how it was minted.
 
 ## vornikctl companion connect
 
-Connect Claude Desktop (and Cowork) to Vornik with a companion key
+Connect Claude Desktop (and Cowork), Cursor, opencode, or any other assistant, to Vornik with a companion key
 
-Store a companion key in a file only you can read, add one MCP server entry
-to Claude Desktop's config that runs 'vornikctl companion mcp-bridge', and
-check the key against Vornik. The Claude config never holds the key.
+Check a companion key against Vornik, then store it in a file only you can
+read. For claude-desktop, also add one MCP server entry to Claude Desktop's
+config that runs 'vornikctl companion mcp-bridge'. The Claude config never
+holds the key.
+
+For cursor, also install the Vornik plugin (MCP entry, an always-applied
+rule, skills) into ~/.cursor/plugins/local/vornik-companion; its MCP entry
+runs this binary's bridge, so no Cursor config holds the key. It refuses a
+key with no default repo scope unless --allow-unscoped. Reload the Cursor
+window after.
+
+For opencode, also add a stdio entry that runs the bridge to opencode.json,
+and install a plugin that adds Vornik's working rules and a session digest
+to the system prompt, plus the companion skills (as skills/vornik-*), into
+opencode's config directory ($XDG_CONFIG_HOME/opencode). A commented
+opencode.json, or a plugin file that is not Vornik's, is refused before
+anything is written. It refuses an unscoped key unless --allow-unscoped.
+
+For any other assistant (Gemini CLI, ...), 'connect generic --print'
+writes no assistant config. It prints the MCP entry to paste: a stdio form
+that runs the bridge, and a streamable-HTTP form that reads the key from an
+environment variable. It warns when the key has no default repo scope. The
+key is never printed.
 
 The key comes from --key-stdin, else VORNIK_COMPANION_TOKEN. connect does not
 mint keys: an operator mints one with 'vornikctl companion grant'. An
@@ -617,13 +640,15 @@ agent-admin key is refused (use 'vornikctl agent connect').
 Claude Code and Codex use their companion plugins instead.
 
 ```
-vornikctl companion connect claude-desktop [flags]
+vornikctl companion connect <claude-desktop|cursor|opencode|generic> [flags]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
+| `--allow-unscoped` | `false` | cursor and opencode only: accept a key with no default repo scope (its notes are stored unscoped) |
 | `--key-stdin` | `false` | Read the companion key from standard input (piped) |
 | `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+| `--print` | `false` | generic only: write no assistant config; print the MCP entry to paste |
 | `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
 
 Example:
@@ -634,12 +659,12 @@ printf '%s\n' "$VORNIK_COMPANION_TOKEN" | vornikctl companion connect claude-des
 
 ## vornikctl companion disconnect
 
-Remove the companion entry from Claude Desktop and delete its key file
+Remove the companion entry from Claude Desktop (if any) and delete its key file
 
 Remove what 'vornikctl companion connect' wrote. It revokes nothing on the daemon: the key belongs to the operator who minted it ('vornikctl companion keys').
 
 ```
-vornikctl companion disconnect claude-desktop [flags]
+vornikctl companion disconnect <claude-desktop|cursor|opencode|generic> [flags]
 ```
 
 | Flag | Default | Description |
@@ -648,10 +673,12 @@ vornikctl companion disconnect claude-desktop [flags]
 
 ## vornikctl companion doctor
 
-Check a companion connection in Claude Desktop and print the fix for each failure
+Check a companion connection and print the fix for each failure
 
-Check the Claude Desktop entry, the key file, the daemon and the key itself,
-one line per check, each failure with its fix. It changes nothing. Exit status
+Check the key file, the daemon and the key itself, one line per check, each
+failure with its fix; for claude-desktop, also the Claude Desktop entry. With
+--client generic it also names the key the bridge uses and what it cannot see
+(your assistant's own entry and environment). It changes nothing. Exit status
 0 when every check passes, 1 otherwise.
 
 ```
@@ -687,6 +714,7 @@ vornikctl companion grant [flags]
 | `--memory-read` | `false` | Allow this key to call recall() against the project's RAG store. |
 | `--memory-write` | `false` | Allow this key to call remember() to deposit notes into the project's RAG store. Implies --memory-read. |
 | `--no-delegate` | `false` | Refuse every task tool (delegate/status/result/cancel/list/catalog) for this key — the shape of a front agent's memory key |
+| `--oidc-only` | `false` | Do not print the secret: the key is used only through a GitHub Actions trust (vornikctl companion trust-github) |
 | `--repo-scope` |  | Default repo_scope stamped on memory calls that omit it (e.g. github.com/ORG/REPO). Recommended for clients without a SessionStart scope injector (Codex) so deposits can't land NULL-scoped. An explicit per-call repo_scope still overrides it. |
 | `--skill-admin` | `false` | Allow this key to approve/reject skills (the human gate that promotes a draft to active). |
 | `--skill-all` | `false` | Shorthand for --skill-read --skill-write --skill-admin. |
@@ -712,6 +740,31 @@ vornikctl companion hints [flags]
 |---|---|---|
 | `--json` | `false` | Emit the report as JSON |
 | `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl companion instructions
+
+Print how an assistant should work with Vornik, for its AGENTS.md (or write it there)
+
+Print the working rules Vornik's companion endpoint sends every session,
+read from the daemon with your companion key, preceded by what an assistant
+without Vornik hooks needs: call recent_memory when a session starts, and
+find Vornik's tools under the prefix your assistant gives them.
+
+--write <file> puts the text between <!-- vornik:start --> and
+<!-- vornik:end -->, replacing an earlier copy and keeping the rest of the
+file. A missing file is created; a file with unbalanced markers is refused.
+
+The key comes from VORNIK_COMPANION_TOKEN, else the key file connect wrote.
+
+```
+vornikctl companion instructions [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+| `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
+| `--write` |  | Write the text into this file between the vornik markers |
 
 ## vornikctl companion keys
 
@@ -746,6 +799,58 @@ vornikctl companion mcp-bridge [flags]
 |---|---|---|
 | `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
 | `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
+
+## vornikctl companion trust-github
+
+Bind a companion key to one GitHub Actions workflow (the job needs no stored secret)
+
+Bind a companion key to one workflow file on one branch of one repository.
+A job of that workflow then authenticates with the ID token GitHub issues to
+its run (permissions: id-token: write), requested for --audience. Every claim
+must match exactly; the key's project, workflows, budget and limit apply.
+
+--repo-id is the repository's numeric id, which survives a rename:
+  gh api repos/<owner>/<name> --jq .id
+
+```
+vornikctl companion trust-github [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--audience` |  | Token audience the job requests (default: this Vornik's URL) |
+| `--event` |  | Comma-separated events (default push,schedule,workflow_dispatch; pull_request is refused) |
+| `--key` |  | Companion key id (required) |
+| `--ref` | `refs/heads/main` | Branch or tag ref the workflow runs on |
+| `--repo-id` | `0` | The repository's numeric id (required) |
+| `--repo` |  | Repository, owner/name (required) |
+| `--workflow` |  | Workflow file, .github/workflows/<file>.yml (required) |
+| `-p`, `--project` |  | The key's project (required) |
+
+## vornikctl companion trusts
+
+List a project's GitHub Actions trusts, with when each last served a request
+
+```
+vornikctl companion trusts [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--json` | `false` | Emit JSON |
+| `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl companion untrust
+
+Remove a GitHub Actions trust
+
+```
+vornikctl companion untrust <trust id> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `-p`, `--project` |  | Project ID (required) |
 
 ## vornikctl config
 
@@ -1141,10 +1246,14 @@ Security:
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
+  agent_connections_cgnat Approved agent API and MCP servers resolving to CGNAT 100.64.0.0/10 (a Tailscale peer); ERROR for each not on private_api_hosts, which the dial refuses; states how many it examined
+  agent_private_hosts_unused agent_admin.private_api_hosts entries no approved agent connection uses (reach an agent could still ask for); states how many it examined
   memory_provenance_clone Daemon-only provenance clones (memory.provenance_clone): usable or refused, and the sweep's last fetch of the trusted branch
   agent_refusal_burst   Agent namespaces with 20 or more refused agent-admin calls in the last hour (a loop or a probe); states how many it examined
   memory_sensitivity_cap Roles with memorySearch.maxSensitivity: how many of their project's chunks carry each tier and how many the cap admits; warns when a cap admits none
   a2a_corpus_walk       A2A caller keys whose tasks retrieved more than 500 distinct memory chunks in the last 24 hours; names the key and count, never the chunks; states how many it examined
+  control_plane_restore_reload The last config reload the control plane made and could not confirm (rejected, timed out, or stuck), with its remedy; ERROR until a later one succeeds
+  reminders_undelivered Reminders that expired undelivered (three failed sends, a task that could not be created, or a schedule that could not re-arm) and were due in the last 7 days; states how many it examined
   agent_change_stays_applied Agent-admin changes refused to the agent whose rollback failed and that are still applied (last 30 days); states how many it examined
 
 Models:
@@ -1154,11 +1263,16 @@ Models:
   model_calls_live      Model calls failing SINCE DAEMON START, per (model, call
                         site). Covers EVERY call site, including the memory
                         workers (classifier/titler/reranker/graph) that
-                        model_health does not enumerate
+                        model_health does not enumerate. One HTTP 410 (the
+                        provider retired the model) is reported at once:
+                        ERROR while a role or tier still uses it
   model_route_coverage  Role-pinned models that don't resolve to a chat
                         model_route prefix or are missing from pricing.yaml
   chat_model_fallback   chat.model with no twin in chat.router.model_fallbacks,
                         or a twin on the same provider (one quota for both)
+  model_tiers           What each model tier roles name resolves to; warns on
+                        a tier or role mapping that cannot take effect. A role
+                        on the setup model is never a warning
 
 Cost & budget:
   pricing_coverage      Models in swarm configs missing from pricing.yaml
@@ -2679,7 +2793,7 @@ vornikctl memory regraph [flags]
 Re-verify companion-delegated chunks by provenance; de-verify the rest (dry run by default)
 
 Chunks an agent role wrote in a companion-delegated task were stamped
-verified by role-of-record before design 22 amendment #482. This verb
+verified by role-of-record before the provenance check (October 2026). This verb
 re-verifies each such artifact by provenance (its stored bytes are the blob
 at an eligible path on origin's default branch in the project's own clone)
 and de-verifies the rest. The default branch is the project's
@@ -2994,6 +3108,45 @@ vornikctl models list [flags]
 | `--json` | `false` | Output in JSON format |
 | `--provider` |  | Filter to one sub-provider (e.g. vertex, http, claude-subscription) |
 | `--unpriced` | `false` | Only show models without a pricing.yaml entry |
+
+## vornikctl models profile
+
+List or apply a provider profile that maps model tiers to models
+
+A provider profile maps the model tiers shipped roles name (trivial,
+standard, complex, coding, vision) to one provider's model IDs. Applying it
+writes runtime.agent_llm.tiers and runtime.agent_llm.roles in config.yaml;
+after that they are your instance's config. A tier with no mapping runs on
+the setup model.
+
+## vornikctl models profile apply
+
+Show (or, with --apply, write) a provider profile's tier mappings
+
+```
+vornikctl models profile apply <name> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--apply` | `false` | Write the mappings (default: dry run) |
+| `--force` | `false` | Write without checking that each model answers (audited) |
+
+## vornikctl models profile list
+
+List the shipped provider profiles
+
+```
+vornikctl models profile list
+```
+
+## vornikctl models tiers
+
+Show each role's model tier and the model it resolves to
+
+```
+vornikctl models tiers
+```
 
 ## vornikctl package
 
@@ -3406,8 +3559,10 @@ Two safety gates run before the restore proceeds:
   1. Schema-presence gate (B-8): if the target already carries a
      vornik-owned schema (migrations rows OR canonical PG types like
      artifact_class), the restore is refused. Override with --clean
-     (drops the schema first) or --allow-non-empty (proceeds anyway,
-     usually fails on CREATE TYPE collisions).
+     (drops vornik's objects, keeping the schema and its extensions,
+     in the restore's own transaction: a failed restore changes
+     nothing) or --allow-non-empty (proceeds anyway, usually fails on
+     CREATE TYPE collisions).
   2. Row-count gate: refuses targets with non-empty projects/tasks
      tables. Override with --allow-non-empty.
 
@@ -3431,7 +3586,7 @@ vornikctl restore [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--allow-non-empty` | `false` | permit restore into a DB with existing project/task rows |
-| `--clean` | `false` | DROP SCHEMA public CASCADE before restore — wipes any vornik schema already loaded on the target |
+| `--clean` | `false` | drop vornik's objects (not the schema or its extensions) in the restore's own transaction — a failed restore changes nothing |
 | `--force` | `false` | required — confirms the daemon is stopped and the DB can be overwritten |
 | `--from` |  | archive path (required) |
 

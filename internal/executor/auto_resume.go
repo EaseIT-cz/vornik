@@ -108,13 +108,41 @@ func planAutoResume(wf *registry.Workflow, prev *persistence.Execution, outcomes
 }
 
 // autoResumeHandoff returns the output entries to restage for the step an
-// automatic resume starts at: the last carried step's checkpointed handoff.
-// Nothing for an execution that was not seeded by a resume (§8.3 D4).
+// execution re-enters at: every completed step's checkpointed outputs,
+// merged in step order (15-artifact-store.md §14, #918, §14.3, #919).
+// Nothing for a fresh execution.
 func autoResumeHandoff(st executionState, carried []string) []map[string]string {
-	if st.AutoResumedFrom == "" || len(carried) == 0 {
+	// Every re-entry, not only an automatic resume (15-artifact-store.md
+	// §14.3, #919): an approval's resume, a child wait, a restart or a
+	// RetryFromStep restages the completed steps' outputs too.
+	if len(carried) == 0 {
 		return nil
 	}
-	return cloneArtifactHandoffEntries(st.StepHandoffs[carried[len(carried)-1]])
+	var merged []map[string]string
+	for _, step := range carried {
+		merged = mergeCarriedOutputs(merged, cloneArtifactHandoffEntries(st.StepHandoffs[step]))
+	}
+	return merged
+}
+
+// mergeCarriedOutputs adds a step's outputs to the carried list: an entry
+// whose name is already carried replaces it in place, a new name is
+// appended. Entries are never removed (15-artifact-store.md §14, #918).
+func mergeCarriedOutputs(carried, outputs []map[string]string) []map[string]string {
+	for _, out := range outputs {
+		replaced := false
+		for i, c := range carried {
+			if c["name"] == out["name"] {
+				carried[i] = out
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			carried = append(carried, out)
+		}
+	}
+	return carried
 }
 
 // autoResumePreviousMessage is the message the resumed step is handed as its

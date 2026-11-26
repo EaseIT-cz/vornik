@@ -43,11 +43,18 @@ func (c *Container) InitWorkerElector(workerID string) *leaderelection.Elector {
 	return c.initWorkerElector(workerID)
 }
 
+// initWorkerElector: on a node that does not run workers (run_workers: false) it returns a
+// standby elector, never nil: every worker reads a nil elector as "the single
+// process, always leader", so a nil here let a ui node run autonomy, retention
+// and a dozen other singletons beside the real leader (GitHub #894). The
+// standby elector never leads and fails the epoch fence, so any singleton
+// that still starts on such a node skips every tick.
+// https://docs.vornik.io §1.3.
 func (c *Container) initWorkerElector(workerID string) *leaderelection.Elector {
 	if !c.capabilities().RunWorkers {
 		c.Logger.Debug().Str("worker_id", workerID).
-			Msg("node profile: run_workers=false; skipping singleton worker elector")
-		return nil
+			Msg("node profile: run_workers=false; singleton worker elector is standby (never leads)")
+		return leaderelection.NewStandby(workerIDPrefix + workerID)
 	}
 	if c.repos == nil || c.repos.LeaderLocks == nil {
 		return nil
@@ -81,6 +88,11 @@ func (c *Container) WiredWorkerIDs() []string {
 	electors := c.allElectors()
 	out := make([]string, 0, len(electors))
 	for _, e := range electors {
+		// A standby elector (run_workers: false, #894) is not a wired
+		// worker: no leader is expected from THIS node.
+		if e.Standby() {
+			continue
+		}
 		if id := e.WorkerID(); id != "" {
 			out = append(out, id)
 		}

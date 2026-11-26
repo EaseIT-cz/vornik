@@ -4,6 +4,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Routes ad-hoc (non-review) tasks and recovery checkpoints."
     model: "{{.llmModel}}"
     runtime:
@@ -21,6 +22,7 @@ roles:
         - "memory_search"
 
   - name: "reviewer"
+    modelTier: "coding"
     description: "Reviews pull-request diffs via the github-review workflow."
     model: "{{.llmModel}}"
     runtime:

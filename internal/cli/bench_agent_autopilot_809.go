@@ -14,6 +14,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -39,7 +40,7 @@ var (
 
 var benchAgentAutopilotCmd = &cobra.Command{
 	Use:   "autopilot",
-	Short: "Run the blackbox arm's auto mode once: trigger, generate, replay-trial, promote (GitHub #809)",
+	Short: "Run the blackbox arm's auto mode once: trigger, generate, replay-trial, promote",
 	Long: `Reads the warm-up journals in --run-dir, finds each workflow whose failure
 rate since its last trigger is at or above bench.learning.trigger.threshold
 (with at least min_samples runs), and runs an operator's three steps for it
@@ -78,18 +79,41 @@ func runBenchAgentAutopilot(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	ap := &autopilot{c: ClientFromEnv(), state: st, path: statePath, out: cmd.OutOrStdout()}
+	gen, err := autopilotGenerateClient(benchAgentDaemonConfig)
+	if err != nil {
+		return err
+	}
+	ap := &autopilot{c: ClientFromEnv(), gen: gen, state: st, path: statePath, out: cmd.OutOrStdout()}
 	due := agentbench.DueTriggers(runs, *st, tuning.MinSamples, tuning.Threshold)
 	if len(due) == 0 {
 		_, _ = fmt.Fprintf(ap.out, "autopilot: %d warm-up runs, no workflow due a trigger\n", len(runs))
-		return nil
 	}
 	for _, d := range due {
 		if err := ap.repair(d); err != nil {
 			return err
 		}
 	}
+	// The arm's summary, every run: an arm whose generate calls all failed
+	// must read as such, not as "nothing to fix" (GitHub #908).
+	_, _ = fmt.Fprintln(ap.out, agentbench.SummarizeAutopilot(*ap.state).String())
 	return nil
+}
+
+// autopilotGenerateClient is the generate call's client. Its deadline is the
+// daemon's generate budget (config_assistant.request_timeout plus the margin)
+// plus 1 minute. GitHub #908: the 30 s default gave up first.
+func autopilotGenerateClient(daemonConfig string) (*Client, error) {
+	raw, err := os.ReadFile(filepath.Clean(daemonConfig))
+	if err != nil {
+		return nil, fmt.Errorf("read daemon config: %w", err)
+	}
+	var doc struct {
+		ConfigAssistant config.AssistantConfig `yaml:"config_assistant"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse daemon config: %w", err)
+	}
+	return ClientFromEnv().WithMinTimeout(doc.ConfigAssistant.HealingGenerateBudget() + generateClientSlack), nil
 }
 
 // benchTriggerTuning reads bench.learning.trigger from the daemon config.
@@ -190,9 +214,19 @@ func readAutopilotState(path string) (*agentbench.AutopilotState, error) {
 
 type autopilot struct {
 	c     *Client
+	gen   *Client // the generate call's client: outlives the daemon's generate budget (GitHub #908)
 	state *agentbench.AutopilotState
 	path  string
 	out   interface{ Write([]byte) (int, error) }
+}
+
+// promotedWire is one promoted candidate as the learned-state route reports it.
+type promotedWire struct {
+	CandidateID string     `json:"candidate_id"`
+	WorkflowID  string     `json:"workflow_id"`
+	GenomeHash  string     `json:"genome_hash"`
+	FileSHA256  string     `json:"file_sha256"`
+	PromotedAt  *time.Time `json:"promoted_at,omitempty"`
 }
 
 // learnedStateWire is the part of the learned-state route the autopilot reads.
@@ -205,10 +239,7 @@ type learnedStateWire struct {
 		TriggerID string `json:"trigger_id"`
 		Status    string `json:"status"`
 	} `json:"candidates"`
-	Promoted []struct {
-		CandidateID string `json:"candidate_id"`
-		GenomeHash  string `json:"genome_hash"`
-	} `json:"promoted"`
+	Promoted []promotedWire `json:"promoted"`
 	Triggers []struct {
 		ID         string `json:"id"`
 		WorkflowID string `json:"workflow_id"`
@@ -291,8 +322,8 @@ func (a *autopilot) repair(d agentbench.AutopilotDue) error {
 	if _, err := a.check(); err != nil {
 		return stop(err)
 	}
-	if err := a.call(http.MethodPost, "/api/v1/admin/workflow-healing/triggers/"+trig.TriggerID+"/generate-candidate", map[string]any{}, nil); err != nil {
-		return a.noCandidate(d, trig.TriggerID, err.Error())
+	if err := a.generate(trig.TriggerID); err != nil {
+		return a.noCandidate(d, trig.TriggerID, generateVerdict(err), err.Error())
 	}
 	st, err := a.check()
 	if err != nil {
@@ -305,7 +336,7 @@ func (a *autopilot) repair(d agentbench.AutopilotDue) error {
 		}
 	}
 	if cand == "" {
-		return a.noCandidate(d, trig.TriggerID, "")
+		return a.noCandidate(d, trig.TriggerID, "no_candidate", "")
 	}
 	if err := a.event(agentbench.AutopilotEvent{Step: "generate", Workflow: d.Workflow, TriggerID: trig.TriggerID, CandidateID: cand, TaskRuns: d.RunsTotal}); err != nil {
 		return err
@@ -320,6 +351,16 @@ func (a *autopilot) repair(d agentbench.AutopilotDue) error {
 	}
 	if err := a.event(agentbench.AutopilotEvent{Step: "trial", Workflow: d.Workflow, TriggerID: trig.TriggerID, CandidateID: cand, TaskRuns: d.RunsTotal, Verdict: verdict}); err != nil {
 		return err
+	}
+	if verdict == "trial_failed" {
+		// A failed candidate's proposal holds the workflow's one pending slot
+		// until the candidate is rejected; without this every later trigger
+		// for the workflow failed "workflow already has a pending proposal"
+		// (GitHub #921).
+		if err := a.call(http.MethodPost, "/api/v1/admin/workflow-healing/candidates/"+cand+"/reject", map[string]any{}, nil); err != nil {
+			return a.event(agentbench.AutopilotEvent{Step: "reject", Workflow: d.Workflow, TriggerID: trig.TriggerID, CandidateID: cand, TaskRuns: d.RunsTotal, Verdict: "refused", Detail: err.Error()})
+		}
+		return a.event(agentbench.AutopilotEvent{Step: "reject", Workflow: d.Workflow, TriggerID: trig.TriggerID, CandidateID: cand, TaskRuns: d.RunsTotal, Verdict: "rejected"})
 	}
 	if verdict != "trial_passed" {
 		return nil
@@ -363,10 +404,42 @@ func (a *autopilot) openTrigger(d agentbench.AutopilotDue) (string, error) {
 	return trig.TriggerID, nil
 }
 
-// noCandidate journals a trigger that produced no candidate and dismisses
-// it, so it does not stay open and block the workflow's next trigger.
-func (a *autopilot) noCandidate(d agentbench.AutopilotDue, triggerID, detail string) error {
-	if err := a.event(agentbench.AutopilotEvent{Step: "generate", Workflow: d.Workflow, TriggerID: triggerID, TaskRuns: d.RunsTotal, Verdict: "no_candidate", Detail: detail}); err != nil {
+// generate posts generate-candidate on the generate client.
+func (a *autopilot) generate(triggerID string) error {
+	c := a.gen
+	if c == nil {
+		c = a.c
+	}
+	resp, err := c.Do(http.MethodPost, "/api/v1/admin/workflow-healing/triggers/"+triggerID+"/generate-candidate", map[string]any{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return ParseAPIError(resp)
+	}
+	return nil
+}
+
+// generateVerdict classifies a failed generate call (GitHub #908). Only the
+// producer's own "made nothing" answers are no_candidate: 422 (the
+// assistant's edit is not a single workflow edit) and 409 (the trigger is no
+// longer open). Everything else is failed: no answer (a transport error or
+// client timeout), a 5xx, and a 4xx such as 401, 404 or 429, which say the
+// call never reached the producer. None of those is "nothing to fix".
+func generateVerdict(err error) string {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnprocessableEntity || apiErr.StatusCode == http.StatusConflict) {
+		return "no_candidate"
+	}
+	return "failed"
+}
+
+// noCandidate journals a trigger that produced no candidate (verdict
+// no_candidate or failed) and dismisses it, so it does not stay open and
+// block the workflow's next trigger.
+func (a *autopilot) noCandidate(d agentbench.AutopilotDue, triggerID, verdict, detail string) error {
+	if err := a.event(agentbench.AutopilotEvent{Step: "generate", Workflow: d.Workflow, TriggerID: triggerID, TaskRuns: d.RunsTotal, Verdict: verdict, Detail: detail}); err != nil {
 		return err
 	}
 	if err := a.call(http.MethodPost, "/api/v1/admin/workflow-healing/triggers/"+triggerID+"/dismiss", map[string]any{}, nil); err != nil {
@@ -411,7 +484,7 @@ var benchLearnedVerify bool
 
 var benchAgentFreezeCmd = &cobra.Command{
 	Use:   "freeze",
-	Short: "Freeze learning before the measured pass and record the learned state (GitHub #809)",
+	Short: "Freeze learning before the measured pass and record the learned state",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if benchAutopilotRunDir == "" {
@@ -433,9 +506,15 @@ var benchAgentFreezeCmd = &cobra.Command{
 
 var benchAgentLearnedStateCmd = &cobra.Command{
 	Use:   "learned-state",
-	Short: "Record the learned state; with --verify, fail if it moved since the freeze (GitHub #809)",
+	Short: "Record the learned state; with --verify, fail if it moved since the freeze",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if benchLearnedCheckPhase != "" || benchLearnedPromotedFiles {
+			if benchLearnedVerify || (benchLearnedCheckPhase != "" && benchLearnedPromotedFiles) {
+				return fmt.Errorf("--check-phase, --promoted-files and --verify are separate modes; give one")
+			}
+			return runLearnedStateReadOnly(cmd)
+		}
 		if benchAutopilotRunDir == "" {
 			return fmt.Errorf("--run-dir is required")
 		}
@@ -489,4 +568,100 @@ func init() {
 		benchAgentCmd.AddCommand(c)
 	}
 	benchAgentLearnedStateCmd.Flags().BoolVar(&benchLearnedVerify, "verify", false, "fail if the learned state moved since the freeze")
+	benchAgentLearnedStateCmd.Flags().StringVar(&benchLearnedCheckPhase, "check-phase", "", "warmup or measure: refuse a pass whose phase does not match the freeze; reads --daemon-config, writes nothing")
+	benchAgentLearnedStateCmd.Flags().BoolVar(&benchLearnedPromotedFiles, "promoted-files", false, "print each promoted workflow and the SHA-256 of its latest promoted file, for preflight check 3c; writes nothing")
+	benchAgentLearnedStateCmd.Flags().StringVar(&benchAgentDaemonConfig, "daemon-config", "", "the bench daemon's config, for the arm's learning switches (with --check-phase)")
+}
+
+var (
+	benchLearnedCheckPhase    string
+	benchLearnedPromotedFiles bool
+)
+
+// runLearnedStateReadOnly serves --check-phase and --promoted-files (GitHub
+// #890, design §12.37): read the learned state, write nothing.
+func runLearnedStateReadOnly(cmd *cobra.Command) error {
+	ap := &autopilot{c: ClientFromEnv()}
+	var st learnedStateWire
+	readErr := ap.call(http.MethodGet, "/api/v1/admin/bench/learned-state", nil, &st)
+	if benchLearnedPromotedFiles {
+		if readErr != nil {
+			return fmt.Errorf("read the learned state: %w", readErr)
+		}
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), latestPromotedFiles(st))
+		return nil
+	}
+	if benchAgentDaemonConfig == "" {
+		return fmt.Errorf("--check-phase needs --daemon-config, for the arm's learning switches")
+	}
+	raw, err := os.ReadFile(benchAgentDaemonConfig)
+	if err != nil {
+		return fmt.Errorf("read --daemon-config: %w", err)
+	}
+	_, learning, err := agentbench.ArmConfigIdentity(raw)
+	if err != nil {
+		return err
+	}
+	on := learning.Instincts || learning.BlackboxTrigger || learning.Auto
+	if err := checkLearningPhase(benchLearnedCheckPhase, on, st, readErr); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "learning phase %s: ok (learning on: %v, frozen: %v)\n", benchLearnedCheckPhase, on, st.Frozen)
+	return nil
+}
+
+// checkLearningPhase decides whether a pass may start. A warm-up must not
+// start frozen (the #890 incident: a freeze outlived its arm); a learning
+// arm's measured pass must start frozen; an arm with no learning switch on
+// has nothing to check, and its daemon answers 404. A learning arm whose
+// state cannot be read is refused: its gate did not open, so learning would
+// run unfrozen.
+func checkLearningPhase(phase string, learningOn bool, st learnedStateWire, readErr error) error {
+	if phase != "warmup" && phase != "measure" {
+		return fmt.Errorf("--check-phase must be warmup or measure, not %q", phase)
+	}
+	if !learningOn {
+		return nil
+	}
+	if readErr != nil {
+		var apiErr *APIError
+		if errors.As(readErr, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("the arm's learning switches are on but the bench daemon has no learned state (404): its freeze gate did not open, see the daemon log")
+		}
+		return fmt.Errorf("cannot read the learned state of a learning arm: %w", readErr)
+	}
+	if phase == "warmup" && st.Frozen {
+		return fmt.Errorf("learning is frozen at the start of a warm-up: this arm would learn nothing. A freeze from an earlier arm? See the bench daemon log for the freeze marker")
+	}
+	if phase == "measure" && !st.Frozen {
+		return fmt.Errorf("learning is not frozen at the start of the measured pass: freeze first (vornikctl bench agent freeze)")
+	}
+	return nil
+}
+
+// latestPromotedFiles prints "<workflow> <file_sha256>" for each workflow's
+// latest promotion, sorted by workflow; "-" when the route had no hash, which
+// check 3c then refuses.
+func latestPromotedFiles(st learnedStateWire) string {
+	latest := map[string]promotedWire{}
+	for _, p := range st.Promoted {
+		cur, seen := latest[p.WorkflowID]
+		if !seen || (p.PromotedAt != nil && (cur.PromotedAt == nil || p.PromotedAt.After(*cur.PromotedAt))) {
+			latest[p.WorkflowID] = p
+		}
+	}
+	ids := make([]string, 0, len(latest))
+	for id := range latest {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var b strings.Builder
+	for _, id := range ids {
+		sum := latest[id].FileSHA256
+		if sum == "" {
+			sum = "-"
+		}
+		fmt.Fprintf(&b, "%s %s\n", id, sum)
+	}
+	return b.String()
 }

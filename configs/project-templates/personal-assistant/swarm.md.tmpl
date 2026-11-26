@@ -4,6 +4,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Plans the work and routes adaptively across candidate workflows."
     model: "{{.llmModel}}"
     runtime:
@@ -20,6 +21,7 @@ roles:
         - "glob"
 
   - name: "researcher"
+    modelTier: "complex"
     description: "Researches questions, gathers sourced facts, writes artifacts/out/research.md."
     model: "{{.llmModel}}"
     runtime:
@@ -38,6 +40,7 @@ roles:
         - "memory_search"
 
   - name: "writer"
+    modelTier: "complex"
     description: "Turns research into a polished deliverable; can produce md/pdf/html/docx via pandoc."
     model: "{{.llmModel}}"
     runtime:

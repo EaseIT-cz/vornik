@@ -201,4 +201,8 @@ var WorkflowDeferredPaths = []string{
 	"broker.schedule.cron",
 	"broker.schedule.timezone",
 	"broker.schedule.inputs",
+	// Part 24 (#920): written by define_workflow, approved on the phone.
+	"broker.hand_over.workflow",
+	"broker.hand_over.documents",
+	"broker.hand_over.inputs",
 }

@@ -20,7 +20,7 @@ func control(t *testing.T, g DialGuard, host, addr string) error {
 }
 
 func TestAgentURLGuard_734_ListedHTTPSHostReachesPrivateOnly(t *testing.T) {
-	g := AgentURLGuard("https://gitlab.corp.example/api/v4", []string{"gitlab.corp.example"})
+	g := AgentURLGuard("https://gitlab.corp.example/api/v4", names("gitlab.corp.example"))
 	for _, addr := range []string{"10.0.0.5:443", "192.168.1.20:443", "[fd00::1]:443", "198.51.100.7:443"} {
 		if err := control(t, g, "gitlab.corp.example", addr); err != nil {
 			t.Errorf("listed https host refused %s: %v", addr, err)
@@ -35,10 +35,10 @@ func TestAgentURLGuard_734_ListedHTTPSHostReachesPrivateOnly(t *testing.T) {
 
 func TestAgentURLGuard_734_UnlistedOrPlainHTTPGetsNoGrant(t *testing.T) {
 	for name, g := range map[string]DialGuard{
-		"unlisted host":     AgentURLGuard("https://other.corp.example/", []string{"gitlab.corp.example"}),
-		"listed host, http": AgentURLGuard("http://gitlab.corp.example/", []string{"gitlab.corp.example"}),
+		"unlisted host":     AgentURLGuard("https://other.corp.example/", names("gitlab.corp.example")),
+		"listed host, http": AgentURLGuard("http://gitlab.corp.example/", names("gitlab.corp.example")),
 		"empty list":        AgentURLGuard("https://gitlab.corp.example/", nil),
-		"unparsable base":   AgentURLGuard("://gitlab.corp.example", []string{"gitlab.corp.example"}),
+		"unparsable base":   AgentURLGuard("://gitlab.corp.example", names("gitlab.corp.example")),
 	} {
 		host := "gitlab.corp.example"
 		if name == "unlisted host" {
@@ -51,11 +51,11 @@ func TestAgentURLGuard_734_UnlistedOrPlainHTTPGetsNoGrant(t *testing.T) {
 }
 
 func TestAgentURLGuard_734_EntriesAndURLAreFolded(t *testing.T) {
-	g := AgentURLGuard("https://GitLab.Corp.Example./x", []string{"gitlab.corp.example"})
+	g := AgentURLGuard("https://GitLab.Corp.Example./x", names("gitlab.corp.example"))
 	if err := control(t, g, "GitLab.Corp.Example.", "10.0.0.5:443"); err != nil {
 		t.Errorf("a host differing only in case and a trailing dot got no grant: %v", err)
 	}
-	g = AgentURLGuard("https://gitlab.corp.example/x", []string{"GITLAB.corp.example."})
+	g = AgentURLGuard("https://gitlab.corp.example/x", names("GITLAB.corp.example."))
 	if err := control(t, g, "gitlab.corp.example", "10.0.0.5:443"); err != nil {
 		t.Errorf("an unfolded entry did not match: %v", err)
 	}
@@ -66,23 +66,25 @@ func TestAgentURLGuard_734_EntriesAndURLAreFolded(t *testing.T) {
 
 func TestAgentURLGuard_734_ManagedPolicyIgnoresTheList(t *testing.T) {
 	withPolicy(t, &ManagedPolicy{})
-	g := AgentURLGuard("https://gitlab.corp.example/", []string{"gitlab.corp.example"})
+	g := AgentURLGuard("https://gitlab.corp.example/", names("gitlab.corp.example"))
 	if err := control(t, g, "gitlab.corp.example", "10.0.0.5:443"); !errors.Is(err, ErrDialRefused) {
 		t.Errorf("under a managed policy a listed host dialled a private address: %v", err)
 	}
-	if AgentURLClient("https://gitlab.corp.example/", []string{"gitlab.corp.example"}, 0) == nil {
+	if AgentURLClient("https://gitlab.corp.example/", names("gitlab.corp.example"), 0) == nil {
 		t.Fatal("AgentURLClient returned nil")
 	}
 }
 
-// Code review 91fb F1 and F2: an IP-literal entry never grants, and the
-// client keeps CustomerURLClient's no-proxy transport and redirect rule.
+// Code review 91fb F1 and F2: an entry the loader would refuse never
+// grants (an IP literal was one until #403 made it a valid entry, §6.12; a
+// link-local literal still is), and the client keeps CustomerURLClient's
+// no-proxy transport and redirect rule.
 func TestAgentURLClient_734_KeepsTheGuardsShape(t *testing.T) {
-	g := AgentURLGuard("https://10.0.0.5/", []string{"10.0.0.5"})
-	if err := control(t, g, "10.0.0.5", "10.0.0.5:443"); !errors.Is(err, ErrDialRefused) {
-		t.Errorf("an IP-literal entry granted a private address: %v", err)
+	g := AgentURLGuard("https://169.254.1.1/", names("169.254.1.1"))
+	if err := control(t, g, "169.254.1.1", "169.254.1.1:443"); !errors.Is(err, ErrDialRefused) {
+		t.Errorf("a link-local-literal entry granted: %v", err)
 	}
-	c := AgentURLClient("https://gitlab.corp.example/", []string{"gitlab.corp.example"}, time.Second)
+	c := AgentURLClient("https://gitlab.corp.example/", names("gitlab.corp.example"), time.Second)
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok || tr.Proxy != nil || tr.DialContext == nil {
 		t.Fatalf("transport %T: want a guarded transport that consults no proxy", c.Transport)

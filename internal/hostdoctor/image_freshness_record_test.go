@@ -135,6 +135,17 @@ func TestImageFreshness_AbsentRecordFallsBackToLegacy(t *testing.T) {
 		imageRevisionFunc: func(_ context.Context, _ string) (string, bool, error) {
 			return commitPrev, true, nil
 		},
+		// The agent tag is a registry tag, so the legacy path asks the
+		// registry. Stub both digests, as a stale pull: unstubbed, the test
+		// read this host's podman and the live registry, and passed or
+		// failed by what the host held (the CI VM held a current pull and
+		// got "OK", release gate for 2026.11.8, 2026-11-26).
+		imageDigestFunc: func(_ context.Context, _ string) (string, error) {
+			return "sha256:aaaaaaaaaaaa1111", nil
+		},
+		publishedDigestsFunc: func(_ context.Context, _ string) (map[string]string, error) {
+			return map[string]string{"amd64": "sha256:bbbbbbbbbbbb2222", "arm64": "sha256:cccccccccccc3333"}, nil
+		},
 	}
 	got := h.checkImageFreshness(context.Background())
 	if got.Status != "WARNING" {

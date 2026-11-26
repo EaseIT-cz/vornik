@@ -413,6 +413,12 @@ func decodeConfigFile(path string, cfg *Config, prov *Provenance) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to index config keys: %w", err)
 	}
+	if !isJSON {
+		// A key the struct does not declare loads silently; record it so
+		// the daemon can say so (GitHub #869). The decode above succeeded,
+		// so the walk cannot fail on syntax.
+		cfg.undeclaredKeys, _ = UnknownKeys(data)
+	}
 	base := filepath.Base(path)
 	WalkLeaves(reflect.ValueOf(cfg).Elem(), func(key string, _ reflect.StructField, _ reflect.Value) {
 		if present[key] {

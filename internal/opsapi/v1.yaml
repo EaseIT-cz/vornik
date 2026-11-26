@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vornik operations API
-  version: 1.4.0
+  version: 1.6.0
   description: |
     The operations a hosting control plane calls on a managed Vornik instance,
     over the instance's operations listener, authenticated with the
@@ -47,6 +47,12 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    ModelChoice:
+      type: object
+      required: [model]
+      properties:
+        model: {type: string, description: a catalogue id}
+        fallback: {type: string, description: a catalogue id; empty for none}
     Error:
       type: object
       properties:
@@ -185,6 +191,22 @@ paths:
                       did not apply), and `config:<path>` for each restart-only
                       setting whose value on disk differs from the running one.
                       Names only, never a value (1.4.0).
+                  pending_generation:
+                    type: integer
+                    description: |
+                      The restart generation now: a count of the changes that
+                      asked for a restart, kept across restarts (1.5.0, GitHub
+                      #799). Absent from an older daemon, and when the daemon
+                      cannot read its counter.
+                  loaded_generation:
+                    type: integer
+                    description: |
+                      The restart generation this daemon read at start, before
+                      its configuration: every change counted up to it is in
+                      the running configuration (1.5.0). After a restart,
+                      loaded_generation at least the pending_generation recorded
+                      before it means the restart applied that change. Absent
+                      under the same conditions as pending_generation.
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/setup/models:
@@ -431,6 +453,26 @@ paths:
                         properties:
                           id: {type: string}
                           good_for: {type: string}
+                    tiers:
+                      type: object
+                      description: >-
+                        Since 1.6.0 (GitHub #880). Maps a model tier (trivial,
+                        standard, complex, coding, vision) to a catalogue model
+                        and an optional catalogue fallback; shipped roles name
+                        a tier, not a model. Left out, the instance's tiers
+                        stay as they are; sent, it replaces them whole. A
+                        model or fallback outside the catalogue, or an unknown
+                        tier, is BAD_BODY.
+                      additionalProperties:
+                        $ref: '#/components/schemas/ModelChoice'
+                    roles:
+                      type: object
+                      description: >-
+                        Since 1.6.0. Maps "<swarm>/<role>" to a catalogue model
+                        and optional fallback, ahead of the tier. Same rules as
+                        tiers.
+                      additionalProperties:
+                        $ref: '#/components/schemas/ModelChoice'
                 templates:
                   type: array
                   uniqueItems: true

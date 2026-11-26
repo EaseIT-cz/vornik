@@ -72,12 +72,15 @@ type SetupRole struct {
 
 // SetupProject is one project in list_my_setup.
 type SetupProject struct {
-	ID          string   `json:"id"`
-	DisplayName string   `json:"display_name"`
-	Purpose     string   `json:"purpose"`
-	BudgetUSD   float64  `json:"monthly_budget_usd"`
-	Home        bool     `json:"home,omitempty"`
-	Roles       []string `json:"roles"`
+	ID          string  `json:"id"`
+	DisplayName string  `json:"display_name"`
+	Purpose     string  `json:"purpose"`
+	BudgetUSD   float64 `json:"monthly_budget_usd"`
+	Home        bool    `json:"home,omitempty"`
+	// SharedMemory says the project reads and writes the namespace's shared
+	// memory (part 24 §24.6 S3).
+	SharedMemory bool     `json:"shared_memory,omitempty"`
+	Roles        []string `json:"roles"`
 	// RoleDetails is Roles with each role's model, tools and where it runs
 	// (design §18.14); Roles stays as it was so nothing that reads it breaks.
 	RoleDetails []SetupRole       `json:"role_details"`
@@ -135,6 +138,9 @@ type SetupWorkflow struct {
 	ID       string         `json:"id"`
 	Approved bool           `json:"approved"`
 	Schedule *SetupSchedule `json:"schedule,omitempty"`
+	// HandOver is the workflow this one starts when it completes, and the
+	// files it hands over (agent-administered design part 24 §24.3 B5, #920).
+	HandOver *registry.BrokerHandOver `json:"hand_over,omitempty"`
 	// InstalledBy is "device" for a connector the person installed from
 	// their paired device (design §19.14.3, §19.14.8 item 6), else omitted.
 	InstalledBy string `json:"installed_by,omitempty"`
@@ -252,7 +258,7 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 	for _, id := range ids {
 		p := st.Projects[id]
 		v.BudgetUSD += p.MonthlyUSD
-		sp := SetupProject{ID: id, DisplayName: p.DisplayName, Purpose: p.Purpose, BudgetUSD: p.MonthlyUSD, Home: p.Home,
+		sp := SetupProject{ID: id, DisplayName: p.DisplayName, Purpose: p.Purpose, BudgetUSD: p.MonthlyUSD, Home: p.Home, SharedMemory: p.SharedMemory,
 			Roles: []string{}, RoleDetails: []SetupRole{}, Workflows: []SetupWorkflow{}, Servers: []SetupServer{}, APIs: []SetupAPI{},
 			Credentials: s.credentialsOf(ctx, ns, p)}
 		for _, r := range p.Swarm.Roles {
@@ -394,7 +400,9 @@ type Capabilities struct {
 	DaemonVersion string `json:"daemon_version"`
 	// HowToWork is the admin guidance (plan P6.3), also served as the
 	// companion endpoint's initialize instructions.
-	HowToWork    string   `json:"how_to_work"`
+	HowToWork string `json:"how_to_work"`
+	// Patterns are the ways to lay out projects (part 24 §24.6 S4).
+	Patterns     []string `json:"patterns"`
 	Verbs        []string `json:"verbs"`
 	RoleBuiltins []string `json:"role_builtins"`
 	// AlwaysGranted are the tools every role can call beyond those it
@@ -427,6 +435,12 @@ type Capabilities struct {
 	// Models are the models a role may name in define_swarm (design §18.6
 	// item 2); empty when the operator offers none.
 	Models []DescribedModel `json:"models"`
+	// IntranetHosts are the agent_admin.private_api_hosts entries that
+	// serve one of this namespace's projects, as host[:port] with the
+	// projects they serve (part 06 §6.12 item 9, GitHub #403): an https
+	// connection to one may reach a private address once approved. Pins and
+	// other namespaces' projects are not shown.
+	IntranetHosts []string `json:"intranet_hosts"`
 	// ModelsNote says what a role with no model runs on (review
 	// 20261003-2ed0 B5).
 	ModelsNote string    `json:"models_note"`
@@ -485,6 +499,7 @@ func (s *agentAdminService) Describe(ctx context.Context, key *persistence.APIKe
 		Namespace:     key.AgentNamespace,
 		DaemonVersion: s.c.Version(),
 		HowToWork:     agentadmin.AdminGuidance(),
+		Patterns:      agentadmin.WorkspacePatterns(),
 		Verbs: []string{agentadmin.VerbCreateProject, agentadmin.VerbDefineSwarm, agentadmin.VerbDefineWorkflow,
 			agentadmin.VerbAddMCPServer, agentadmin.VerbAddAPI, agentadmin.VerbRequestCredential,
 			agentadmin.VerbSetBudget, agentadmin.VerbUpdateProject, agentadmin.VerbRemove, agentadmin.VerbInstallRecipe, agentadmin.VerbListRecipes, agentadmin.VerbTestConnection,
@@ -501,9 +516,11 @@ func (s *agentAdminService) Describe(ctx context.Context, key *persistence.APIKe
 			"a new workflow, or any change to what a workflow returns or can reach",
 			"raising a budget, or exceeding the namespace ceiling",
 			"a schedule (when a workflow runs by itself, in which timezone, with which inputs), or any change to it",
+			"a project joining the shared memory (shared_memory), and a workflow's hand_over to another workflow",
 			"a role on a remote model whose destination (provider and host) this namespace has not used before; a local model, or a destination already approved, applies at once",
 		},
-		Models: s.describeModels(),
+		Models:        s.describeModels(),
+		IntranetHosts: intranetHostsFor(key.AgentNamespace, s.c.agentPrivateAPIHosts()),
 		ModelsNote: "A role may name one of models; a remote one needs the user's approval once per destination. " +
 			"A role with no model runs on the operator's default model, which may be remote: what it works on goes wherever the operator's configuration sends it.",
 		NotYet:                     []string{},
@@ -546,6 +563,9 @@ func (s *agentAdminService) workflowViews(ctx context.Context, st *agentadmin.St
 		}
 		if w.Loaded != nil && w.Loaded.Broker != nil && w.Loaded.Broker.Schedule != nil {
 			sw.Schedule = s.scheduleView(ctx, p.ID, wid, w.Loaded.Broker.Schedule, sw.Approved, time.Now())
+		}
+		if w.Loaded != nil && w.Loaded.Broker != nil {
+			sw.HandOver = w.Loaded.Broker.HandOver
 		}
 		out = append(out, sw)
 	}

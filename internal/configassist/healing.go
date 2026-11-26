@@ -67,12 +67,19 @@ func (e *Engine) ProposeForHealing(ctx context.Context, req HealingRequest) (*Re
 	if strings.TrimSpace(req.WorkflowID) == "" {
 		return nil, fmt.Errorf("configassist: healing request has no workflow")
 	}
+	// The workflow's file joins the request's scope (#892), so it must be a
+	// workflow the registry knows, never a path.
+	if strings.ContainsAny(req.WorkflowID, "/\\.") || e.Registry == nil || e.Registry.GetWorkflow(req.WorkflowID) == nil {
+		return nil, fmt.Errorf("configassist: healing request names workflow %q, which the registry does not know", req.WorkflowID)
+	}
 	return e.Propose(ctx, Request{
 		ProjectID:  req.ProjectID,
 		Intent:     healingIntent(req),
 		Entrypoint: EntrypointSystem,
-		Shadow:     req.Shadow,
-		RequestID:  persistence.GenerateID("careq"),
+		// The trigger's workflow joins the read and write scope (#892).
+		healingWorkflowID: req.WorkflowID,
+		Shadow:            req.Shadow,
+		RequestID:         persistence.GenerateID("careq"),
 		Actor: Actor{
 			// The TRIGGER is the actor, not a person and not an agent. A
 			// healing proposal that recorded a human would make an automatic

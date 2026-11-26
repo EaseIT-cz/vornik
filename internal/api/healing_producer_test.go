@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"vornik.io/vornik/internal/configassist"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -129,5 +133,29 @@ func TestGenerateAssistantCandidate_DistinguishesFailureKinds(t *testing.T) {
 	if _, err := s.generateAssistantCandidate(context.Background(), trigger); err == nil ||
 		errors.Is(err, errHealingProducerUnavailable) {
 		t.Fatalf("a producer that RAN and declined is not an unwired producer, got %v", err)
+	}
+}
+
+// GitHub #911: an assistant that considered the trigger and made no change
+// answered 502 HEALING_PRODUCER_FAILED, the same as a timeout, so the bench
+// counted a considered "no change" as a producer failure. NO_CHANGE is the
+// producer answering "nothing to fix": 422 HEALING_NO_CHANGE, with the
+// reason. Any other refusal (a truncated reply among them) stays 502.
+func TestMapHealingProducerError_911_NoChangeIsNotAFailure(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		status int
+		errc   string
+	}{
+		{configassist.RefuseNoChange, http.StatusUnprocessableEntity, "HEALING_NO_CHANGE"},
+		{configassist.RefuseTruncated, http.StatusBadGateway, "HEALING_PRODUCER_FAILED"},
+	} {
+		s := NewServer()
+		w := httptest.NewRecorder()
+		err := &configassist.RefusalError{Refusal: configassist.Refusal{Code: tc.code, Message: "the failures are flaky tests"}}
+		s.mapHealingProducerError(w, "w1", err)
+		if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.errc) || !strings.Contains(w.Body.String(), "the failures are flaky tests") {
+			t.Fatalf("%s: %d %s", tc.code, w.Code, w.Body.String())
+		}
 	}
 }

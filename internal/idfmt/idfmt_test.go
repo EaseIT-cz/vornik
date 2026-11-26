@@ -29,3 +29,36 @@ func TestShort(t *testing.T) {
 		})
 	}
 }
+
+// GitHub #848 (UI design §23): lease IDs are "lease-" and 32 hex characters
+// (newLeaseID) and had no short form.
+func TestShort_Lease848(t *testing.T) {
+	if got := Short("lease-0123456789abcdef0123456789abfee9"); got != "L-fee9" {
+		t.Fatalf("Short(lease) = %q, want L-fee9", got)
+	}
+	for _, in := range []string{"lease-", "lease", "leasefoo-abcd", "release-abcd1234", "lease-abcdef12", "lease-0123456789abcdef0123456789abfeeZ"} {
+		if got := Short(in); got != in {
+			t.Errorf("Short(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}
+
+// GitHub #854 (UI design §24): instincts and control-plane proposals get a
+// typed short form; an approver device keeps the phone pages' form.
+func TestShort_854(t *testing.T) {
+	for in, want := range map[string]string{
+		"ins_20261125101010_0123456789abfee9": "I-fee9",
+		"cpp_20261125101010_0123456789abfee9": "P-fee9",
+		"dev_0123456789abcdef":                "dev_…abcdef",
+	} {
+		if got := Short(in); got != want {
+			t.Errorf("Short(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Not a device id: unchanged.
+	for _, in := range []string{"dev_tools", "dev_abc", "dev_0123456789abcdeZ", "dev_0123456789abcdef00"} {
+		if got := Short(in); got != in {
+			t.Errorf("Short(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}

@@ -435,3 +435,7 @@ func uiReminder(id, projectID string) *persistence.Reminder {
 		CreatedVia: "test",
 	}
 }
+
+func (r *uiReminderRepo) MarkAttemptFailed(context.Context, string, string, persistence.ReminderAttemptOutcome) error {
+	return nil
+}

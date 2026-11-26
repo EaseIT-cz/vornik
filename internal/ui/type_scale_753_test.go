@@ -23,7 +23,7 @@ var arbitraryTextSize = regexp.MustCompile(`text-\[[0-9.]+(px|rem|em)\]`)
 func typeScaleEmitters(t *testing.T) []string {
 	t.Helper()
 	var files []string
-	for _, glob := range []string{"templates/*.html", "static/console.js", "*.go", "../api/setup_handlers.go"} {
+	for _, glob := range []string{"templates/*.html", "static/console.js", "*.go", "../api/setup_handlers.go", "../api/setup_profile_offer_880.go"} {
 		m, err := filepath.Glob(glob)
 		if err != nil {
 			t.Fatal(err)

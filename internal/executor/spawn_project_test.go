@@ -552,3 +552,39 @@ func TestStringifyParams(t *testing.T) {
 		}
 	}
 }
+
+// GitHub #881, registry design §12.2 C2: a spawned project's swarm models are
+// checked before any file is written; a model that does not answer refuses
+// the spawn.
+func TestSpawnProject_881_UnreachableModelRefused(t *testing.T) {
+	withInterProjectEnabled(t)
+	cfgDir := t.TempDir()
+	yamlBody := "projectId: sales-q3-2026\ndisplayName: X\nswarmId: sales\ndefaultWorkflowId: campaign-runner\n"
+	swarmBody := "---\nswarmId: sales\ncoordinatorRole: lead\nroles:\n  - name: lead\n    count: 1\n    runtimePolicy: ephemeral\n    model: \"dead-model\"\n    runtime:\n      image: img\n---\n"
+	cat := &mockTemplateCatalog{
+		manifests: map[string]templates.Manifest{"sales-campaign": {Slug: "sales-campaign"}},
+		rendered: map[string]map[string]string{
+			"sales-campaign": {"configs/projects/sales-q3-2026.yaml": yamlBody, "configs/swarms/sales.md": swarmBody},
+		},
+	}
+	spawn := newMockSpawnRepo()
+	e, _ := newSpawnExecutor(&MockWorkflowResolver{
+		projects: map[string]*registry.Project{"marketing": marketingProjectWithSpawn()},
+	}, cat, spawn, cfgDir, &stubReloader{})
+	var checked []string
+	e.spawnModelCheck = func(_ context.Context, models []string) error {
+		checked = models
+		return errors.New("dead-model did not answer")
+	}
+	step := &registry.WorkflowStep{Type: "spawn_project", Template: "sales-campaign", Params: map[string]any{"projectId": "sales-q3-2026"}}
+	_, err := e.handleSpawnProjectStep(context.Background(), &persistence.Task{ID: "t1", ProjectID: "marketing"}, &persistence.Execution{ID: "e1"}, "s1", step, nil)
+	if err == nil || !contains(err.Error(), "dead-model") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(checked) != 1 || checked[0] != "dead-model" {
+		t.Errorf("checked %v", checked)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfgDir, "configs/projects/sales-q3-2026.yaml")); !os.IsNotExist(statErr) {
+		t.Error("a refused spawn wrote the project file")
+	}
+}

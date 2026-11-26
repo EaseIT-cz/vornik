@@ -171,6 +171,19 @@ func (s *Server) SwarmSchemaConfigSave(w http.ResponseWriter, r *http.Request, s
 		s.render(w, "swarm_schema_config.html", data)
 		return
 	}
+	// GitHub #881: check each model the form changes before saveSchemaAsset
+	// takes the config lock, so no model call runs under it.
+	// Parsing here consumes the body, so a bad form is reported here, with
+	// the skeleton's own wording.
+	if err := r.ParseForm(); err != nil {
+		s.renderSwarmSchemaError(w, &data, http.StatusBadRequest, "Failed to parse form: "+err.Error(), nil, nil)
+		return
+	}
+	modelWarnings, refusal := s.checkSavedModels(r, fileSwarmModels(data.SwarmPath), schemaFormModels(r))
+	if refusal != "" {
+		s.renderSwarmSchemaError(w, &data, http.StatusConflict, refusal, nil, nil)
+		return
+	}
 	s.saveSchemaAsset(r, schemaAssetSpec{
 		template:  "swarm_schema_config.html",
 		schema:    assetschema.SwarmSchema(),
@@ -205,6 +218,9 @@ func (s *Server) SwarmSchemaConfigSave(w http.ResponseWriter, r *http.Request, s
 			data.Success = "Swarm saved and reloaded."
 			if backupPath != "" {
 				data.Success += " Backup: " + backupPath
+			}
+			for _, w := range modelWarnings {
+				data.Success += " Warning: " + w + "."
 			}
 			// Re-render from the freshly-reloaded swarm.
 			if sw := s.projectReg.GetSwarm(swarmID); sw != nil {

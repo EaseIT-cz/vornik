@@ -452,7 +452,7 @@ func TestBuildVertexEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildVertexEndpoint(tt.projectID, tt.location)
+			got := chat.VertexEndpoint(tt.projectID, tt.location)
 			assert.Equal(t, tt.want, got)
 		})
 	}

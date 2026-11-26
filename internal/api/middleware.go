@@ -131,6 +131,15 @@ type AuthConfig struct {
 	// every door that authorizes" was unenforced on the key path.
 	OwnerAccess auth.OwnerAccessCheck
 
+	// OIDCTrusts and APIKeyByID enable GitHub Actions ID tokens bound to a
+	// companion key (GitHub #792, design 27). Nil leaves the backend out.
+	OIDCTrusts     auth.OIDCTrustStore
+	APIKeyByID     auth.APIKeyByID
+	OIDCHTTPClient *http.Client
+	// OIDCIssuer and OIDCJWKSURL replace GitHub's in tests only.
+	OIDCIssuer  string
+	OIDCJWKSURL string
+
 	// APIKeyToucher fires an async last_used_at update on every
 	// successful DB-backed auth. Nil disables — the auth path
 	// still works, the "last used" column just stays stale.
@@ -250,11 +259,20 @@ func authBackends(config AuthConfig) []auth.Backend {
 	// owner is disabled. Nil when no identity core is wired, which is the
 	// pre-Phase-4 behaviour and every deployment that has not mapped a key.
 	dbKeys.OwnerAccess = config.OwnerAccess
-	return []auth.Backend{
+	backends := []auth.Backend{
 		auth.NewHMACWebhookBackend(),
 		dbKeys,
 		auth.NewStaticKeysBackend(config.StaticAPIKeys),
 	}
+	// Last: it has an opinion only on a JWT from its issuer, which no other
+	// backend accepts (GitHub #792, design 27 §C2).
+	if config.OIDCTrusts != nil && config.APIKeyByID != nil {
+		backends = append(backends, auth.NewOIDCTrustBackend(auth.OIDCTrustConfig{
+			Trusts: config.OIDCTrusts, Keys: config.APIKeyByID, Admit: dbKeys, HTTPClient: config.OIDCHTTPClient,
+			Issuer: config.OIDCIssuer, JWKSURL: config.OIDCJWKSURL,
+		}))
+	}
+	return backends
 }
 
 // AuthMiddleware returns a middleware that validates static API keys.

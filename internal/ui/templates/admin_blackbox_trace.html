@@ -9,7 +9,7 @@
         <div class="space-y-5">
             <div class="flex items-center gap-3">
                 <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                <h1 class="text-xl font-semibold text-gray-100">Trace · <code class="font-mono text-sm">{{.TaskID}}</code></h1>
+                <h1 class="text-xl font-semibold text-gray-100">Trace · <code class="font-mono text-sm" title="{{.TaskID}}">{{shortID .TaskID}}</code></h1>
                 <a href="/ui/admin/blackbox" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Black Box</a>
                 <a href="/ui/tasks/{{.TaskID}}" class="text-xs text-brand-400 hover:text-brand-300">Task page →</a>
             </div>
@@ -20,7 +20,7 @@
             </div>
             {{else if .NotFound}}
             <div class="glass rounded-xl border border-dark-700 p-10 text-center text-gray-500 text-sm">
-                No audit data for task <code class="font-mono">{{.TaskID}}</code>. Check the task ID — retention may have swept the rows, or the task never ran.
+                No audit data for task <code class="font-mono" title="{{.TaskID}}">{{shortID .TaskID}}</code>. Check the task ID — retention may have swept the rows, or the task never ran.
             </div>
             {{else if .Error}}
             <div class="bg-rose-900/30 border border-rose-700/40 text-rose-600 dark:text-rose-200 text-xs px-3 py-2 rounded-md">
@@ -89,7 +89,7 @@
                                 {{if .Role}}<span class="text-violet-800 dark:text-violet-400">{{.Role}}</span>{{end}}
                                 {{if .Model}} · {{.Model}}{{end}}
                                 {{if .StepID}} · step={{.StepID}}{{end}}
-                                {{if .ExecutionID}} · exec={{.ExecutionID}}{{end}}
+                                {{if .ExecutionID}} · exec=<span title="{{.ExecutionID}}">{{shortID .ExecutionID}}</span>{{end}}
                                 · {{.Source}}{{if .SourceID}}/{{.SourceID}}{{end}}
                             </div>
                         </div>

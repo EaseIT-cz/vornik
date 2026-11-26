@@ -23,7 +23,37 @@ import (
 // binary allowed to spawn processes.
 type gitWorkspace struct {
 	dir string
+	// taskStatus asks the bench daemon for a task's status (#915, §12.30
+	// amendment 2026-11-25): found=false is a 404, err a failed read. Nil
+	// (vornikctl bench bare) keeps the immediate refusal of a live worktree.
+	taskStatus func(ctx context.Context, taskID string) (status string, found bool, err error)
+	// waitBound and pollEvery bound the wait for a live task's worktree;
+	// zero means replayWaitBound and replayPollEvery.
+	waitBound, pollEvery time.Duration
+	// afterWait is a test seam: it runs once the wait found no live worktree,
+	// before the reset, so a test can create one there.
+	afterWait func()
 }
+
+// replayWaitBound is one healing replay trial's bound
+// (workflowhealing.DefaultAsyncTrialBound); replayPollEvery the poll.
+const (
+	replayWaitBound = 45 * time.Minute
+	replayPollEvery = 15 * time.Second
+)
+
+// liveTaskStatuses are the statuses of a task whose worktree is still in use;
+// waiting for it is right. COMPLETED is not one: the executor removes a
+// task's worktree before it marks the task COMPLETED, so a COMPLETED task's
+// worktree is a leftover (§12.30 amendment 2026-11-25).
+var liveTaskStatuses = map[string]bool{
+	"PENDING": true, "QUEUED": true, "LEASED": true, "RUNNING": true,
+	"WAITING_FOR_CHILDREN": true, "AWAITING_INPUT": true, "AWAITING_EXTERNAL": true,
+	"AWAITING_APPROVAL": true, "PAUSED": true,
+}
+
+// terminalTaskStatuses are a leftover's: refused at once.
+var terminalTaskStatuses = map[string]bool{"COMPLETED": true, "FAILED": true, "CANCELLED": true, "CLOSED": true}
 
 var _ agentbench.WorkspacePreparer = gitWorkspace{}
 
@@ -63,6 +93,12 @@ func (w gitWorkspace) gitStdout(ctx context.Context, args ...string) (string, er
 func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, repeat int) (string, error) {
 	// A fresh bench instance has no workspace until its first task runs, and
 	// this runs before that: bootstrap it exactly as the daemon would (#593).
+	// Every path below is used from inside `git -C <dir>` (the history archive
+	// is <dir>.history.git): an absolute dir keeps a relative --workspace from
+	// resolving them against the workspace itself (#915).
+	if abs, err := filepath.Abs(w.dir); err == nil {
+		w.dir = abs
+	}
 	// The executor's git runs under the spawn law, which allows only registered
 	// roots: register the workspaces directory, as the daemon does.
 	if err := spawn.RegisterWorkspaceRoot(filepath.Dir(w.dir)); err != nil {
@@ -77,8 +113,14 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 	}
 	// Before status: git itself complains about a broken alternates entry,
 	// and that complaint would read as uncommitted entries.
-	if err := w.refuseUnresettable(ctx, gitDir); err != nil {
+	if err := w.refuseAlternates(gitDir); err != nil {
 		return "", err
+	}
+	if err := w.awaitWorktrees(ctx); err != nil {
+		return "", err
+	}
+	if w.afterWait != nil {
+		w.afterWait()
 	}
 	status, err := w.git(ctx, "status", "--porcelain")
 	if err != nil {
@@ -238,20 +280,36 @@ func (w gitWorkspace) applySeed(ctx context.Context, spec agentbench.TaskSpec, s
 // old commit, and gc keeps what they name (§12.30).
 var specialHeads = []string{"ORIG_HEAD", "FETCH_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "AUTO_MERGE"}
 
-// refuseUnresettable refuses a workspace whose history cannot be fully
-// removed: a live worktree pins its branch, and objects reached through
-// alternates are outside what gc removes. Records of worktrees whose
-// directory is gone (a daemon that died mid-task) are pruned first.
-func (w gitWorkspace) refuseUnresettable(ctx context.Context, gitDir string) error {
+// The reset refuses a workspace whose history cannot be fully removed: objects
+// reached through alternates are outside what gc removes (refuseAlternates),
+// and a live worktree pins its branch (awaitWorktrees, refuseLiveWorktrees).
+// Records of worktrees whose directory is gone (a daemon that died mid-task)
+// are pruned first (liveWorktrees).
+
+// refuseAlternates refuses a workspace whose objects come through alternates.
+func (w gitWorkspace) refuseAlternates(gitDir string) error {
 	if _, err := os.Stat(filepath.Join(gitDir, "objects", "info", "alternates")); err == nil {
 		return fmt.Errorf("benchmark workspace %s uses objects/info/alternates; its history cannot be removed (§12.30)", w.dir)
 	}
-	if _, err := w.git(ctx, "worktree", "prune"); err != nil {
+	return nil
+}
+
+// liveWorktrees prunes the records of worktrees whose directory is gone and
+// lists the rest, the main worktree excluded.
+func (w gitWorkspace) liveWorktrees(ctx context.Context) ([]string, error) {
+	// A replay's own cleanup can remove the last worktree while prune runs;
+	// git then deletes .git/worktrees under it and prune fails ("Invalid
+	// path"). Retried briefly: the race ends when the other remove does
+	// (benchmark LLD §12.30, as shipped; gate flake 2026-11-25).
+	if err := retryGitRace(ctx, 3, 100*time.Millisecond, func() error {
+		_, err := w.git(ctx, "worktree", "prune")
 		return err
+	}); err != nil {
+		return nil, err
 	}
 	list, err := w.gitStdout(ctx, "worktree", "list", "--porcelain")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var others []string
 	for i, line := range strings.Split(list, "\n") {
@@ -259,11 +317,95 @@ func (w gitWorkspace) refuseUnresettable(ctx context.Context, gitDir string) err
 			others = append(others, path)
 		}
 	}
+	return others, nil
+}
+
+// resolvedPath is p made absolute with its symlinks resolved, or p as given
+// when it cannot be (the comparison then fails closed: a refusal).
+func resolvedPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
+}
+
+// refuseLiveWorktrees refuses, without waiting, when any worktree is live.
+// The reset calls it immediately before it deletes refs and before gc, so a
+// replay that created its worktree after the wait keeps its branch (#915).
+func (w gitWorkspace) refuseLiveWorktrees(ctx context.Context) error {
+	others, err := w.liveWorktrees(ctx)
+	if err != nil {
+		return err
+	}
 	if len(others) > 0 {
 		return fmt.Errorf("benchmark workspace %s has a live worktree, which keeps the earlier history; tasks run one at a time, so it is a task still running or a leftover to remove by hand (§12.30): %s",
 			w.dir, strings.Join(others, ", "))
 	}
 	return nil
+}
+
+// awaitWorktrees waits, bounded, while every live worktree belongs to a task
+// the daemon reports live (a learning arm's healing replay, #915), and refuses
+// at once for a leftover: a terminal or unknown task, or a worktree that is
+// not <workspace>/.worktrees/<task id>. A failed status read is retried at
+// the next poll. Without a status lookup it refuses as before.
+func (w gitWorkspace) awaitWorktrees(ctx context.Context) error {
+	if w.taskStatus == nil {
+		return w.refuseLiveWorktrees(ctx)
+	}
+	bound, every := w.waitBound, w.pollEvery
+	if bound <= 0 {
+		bound = replayWaitBound
+	}
+	if every <= 0 {
+		every = replayPollEvery
+	}
+	deadline := time.Now().Add(bound)
+	// git lists worktrees by absolute path; resolve both sides so a relative
+	// or symlinked --workspace still recognises its task worktrees.
+	wtRoot := resolvedPath(filepath.Join(w.dir, ".worktrees"))
+	for {
+		others, err := w.liveWorktrees(ctx)
+		if err != nil {
+			return err
+		}
+		if len(others) == 0 {
+			return nil
+		}
+		var waiting []string
+		for _, path := range others {
+			id := filepath.Base(path)
+			if resolvedPath(filepath.Dir(path)) != wtRoot || !strings.HasPrefix(id, "task_") {
+				return fmt.Errorf("benchmark workspace %s has a worktree that is not a task worktree (%s/<task id>); someone added it by hand, remove it (§12.30): %s", w.dir, wtRoot, path)
+			}
+			status, found, lerr := w.taskStatus(ctx, id)
+			switch {
+			case lerr != nil:
+				waiting = append(waiting, id+" (status unreadable: "+lerr.Error()+")")
+			case !found:
+				return fmt.Errorf("benchmark workspace %s has a live worktree of a task the daemon does not know, a leftover to remove by hand (§12.30): %s", w.dir, path)
+			case terminalTaskStatuses[status]:
+				return fmt.Errorf("benchmark workspace %s has a live worktree of a %s task, a leftover to remove by hand (§12.30): %s", w.dir, status, path)
+			case liveTaskStatuses[status]:
+				waiting = append(waiting, id+" ("+status+")")
+			default:
+				waiting = append(waiting, id+" (status "+status+" not recognised)")
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("benchmark workspace %s: tasks still running after %s, holding a worktree (a learning arm's replay?): %s; re-run the chunk once they finish (§12.30)",
+				w.dir, bound, strings.Join(waiting, ", "))
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "  ..  waiting for %s to release the benchmark workspace\n", strings.Join(waiting, ", "))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(every):
+		}
+	}
 }
 
 // historyIsOneCommit reports whether the workspace holds one commit, one ref
@@ -378,6 +520,11 @@ func (w gitWorkspace) archiveRefs(ctx context.Context, spec agentbench.TaskSpec,
 // dropOldHistory deletes every ref but keep, the special heads, and every
 // reflog, then prunes what nothing reaches any more (§12.30).
 func (w gitWorkspace) dropOldHistory(ctx context.Context, gitDir, keep string) error {
+	// A replay may have created a worktree since the wait (#915): never delete
+	// its branch or prune its objects.
+	if err := w.refuseLiveWorktrees(ctx); err != nil {
+		return err
+	}
 	refs, err := w.gitStdout(ctx, "for-each-ref", "--format=%(refname)")
 	if err != nil {
 		return err
@@ -395,6 +542,9 @@ func (w gitWorkspace) dropOldHistory(ctx context.Context, gitDir, keep string) e
 		}
 	}
 	if _, err := w.git(ctx, "reflog", "expire", "--expire=now", "--all"); err != nil {
+		return err
+	}
+	if err := w.refuseLiveWorktrees(ctx); err != nil {
 		return err
 	}
 	_, err = w.git(ctx, "gc", "-q", "--prune=now")
@@ -483,4 +633,24 @@ func (w gitWorkspace) Produced(ctx context.Context, spec agentbench.TaskSpec) (m
 		out[tg] = files != ""
 	}
 	return out, nil
+}
+
+// retryGitRace runs fn up to attempts times, pausing between tries, and
+// returns its last error. For a git call that races another git process on
+// the same repository's administrative files.
+func retryGitRace(ctx context.Context, attempts int, pause time.Duration, fn func() error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if i+1 < attempts {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(pause):
+			}
+		}
+	}
+	return err
 }

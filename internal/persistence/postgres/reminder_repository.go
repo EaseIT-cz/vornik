@@ -186,7 +186,7 @@ RETURNING ` + reminderColumns
 func (r *ReminderRepository) MarkFired(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `
 UPDATE dispatcher_reminders
-SET status = 'fired', fired_at = NOW()
+SET status = 'fired', fired_at = NOW(), error_count = 0
 WHERE id = $1 AND status = 'firing'
 `, id)
 	if err != nil {
@@ -210,7 +210,7 @@ WHERE id = $1 AND status = 'firing'
 func (r *ReminderRepository) Reschedule(ctx context.Context, id string, nextFireAt time.Time) error {
 	res, err := r.db.ExecContext(ctx, `
 UPDATE dispatcher_reminders
-SET status = 'pending', fire_at = $2
+SET status = 'pending', fire_at = $2, error_count = 0
 WHERE id = $1 AND status = 'firing'
 `, id, nextFireAt.UTC())
 	if err != nil {
@@ -237,6 +237,39 @@ WHERE id = $1
 `, id, errorMessage)
 	if err != nil {
 		return fmt.Errorf("reminder_repository: mark_errored: %w", err)
+	}
+	return nil
+}
+
+// MarkAttemptFailed records a failed delivery attempt (scheduled-reminders
+// design §11 R5, GitHub #861). Every outcome applies only to a firing row.
+func (r *ReminderRepository) MarkAttemptFailed(ctx context.Context, id, errorMessage string, o persistence.ReminderAttemptOutcome) error {
+	var (
+		q    string
+		args []any
+	)
+	switch o.Kind {
+	case persistence.ReminderAttemptRetry:
+		q = `UPDATE dispatcher_reminders SET status = 'pending', fire_at = $3, last_error = $2, error_count = error_count + 1
+WHERE id = $1 AND status = 'firing'`
+		args = []any{id, errorMessage, o.At.UTC()}
+	case persistence.ReminderAttemptRearm:
+		q = `UPDATE dispatcher_reminders SET status = 'pending', fire_at = $3, last_error = $2, error_count = 0
+WHERE id = $1 AND status = 'firing'`
+		args = []any{id, errorMessage, o.At.UTC()}
+	case persistence.ReminderAttemptExpire:
+		q = `UPDATE dispatcher_reminders SET status = 'expired', last_error = $2, error_count = error_count + 1
+WHERE id = $1 AND status = 'firing'`
+		args = []any{id, errorMessage}
+	default:
+		return fmt.Errorf("reminder_repository: mark_attempt_failed: unknown outcome %q", o.Kind)
+	}
+	res, err := r.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("reminder_repository: mark_attempt_failed: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return persistence.ErrNotFound
 	}
 	return nil
 }

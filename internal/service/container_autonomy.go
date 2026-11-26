@@ -128,6 +128,12 @@ func (c *Container) initAutonomy() {
 	if c.ChatClient == nil || c.Registry == nil {
 		return
 	}
+	// A leader-elected singleton (GitHub #894). The standby elector alone is
+	// not enough here: the loop's initial evaluation runs before the leader
+	// gate is consulted, so a ui node would still tick once per loop start.
+	if c.skipNonWorker("autonomy") {
+		return
+	}
 
 	// Resolve the workspace path using the same logic as the executor so the
 	// autonomy manager can check for PROJECT_CONTEXT.md on the host filesystem.
@@ -192,25 +198,37 @@ func (c *Container) initAutonomy() {
 	}
 
 	mgr := autonomy.New(c.ChatClient, c.Registry, taskRepo, execRepo, autonomyOpts...)
-	// Note: Start() spawns per-project goroutines that begin
-	// ticking immediately. The leader-gate check inside each
-	// tick handles the "haven't acquired yet" case by skipping
-	// — Container.Run launches the elector goroutine + calls
-	// BootstrapAcquire (see Run()'s "leader-election: workers"
-	// block).
-	mgr.Start()
+	// Constructed only: startAutonomy, called from startWork, bootstraps the
+	// elector and starts the loops (GitHub #586: a held start writes no
+	// leader lock and ticks nothing).
 	c.autonomyManager = mgr
-
-	active := mgr.ActiveLoops()
-	if active > 0 {
-		c.Logger.Info().Int("active_loops", active).Msg("autonomous task manager initialized")
-	} else {
-		c.Logger.Debug().Msg("autonomous task manager initialized (no projects with autonomy enabled)")
-	}
+	c.Logger.Debug().Msg("autonomous task manager constructed")
 
 	// Wire into Telegram bot so /autopilot commands work.
 	if c.TelegramBot != nil {
 		c.TelegramBot.SetAutonomyManager(mgr)
+	}
+}
+
+// startAutonomy bootstraps the autonomy elector, starts the project loops
+// and then the renew loop; startWork is its only caller (GitHub #586).
+// The bootstrap comes before Start so a loop's first evaluation reads an
+// authoritative leader bit (GitHub #903: before, a due-at-restart evaluation
+// was refused by the epoch fence after it had made its LLM call). A standby
+// elector (run_workers: false) stays "not leader".
+func (c *Container) startAutonomy(ctx context.Context) {
+	if c.autonomyManager == nil {
+		return
+	}
+	if c.autonomyElector != nil {
+		c.autonomyElector.BootstrapAcquire(ctx)
+	}
+	c.autonomyManager.Start()
+	if c.autonomyElector != nil {
+		go c.autonomyElector.Run(ctx)
+	}
+	if active := c.autonomyManager.ActiveLoops(); active > 0 {
+		c.Logger.Info().Int("active_loops", active).Msg("autonomous task manager started")
 	}
 }
 
@@ -223,6 +241,11 @@ func (c *Container) initRetention() {
 	cfg := c.Config.Retention
 	if !cfg.Enabled {
 		c.Logger.Debug().Msg("retention sweeper disabled (set retention.enabled=true to enable)")
+		return
+	}
+	// A leader-elected singleton (GitHub #894): only a worker node sweeps,
+	// and only a worker node's drain waits for the sweep (retentionDone).
+	if c.skipNonWorker("retention") {
 		return
 	}
 	interval, err := time.ParseDuration(cfg.Interval)
@@ -240,8 +263,9 @@ func (c *Container) initRetention() {
 
 	defaults := retention.DefaultsFromConfig(cfg, toolAuditFloor, c.Config.Storage.ArtifactsPath)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	c.retentionCancel = cancel
+	// retentionDone exists from construction: the retention_sweeper
+	// readiness check captures it when the HTTP server is built. The loop
+	// that closes it starts in startWork (GitHub #586).
 	c.retentionDone = make(chan struct{})
 
 	// Leader-gate the sweep so multi-replica deployments only
@@ -251,16 +275,35 @@ func (c *Container) initRetention() {
 	// https://docs.vornik.io §3
 	// Slice 1.
 	c.retentionElector = c.initWorkerElector("retention_sweeper")
+	c.retentionPlan = &retentionPlan{sweeper: sweeper, defaults: defaults, interval: interval}
+}
+
+// retentionPlan is the sweeper initRetention constructs and startRetention
+// starts (GitHub #586).
+type retentionPlan struct {
+	sweeper  *retention.Sweeper
+	defaults retention.Policy
+	interval time.Duration
+}
+
+// startRetention starts the constructed sweeper and its elector; startWork
+// is its only caller (GitHub #586).
+func (c *Container) startRetention() {
+	p := c.retentionPlan
+	if p == nil || c.retentionCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.retentionCancel = cancel
 	if c.retentionElector != nil {
 		c.retentionElector.BootstrapAcquire(ctx)
 		go c.retentionElector.Run(ctx)
 	}
-
 	go func() {
 		defer close(c.retentionDone)
-		c.runRetentionLoop(ctx, sweeper, defaults, interval)
+		c.runRetentionLoop(ctx, p.sweeper, p.defaults, p.interval)
 	}()
-	c.Logger.Info().Dur("interval", interval).Msg("retention sweeper started")
+	c.Logger.Info().Dur("interval", p.interval).Msg("retention sweeper started")
 }
 
 // runRetentionLoop runs the sweeper on the configured interval until ctx is

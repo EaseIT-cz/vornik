@@ -42,6 +42,19 @@ func agentImage(t *testing.T) string {
 	if err := exec.Command("podman", "image", "exists", img).Run(); err != nil {
 		t.Skipf("agent image %s not present locally", img)
 	}
+	// The install writes through a bind mount owned by this host's user, so
+	// the image must run as that user: one built from this tree with
+	// VORNIK_UID (make build-agent). A pulled image baked for another uid
+	// fails with "Permission denied: /staging/lib", a host mismatch, not the
+	// behaviour under test (CI VM, 2026-11-26, after a lane pulled the
+	// published image). Skipped with the reason instead.
+	out, err := exec.Command("podman", "run", "--rm", "--pull=never", "--network=none", "--entrypoint", "id", img, "-u").Output()
+	if err != nil {
+		t.Skipf("agent image %s: cannot read its user (%v)", img, err)
+	}
+	if baked, host := strings.TrimSpace(string(out)), strconv.Itoa(os.Getuid()); baked != host {
+		t.Skipf("agent image %s runs as uid %s, this host user is %s: build it from this tree (make build-agent) to run this test", img, baked, host)
+	}
 	return img
 }
 

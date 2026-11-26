@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/workflowhealing"
 )
@@ -265,8 +266,16 @@ func (s *Server) AdminHealingTriggerGenerateCandidate(w http.ResponseWriter, r *
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
 		return
 	}
-	// Generous timeout — the assistant runs a synchronous model call.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Budget, not a fixed 60 s: the producer is a multi-turn tool loop
+	// bounded by config_assistant.request_timeout, and 60 s failed all 12 of
+	// a bench arm's generations (GitHub #908). The response write deadline is
+	// lifted to match, so the server's WriteTimeout cannot cut this route.
+	budget := s.HealingGenerateBudget()
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget + config.HealingGenerateWriteSlack)); err != nil {
+		s.logger.Warn().Err(err).Str("trigger_id", id).
+			Msg("healing: could not lift the write deadline for generate-candidate; the server's write timeout may cut a long generation")
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 
 	// One producer, two presentations (healing_candidate_producer.go). This
@@ -289,6 +298,16 @@ func (s *Server) AdminHealingTriggerGenerateCandidate(w http.ResponseWriter, r *
 		"status":      string(persistence.HealingTriggerStatusGeneratedCandidate),
 		"proposal_id": out.Proposal.ID,
 	})
+}
+
+// HealingGenerateBudget is how long one healing candidate generation may take
+// on this deployment: config_assistant.request_timeout plus the margin
+// (GitHub #908). The console reads it through its generator seam.
+func (s *Server) HealingGenerateBudget() time.Duration {
+	if s.config == nil {
+		return config.DefaultHealingGenerateBudget
+	}
+	return s.config.ConfigAssistant.HealingGenerateBudget()
 }
 
 // respondGenerateCandidateError maps a producer failure to the HTTP answer that

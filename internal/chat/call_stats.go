@@ -37,6 +37,10 @@ import (
 type CallStats struct {
 	mu      sync.Mutex
 	entries map[callStatKey]*callStatEntry
+	// goneExtra counts keys admitted past callStatsMaxEntries because their
+	// error was a 410; droppedGone counts 410s past that allowance too
+	// (GitHub #882, retired-model design R1a).
+	goneExtra, droppedGone int
 }
 
 // callStatsMaxEntries bounds cardinality. Model and call-site are both bounded in
@@ -44,6 +48,10 @@ type CallStats struct {
 // derive a call site from something unbounded; a hard cap keeps that from becoming a slow
 // leak in a long-lived daemon.
 const callStatsMaxEntries = 512
+
+// callStatsMaxGoneExtra is how many keys past the cap a 410 may still add: a
+// retired model is the finding worth the memory (GitHub #882).
+const callStatsMaxGoneExtra = 32
 
 type callStatKey struct{ model, callSite string }
 
@@ -53,6 +61,8 @@ type callStatEntry struct {
 	lastErr   string
 	lastFail  time.Time
 	firstSeen time.Time
+	goneAt    time.Time // the last HTTP 410: the provider retired the model (#882)
+	goneMsg   string
 }
 
 // CallStat is one (model, call_site) tally, as read by the doctor.
@@ -64,6 +74,10 @@ type CallStat struct {
 	LastError string
 	LastFail  time.Time
 	Since     time.Time
+	// GoneAt and GoneMessage are the last HTTP 410 and its message: the
+	// provider has retired the model (GitHub #882). Zero when none.
+	GoneAt      time.Time
+	GoneMessage string
 }
 
 // FailureRate is the failed fraction of observed calls. Zero calls reads as 0 rather
@@ -107,16 +121,27 @@ func (s *CallStats) Record(model, callSite string, err error) {
 		s.entries = make(map[callStatKey]*callStatEntry)
 	}
 	key := callStatKey{model: model, callSite: callSite}
+	goneMsg, gone := goneError(err)
 	e, ok := s.entries[key]
 	if !ok {
 		if len(s.entries) >= callStatsMaxEntries {
 			// At the cap, keep what we have rather than evicting: the entries already
 			// present are the ones with history, and a finding needs history to be
-			// worth reporting.
-			return
+			// worth reporting. A 410 is the exception, up to a small allowance.
+			if !gone {
+				return
+			}
+			if s.goneExtra >= callStatsMaxGoneExtra {
+				s.droppedGone++
+				return
+			}
+			s.goneExtra++
 		}
 		e = &callStatEntry{firstSeen: now}
 		s.entries[key] = e
+	}
+	if gone {
+		e.goneAt, e.goneMsg = now, goneMsg
 	}
 	e.calls++
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -143,6 +168,9 @@ func (s *CallStats) Snapshot() []CallStat {
 			LastError: e.lastErr,
 			LastFail:  e.lastFail,
 			Since:     e.firstSeen,
+
+			GoneAt:      e.goneAt,
+			GoneMessage: e.goneMsg,
 		})
 	}
 	s.mu.Unlock()
@@ -161,4 +189,29 @@ func (s *CallStats) Snapshot() []CallStat {
 		return out[i].CallSite < out[j].CallSite
 	})
 	return out
+}
+
+// DroppedGone is how many 410 answers came for new keys after the cap and its
+// gone allowance were both full, so were not recorded (GitHub #882).
+func (s *CallStats) DroppedGone() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.droppedGone
+}
+
+// goneError reports whether err is a provider's HTTP 410, which means the
+// model is retired, and its message. Only 410 counts: a 404 can be a wrong
+// route as easily as a missing model (retired-model design §2 R1).
+func goneError(err error) (string, bool) {
+	var g *GatewayError
+	if err == nil || !errors.As(err, &g) || g.Status != 410 {
+		return "", false
+	}
+	if g.Message != "" {
+		return g.Message, true
+	}
+	return g.Body, true
 }

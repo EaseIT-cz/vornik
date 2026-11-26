@@ -18,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentbridge"
 	"vornik.io/vornik/internal/harnessconfig"
+	"vornik.io/vornik/internal/termcheck"
 )
 
 // `vornikctl agent connect <harness>` and `vornikctl agent disconnect <ns>`
@@ -36,11 +37,7 @@ var (
 // force it. Only an *os.File on a character device is one.
 var stdinIsTerminal = func(r io.Reader) bool {
 	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return ok && termcheck.IsTerminal(f) // not /dev/null (GitHub #866)
 }
 
 var agentConnectCmd = &cobra.Command{

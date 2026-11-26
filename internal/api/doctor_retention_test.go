@@ -1,10 +1,12 @@
 package api
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/retention"
 )
 
 // The warning must name the article and the consequence, not just report a flag.
@@ -24,16 +26,37 @@ func TestCheckRetentionEnabled_OffWarnsWithTheArticle(t *testing.T) {
 	}
 }
 
-// Enabled with no windows prunes nothing while LOOKING configured in a config
-// diff — the same exposure as being off, with none of the visibility.
-func TestCheckRetentionEnabled_EnabledButUnconfiguredWarns(t *testing.T) {
+// GitHub #896 (found reviewing the #479 ROPA rewrite, 2026-11-23): with
+// retention enabled and no window set, the message said the sweeper "prunes
+// nothing", but the resolver applies compiled defaults (tasks, executions
+// and artifacts at 60 days, and more). The message now states the
+// defaults that apply, read from retention.Resolve so they cannot drift,
+// and names the classes that have no default.
+//
+// Found at: review (observed in production as the doctor's output).
+// Regression test at: unit (the doctor check over the resolver).
+// Lower because: the doctor handler only relays this check's message.
+func TestCheckRetentionEnabled_EnabledWithoutWindowsStatesTheDefaults_896(t *testing.T) {
 	h := &DoctorHandlers{retentionKnown: true, retentionEnabled: true}
 	got := h.checkRetentionEnabled()
 	if got.Status != "WARNING" {
-		t.Fatalf("status = %q, want WARNING", got.Status)
+		t.Fatalf("status = %q, want WARNING (the defaults were not chosen for this deployment's purposes)", got.Status)
 	}
-	if !strings.Contains(got.Message, "prunes nothing") {
-		t.Errorf("message should name the real consequence: %s", got.Message)
+	if strings.Contains(got.Message, "prunes nothing") {
+		t.Fatalf("the message repeats the false claim: %s", got.Message)
+	}
+	d := retention.Resolve("", retention.Policy{}, retention.Policy{})
+	for _, want := range []string{
+		fmt.Sprintf("tasks %dd", d.TasksDays),
+		fmt.Sprintf("executions %dd", d.ExecutionsDays),
+		fmt.Sprintf("artifacts %dd", d.ArtifactsDays),
+		fmt.Sprintf("tool audit %dd", d.ToolAuditDays),
+		fmt.Sprintf("chat audit %dd", d.ChatAuditDays),
+		"memory chunks", "retention-recommended.yaml",
+	} {
+		if !strings.Contains(got.Message, want) {
+			t.Errorf("message missing %q: %s", want, got.Message)
+		}
 	}
 }
 

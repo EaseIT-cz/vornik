@@ -143,6 +143,12 @@ type messageWire struct {
 	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Name       string          `json:"name,omitempty"`
+	// Reasoning text as OpenAI-compatible providers return it: Ollama
+	// writes "reasoning", vLLM and others "reasoning_content" (GitHub
+	// #869). Read only; MarshalJSON never sets them, so reasoning is not
+	// echoed upstream.
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // MarshalJSON emits the OpenAI-compatible wire shape: content as a JSON
@@ -189,6 +195,10 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.Name = w.Name
 	m.Content = ""
 	m.Blocks = nil
+	m.ReasoningContent = w.ReasoningContent
+	if m.ReasoningContent == "" {
+		m.ReasoningContent = w.Reasoning
+	}
 
 	if len(w.Content) == 0 || string(w.Content) == "null" {
 		return nil
@@ -266,6 +276,14 @@ type ChatRequest struct {
 	Tools       []Tool    `json:"tools,omitempty"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	// ReasoningEffort is the OpenAI-compatible reasoning field: none, low,
+	// medium or high (GitHub #869). The agent sends it through the proxy;
+	// the client writes it from the request context.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ChatTemplateKwargs carries a template variable for llama.cpp-style
+	// servers whose model's chat template reads one (enable_thinking,
+	// reasoning) instead of reasoning_effort (GitHub #869, design B4).
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 	// Stream is the OpenAI SSE-streaming directive. Decoded so the
 	// chat-proxy handler can reject stream:true with a typed error
 	// instead of silently returning a buffered JSON body that
@@ -432,6 +450,17 @@ type ChatResponse struct {
 		PromptTokensDetails struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
+		// CompletionTokensDetails carries the reasoning token count where a
+		// provider reports one (OpenAI's spelling). Nil when it does not:
+		// Ollama Cloud returns the reasoning text and no count (measured
+		// 2026-11-21), and "unknown" must not read as zero (GitHub #869).
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details,omitempty"`
+		// ReasoningBytes is the size of the reasoning text the provider
+		// returned, set by the chat proxy for the agent, whatever the
+		// provider (a vornik field, GitHub #869).
+		ReasoningBytes int `json:"reasoning_bytes,omitempty"`
 	} `json:"usage"`
 	// ExtractionWarning is set by the Bedrock converter when one or
 	// more tool-call argument blocks failed to marshal. The response
@@ -509,11 +538,16 @@ var (
 
 // Client is an OpenAI-compatible HTTP client.
 type Client struct {
-	endpoint    string
-	apiKey      string
-	model       string
-	contextSize int // context window tokens (sent as options.num_ctx); 0 = omit
-	maxTokens   int // max output tokens per call; 0 = omit (use provider default)
+	// reasoningTemplateVars maps a model to the chat-template variable that
+	// switches its reasoning, for models whose template ignores
+	// reasoning_effort (runtime.agent_llm.model_limits.<model>.
+	// reasoning_template_variable, GitHub #869). Shared by WithModel clones.
+	reasoningTemplateVars map[string]string
+	endpoint              string
+	apiKey                string
+	model                 string
+	contextSize           int // context window tokens (sent as options.num_ctx); 0 = omit
+	maxTokens             int // max output tokens per call; 0 = omit (use provider default)
 	// authHeader/authPrefix control how the API key is carried on the wire.
 	// Empty authHeader falls back to "Authorization" with a "Bearer " prefix —
 	// the default OpenAI-compatible shape. Providers that expect a raw key in
@@ -659,6 +693,25 @@ func WithLogger(logger zerolog.Logger) ClientOption {
 	}
 }
 
+// WithReasoningTemplateVariables sets, per model, the chat-template variable
+// that switches reasoning (GitHub #869): off sends it false, a level true.
+func WithReasoningTemplateVariables(vars map[string]string) ClientOption {
+	return func(c *Client) {
+		c.reasoningTemplateVars = vars
+	}
+}
+
+// reasoningTemplateKwargs is the chat_template_kwargs for the request's level
+// on this model, or nil: no level, or no variable configured for the model.
+func (c *Client) reasoningTemplateKwargs(ctx context.Context) map[string]any {
+	level := ReasoningEffortFromContext(ctx)
+	name := c.reasoningTemplateVars[c.model]
+	if level == "" || name == "" {
+		return nil
+	}
+	return map[string]any{name: level != ReasoningEffortOff}
+}
+
 // WithMetrics sets Prometheus metrics for the client.
 func WithMetrics(m *Metrics) ClientOption {
 	return func(c *Client) {
@@ -762,7 +815,7 @@ func (c *Client) contextOptions() map[string]any {
 
 // Complete sends a chat completion request without tools.
 func (c *Client) Complete(ctx context.Context, messages []Message) (*ChatResponse, error) {
-	return c.doComplete(ctx, ChatRequest{
+	return c.completeWithReasoning(ctx, ChatRequest{
 		Model:     c.model,
 		Messages:  messages,
 		MaxTokens: EffectiveMaxTokens(ctx, c.maxTokens),
@@ -790,13 +843,44 @@ func (c *Client) PingCompletion(ctx context.Context) error {
 
 // CompleteWithTools sends a chat completion request with tool definitions.
 func (c *Client) CompleteWithTools(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error) {
-	return c.doComplete(ctx, ChatRequest{
+	return c.completeWithReasoning(ctx, ChatRequest{
 		Model:     c.model,
 		Messages:  messages,
 		Tools:     tools,
 		MaxTokens: EffectiveMaxTokens(ctx, c.maxTokens),
 		Options:   c.contextOptions(),
 	})
+}
+
+// completeWithReasoning sends a chat completion carrying the request's
+// reasoning level (GitHub #869). The field is always written from the
+// context, never a value already on req, so off is written "none" and an
+// unknown value never reaches the provider. A model that refuses the field is
+// retried once without it and remembered, so the role keeps working.
+func (c *Client) completeWithReasoning(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	requested := ReasoningEffortFromContext(ctx)
+	req.ReasoningEffort = openAIReasoningEffort(ctx)
+	req.ChatTemplateKwargs = c.reasoningTemplateKwargs(ctx)
+	if req.ReasoningEffort == "" {
+		return c.doComplete(ctx, req)
+	}
+	if reasoningRefused(c.endpoint, c.model) {
+		req.ReasoningEffort = ""
+		c.metrics.RecordReasoning(c.model, requested, ReasoningRefused)
+		return c.doComplete(ctx, req)
+	}
+	resp, err := c.doComplete(ctx, req)
+	if !isReasoningRefusal(err) {
+		c.metrics.RecordReasoning(c.model, requested, ReasoningSent)
+		return resp, err
+	}
+	if rememberReasoningRefusal(c.endpoint, c.model) {
+		c.logger.Warn().Str("model", c.model).Str("reasoning", requested).
+			Msg("the model refused the reasoning field; retrying without it, and not sending it to this model again until restart. Remove the role's or model's reasoning setting for this model")
+	}
+	c.metrics.RecordReasoning(c.model, requested, ReasoningRefused)
+	req.ReasoningEffort = ""
+	return c.doComplete(ctx, req)
 }
 
 // doComplete executes a chat completion HTTP request.

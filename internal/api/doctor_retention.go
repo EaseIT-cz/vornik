@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"vornik.io/vornik/internal/retention"
 )
 
 // checkRetentionEnabled warns when the retention sweeper is off.
@@ -45,14 +46,21 @@ func (h *DoctorHandlers) checkRetentionEnabled() DoctorCheck {
 		}
 	}
 
-	// Enabled but nothing set prunes nothing while looking configured.
+	// Enabled with no window set: the sweeper runs on the compiled defaults
+	// (retention.Resolve), which were not chosen for this deployment's
+	// purposes, and two classes have no default at all. GitHub #896: this
+	// said "prunes nothing", which was false.
 	if len(h.retentionWindows) == 0 {
+		d := retention.Resolve("", retention.Policy{}, retention.Policy{})
 		return DoctorCheck{
 			Name:   name,
 			Status: "WARNING",
-			Message: "retention.enabled=true but every window is unset, so the sweeper runs and prunes " +
-				"nothing — the same Art 5(1)(e) exposure as being switched off, with none of the " +
-				"visibility. Set windows per data class; see <config-dir>/configs/retention-recommended.yaml.",
+			Message: fmt.Sprintf("retention.enabled=true with no window set, so the sweeper prunes on the compiled "+
+				"defaults: tasks %dd, executions %dd, artifacts %dd, LLM usage %dd, tool audit %dd, chat audit %dd. "+
+				"Memory chunks and task messages have no default: memory chunks are kept until their class TTL "+
+				"and task messages until their task is pruned. Under Art 5(1)(e) the windows must match your "+
+				"purposes; set them per data class, starting from <config-dir>/configs/retention-recommended.yaml.",
+				d.TasksDays, d.ExecutionsDays, d.ArtifactsDays, d.TaskLLMUsageDays, d.ToolAuditDays, d.ChatAuditDays),
 		}
 	}
 

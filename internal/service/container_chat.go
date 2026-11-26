@@ -507,7 +507,13 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 	// Build each enabled sub-provider. Skipping disabled blocks is
 	// fine — the routes-validation step below flags any route that
 	// names a disabled kind.
-	subs := map[string]chat.Provider{}
+	// Registered only through Add, which refuses a kind with no
+	// reasoning-table entry, so every provider declares how it maps the
+	// reasoning levels (GitHub #869, reasoning control design B4).
+	subSet := chat.NewSubProviders()
+	// Per-model chat-template reasoning variables for the OpenAI-compatible
+	// clients (GitHub #869): from runtime.agent_llm.model_limits.
+	reasoningVars := chat.WithReasoningTemplateVariables(reasoningTemplateVariables(c.Config))
 	timeout := time.Duration(0)
 	if cfg.Timeout != "" {
 		if t, err := time.ParseDuration(cfg.Timeout); err == nil {
@@ -542,7 +548,9 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if len(anthropicCatalog) > 0 {
 			opts = append(opts, chat.WithCLIModelCatalog(anthropicCatalog))
 		}
-		subs["claude-cli"] = chat.NewCLIClient(rcfg.ClaudeCLI.Model, opts...)
+		if err := subSet.Add("claude-cli", chat.NewCLIClient(rcfg.ClaudeCLI.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.CodexCLI.Enabled {
 		opts := []chat.CodexOption{
@@ -556,7 +564,9 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if len(openaiCatalog) > 0 {
 			opts = append(opts, chat.WithCodexModelCatalog(openaiCatalog))
 		}
-		subs["codex-cli"] = chat.NewCodexCLIClient(rcfg.CodexCLI.Model, opts...)
+		if err := subSet.Add("codex-cli", chat.NewCodexCLIClient(rcfg.CodexCLI.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.CodexSubscription.Enabled {
 		opts := []chat.CodexSubscriptionOption{
@@ -574,7 +584,9 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if len(openaiCatalog) > 0 {
 			opts = append(opts, chat.WithCodexSubscriptionModelCatalog(openaiCatalog))
 		}
-		subs["codex-subscription"] = chat.NewCodexSubscriptionClient(rcfg.CodexSubscription.Model, opts...)
+		if err := subSet.Add("codex-subscription", chat.NewCodexSubscriptionClient(rcfg.CodexSubscription.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.ClaudeSubscription.Enabled {
 		opts := []chat.ClaudeSubscriptionOption{
@@ -598,7 +610,9 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if len(anthropicCatalog) > 0 {
 			opts = append(opts, chat.WithClaudeSubscriptionModelCatalog(anthropicCatalog))
 		}
-		subs["claude-subscription"] = chat.NewClaudeSubscriptionClient(rcfg.ClaudeSubscription.Model, opts...)
+		if err := subSet.Add("claude-subscription", chat.NewClaudeSubscriptionClient(rcfg.ClaudeSubscription.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.HTTP.Enabled {
 		rcfg.HTTP.Endpoint, _, _ = routerSubEndpoint(cfg, "http")
@@ -636,7 +650,10 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if httpMaxTokens > 0 {
 			opts = append(opts, chat.WithMaxTokens(httpMaxTokens))
 		}
-		subs["http"] = chat.NewClient(rcfg.HTTP.Endpoint, rcfg.HTTP.APIKey, rcfg.HTTP.Model, opts...)
+		opts = append(opts, reasoningVars)
+		if err := subSet.Add("http", chat.NewClient(rcfg.HTTP.Endpoint, rcfg.HTTP.APIKey, rcfg.HTTP.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.Vertex.Enabled {
 		if rcfg.Vertex.APIKey == "" || rcfg.Vertex.ProjectID == "" {
@@ -672,7 +689,10 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if rcfg.Vertex.MaxTokens > 0 {
 			opts = append(opts, chat.WithMaxTokens(rcfg.Vertex.MaxTokens))
 		}
-		subs["vertex"] = chat.NewClient(endpoint, rcfg.Vertex.APIKey, rcfg.Vertex.Model, opts...)
+		opts = append(opts, reasoningVars)
+		if err := subSet.Add("vertex", chat.NewClient(endpoint, rcfg.Vertex.APIKey, rcfg.Vertex.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.OpenRouter.Enabled {
 		if rcfg.OpenRouter.APIKey == "" {
@@ -708,6 +728,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if orMaxTokens > 0 {
 			opts = append(opts, chat.WithMaxTokens(orMaxTokens))
 		}
+		opts = append(opts, reasoningVars)
 		var orProvider chat.Provider = chat.NewClient(endpoint, rcfg.OpenRouter.APIKey, rcfg.OpenRouter.Model, opts...)
 		// free_only: hard-guard against accidental paid spend. Reject any
 		// non-":free" model before it hits the wire. Opt-in — default
@@ -715,7 +736,9 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if rcfg.OpenRouter.FreeOnly {
 			orProvider = chat.NewFreeOnlyProvider(orProvider)
 		}
-		subs["openrouter"] = orProvider
+		if err := subSet.Add("openrouter", orProvider); err != nil {
+			return err
+		}
 	}
 	if rcfg.OllamaCloud.Enabled {
 		if rcfg.OllamaCloud.APIKey == "" {
@@ -738,7 +761,10 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if maxTokens > 0 {
 			opts = append(opts, chat.WithMaxTokens(maxTokens))
 		}
-		subs["ollama_cloud"] = chat.NewClient(endpoint, rcfg.OllamaCloud.APIKey, rcfg.OllamaCloud.Model, opts...)
+		opts = append(opts, reasoningVars)
+		if err := subSet.Add("ollama_cloud", chat.NewClient(endpoint, rcfg.OllamaCloud.APIKey, rcfg.OllamaCloud.Model, opts...)); err != nil {
+			return err
+		}
 	}
 	if rcfg.Bedrock.Enabled {
 		if rcfg.Bedrock.Region == "" {
@@ -778,9 +804,12 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if err != nil {
 			return fmt.Errorf("chat.router.bedrock: %w", err)
 		}
-		subs["bedrock"] = bedrockClient
+		if err := subSet.Add("bedrock", bedrockClient); err != nil {
+			return err
+		}
 	}
 
+	subs := subSet.Map()
 	if len(subs) == 0 {
 		return fmt.Errorf("chat.router: no sub-providers enabled (set router.claude_cli.enabled / claude_subscription.enabled / codex_cli.enabled / codex_subscription.enabled / http.enabled / vertex.enabled / bedrock.enabled)")
 	}
@@ -1077,56 +1106,6 @@ func mergeWithDefaultRoutes(user, defaults []config.ChatRouteConfig) []config.Ch
 	return merged
 }
 
-// buildVertexEndpoint returns the OpenAI-compat Vertex AI URL for a given
-// project + location. The trailing `/chat/completions` is stripped inside
-// chat.NewClient (via normalizeEndpoint), so we build only the base prefix.
-//
-// Location hostname rules:
-//   - "" or "global" → `aiplatform.googleapis.com` (the location path
-//     segment is still "global" — the global endpoint is not regionless).
-//   - anything else  → `<location>-aiplatform.googleapis.com` (regional).
-//
-// Operators who point at an internal proxy or preview endpoint set
-// chat.router.vertex.endpoint directly and skip this helper.
-func buildVertexEndpoint(projectID, location string) string {
-	if location == "" {
-		location = "global"
-	}
-	host := "aiplatform.googleapis.com"
-	if location != "global" {
-		host = location + "-aiplatform.googleapis.com"
-	}
-	return fmt.Sprintf("https://%s/v1/projects/%s/locations/%s/endpoints/openapi",
-		host, projectID, location)
-}
-
-// defaultOpenRouterEndpoint is OpenRouter's OpenAI-compatibility base URL.
-// normalizeEndpoint (inside chat.NewClient) tolerates the trailing path.
-const defaultOpenRouterEndpoint = "https://openrouter.ai/api/v1"
-
-// resolveOpenRouterEndpoint returns the operator's endpoint override or
-// the baked-in OpenRouter default when unset.
-func resolveOpenRouterEndpoint(endpoint string) string {
-	if endpoint == "" {
-		return defaultOpenRouterEndpoint
-	}
-	return endpoint
-}
-
-// defaultOllamaCloudEndpoint is Ollama Cloud's OpenAI-compatibility base
-// URL. normalizeEndpoint (inside chat.NewClient) tolerates the trailing
-// path.
-const defaultOllamaCloudEndpoint = "https://ollama.com/v1"
-
-// resolveOllamaCloudEndpoint returns the operator's endpoint override or
-// the baked-in Ollama Cloud default when unset.
-func resolveOllamaCloudEndpoint(endpoint string) string {
-	if endpoint == "" {
-		return defaultOllamaCloudEndpoint
-	}
-	return endpoint
-}
-
 // openRouterAttributionHeaders builds the HTTP-Referer / X-Title pair
 // OpenRouter uses for app attribution. Defaults identify vornik by name +
 // build version (no website URL, per operator preference): referer
@@ -1197,41 +1176,29 @@ func (c *Container) waitForChatProviderReady(ctx context.Context) {
 	}
 }
 
-// routerSubEndpoint is the endpoint URL a router sub-provider of kind calls,
-// resolved from config the way initChatRouter builds it (initChatRouter
-// reads it from here), or cli=true for a subprocess-backed kind, which has
-// no endpoint Vornik can see. ok is false for an unknown kind. The agent
-// model classifier reads the host from it (agent-administered design §18.6
-// item 2).
+// routerSubEndpoint is chat.RouterSubEndpoint: the endpoint a router
+// sub-provider of kind calls. The resolution moved to internal/chat so the
+// Art 15 report reads it in the same place (GDPR design §4.22, #470).
 func routerSubEndpoint(cfg config.ChatConfig, kind string) (endpoint string, cli, ok bool) {
-	rcfg := cfg.Router
-	switch kind {
-	case "http":
-		if rcfg.HTTP.Endpoint != "" {
-			return rcfg.HTTP.Endpoint, false, true
-		}
-		return cfg.Endpoint, false, true
-	case "vertex":
-		if rcfg.Vertex.Endpoint != "" {
-			return rcfg.Vertex.Endpoint, false, true
-		}
-		return buildVertexEndpoint(rcfg.Vertex.ProjectID, rcfg.Vertex.Location), false, true
-	case "openrouter":
-		return resolveOpenRouterEndpoint(rcfg.OpenRouter.Endpoint), false, true
-	case "ollama_cloud":
-		return resolveOllamaCloudEndpoint(rcfg.OllamaCloud.Endpoint), false, true
-	case "bedrock":
-		if rcfg.Bedrock.Region == "" {
-			// No region, no endpoint: not offered (review 20261003-2ed0 B1).
-			return "", false, false
-		}
-		return "https://bedrock-runtime." + rcfg.Bedrock.Region + ".amazonaws.com", false, true
-	case "claude-subscription":
-		return chat.ClaudeSubscriptionEndpoint(), false, true
-	case "codex-subscription":
-		return chat.CodexSubscriptionEndpoint(), false, true
-	case "claude-cli", "codex-cli":
-		return "", true, true
+	return chat.RouterSubEndpoint(cfg, kind)
+}
+
+// reasoningTemplateVariables maps each model with a
+// reasoning_template_variable to that variable (GitHub #869, reasoning
+// control design B4). Nil when the config sets none.
+func reasoningTemplateVariables(cfg *config.Config) map[string]string {
+	if cfg == nil {
+		return nil
 	}
-	return "", false, false
+	var out map[string]string
+	for model, limit := range cfg.Runtime.AgentLLM.ModelLimits {
+		if limit.ReasoningTemplateVariable == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[model] = limit.ReasoningTemplateVariable
+	}
+	return out
 }

@@ -322,6 +322,10 @@ type evalRecord struct {
 	workflowID string
 	prompt     string // raw — hashed in recordEvaluation, never stored in cleartext
 	start      time.Time
+	// proposedPrompt is stored in cleartext, through the redaction seam, on
+	// WOULD_START only: observe mode's record of what it would have
+	// submitted (GitHub #602).
+	proposedPrompt string
 }
 
 // recordEvaluation persists one autonomy audit row. Non-fatal: a DB error
@@ -370,6 +374,8 @@ func (m *Manager) recordEvaluation(ctx context.Context, r evalRecord) {
 		PromptHash: hashPrompt(r.prompt),
 		DurationMs: durationMs,
 		CreatedAt:  time.Now().UTC(),
+
+		ProposedPrompt: r.proposedPrompt,
 	}
 	if err := m.evalRepo.Record(writeCtx, entry); err != nil {
 		m.logger.Warn().
@@ -712,11 +718,20 @@ func (m *Manager) projectLoop(ctx context.Context, project *registry.Project) {
 		}
 	}
 
+	// Both first evaluations (immediate and delayed) read the leader gate,
+	// as every ticker tick does (GitHub #903).
+	//
+	// Before, a replica that did not hold the lease ran them, paid the LLM
+	// call, and was refused by the epoch fence. The container bootstraps
+	// the elector before Start, so the bit is authoritative here.
+
 	// Bounded by ctx so a SIGTERM during startup doesn't block on a
 	// running evaluation. The eval itself respects ctx through its
 	// own LLM-call timeout.
 	if shouldFireInitial {
-		if err := m.evaluate(ctx, project); err != nil {
+		if !m.leads() {
+			m.logger.Debug().Str("project", project.ID).Msg("autonomous loop: not the leader; skipping initial eval")
+		} else if err := m.evaluate(ctx, project); err != nil {
 			// ctx.Err() means SIGTERM during the initial eval — return
 			// without falling through to the ticker loop. Anything else
 			// is logged and the loop continues; the next ticker tick is
@@ -738,7 +753,9 @@ func (m *Manager) projectLoop(ctx context.Context, project *registry.Project) {
 			return
 		case <-time.After(initialDelay):
 		}
-		if err := m.evaluate(ctx, project); err != nil {
+		if !m.leads() {
+			m.logger.Debug().Str("project", project.ID).Msg("autonomous loop: not the leader; skipping delayed-initial eval")
+		} else if err := m.evaluate(ctx, project); err != nil {
 			if ctx.Err() != nil {
 				m.logger.Info().Str("project", project.ID).Msg("autonomous loop stopped")
 				return
@@ -762,7 +779,7 @@ func (m *Manager) projectLoop(ctx context.Context, project *registry.Project) {
 			// holds the autonomy_manager lock — running two
 			// would double-schedule via create_task. Nil gate
 			// = single-process deployment, always run.
-			if m.leaderGate != nil && !m.leaderGate.IsLeader() {
+			if !m.leads() {
 				continue
 			}
 			// Re-fetch the project from the registry on every
@@ -785,6 +802,13 @@ func (m *Manager) projectLoop(ctx context.Context, project *registry.Project) {
 			}
 		}
 	}
+}
+
+// leads reports whether this daemon may evaluate: no gate (a single
+// process) or the gate's cached leader bit. The epoch fence in
+// createAutonomousTask still re-checks before any write.
+func (m *Manager) leads() bool {
+	return m.leaderGate == nil || m.leaderGate.IsLeader()
 }
 
 // evaluate runs a single autonomy tick: gathers state, asks the LLM
@@ -2211,6 +2235,12 @@ func (m *Manager) createAutonomousTask(ctx context.Context, project *registry.Pr
 		return "", nil
 	}
 
+	if project.Autonomy.Observe {
+		if stop, err := m.observeRepeat(ctx, project, args.Type, effectiveWorkflowID, args.Prompt, evalStart); stop {
+			return "", err
+		}
+	}
+
 	// Idempotency-key dedup is a redundant hour-bucketed safety net
 	// on top of findAutonomyDuplicate. Backlog-style autonomy (the
 	// 24h default duplicateWindow) wants both: the dedup window
@@ -2340,7 +2370,14 @@ func (m *Manager) createAutonomousTask(ctx context.Context, project *registry.Pr
 	// other admission paths can't collectively overshoot the cap. FAIL OPEN
 	// on a ledger error; a Blocked decision records a budget-blocked outcome.
 	if m.reservRepo != nil && m.llmUsageRepo != nil {
-		decision, rerr := budget.Reserve(ctx, m.reservRepo, m.llmUsageRepo, project, task.ID, time.Now().UTC())
+		reservationID := task.ID
+		if project.Autonomy.Observe {
+			reservationID = observeReservationID(task.ID)
+		}
+		decision, rerr := budget.Reserve(ctx, m.reservRepo, m.llmUsageRepo, project, reservationID, time.Now().UTC())
+		if project.Autonomy.Observe && rerr == nil && !decision.Blocked {
+			m.settleObserveReservation(ctx, project.ID, reservationID)
+		}
 		if rerr != nil {
 			m.logger.Warn().Err(rerr).Str("project", project.ID).Msg("autonomy: budget reserve failed — proceeding")
 		} else if decision.Blocked {
@@ -2359,6 +2396,22 @@ func (m *Manager) createAutonomousTask(ctx context.Context, project *registry.Pr
 			})
 			return "", nil
 		}
+	}
+
+	if project.Autonomy.Observe {
+		m.recordEvaluation(ctx, evalRecord{
+			projectID:      project.ID,
+			outcome:        persistence.AutonomyOutcomeWouldStart,
+			reason:         "observe mode: every gate passed; nothing was started",
+			taskType:       args.Type,
+			workflowID:     effectiveWorkflowID,
+			prompt:         args.Prompt,
+			start:          evalStart,
+			proposedPrompt: args.Prompt,
+		})
+		m.logger.Info().Str("project", project.ID).Str("prompt", truncate(args.Prompt, 100)).
+			Msg("autonomy observe mode: would start a task; nothing started")
+		return "", nil
 	}
 
 	callStart := time.Now()

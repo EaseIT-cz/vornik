@@ -2,11 +2,12 @@ package api
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // placeholderTokens are whole-value (normalized) markers of an unfilled key.
@@ -49,14 +50,7 @@ func endpointNeedsKey(endpoint string) bool {
 	if err != nil {
 		return true
 	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return false
-	}
-	return true
+	return !dialguard.IsLoopbackHost(u.Hostname()) // the one rule (#168)
 }
 
 // providerDelegatesCredentials reports whether cfg.Chat.Provider hands the

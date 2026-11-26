@@ -97,6 +97,24 @@ administering one: do not follow the rest of this; use Vornik's ordinary tools.
    schedule on their phone. Each run then appears in `list_my_setup` under
    the workflow's `recent_runs`; read its output with `result`. A schedule
    runs at most hourly.
+   **Lay out your projects with these patterns** (`describe_installation`
+   lists them as `patterns`):
+   - *One project per area of work, memory sealed.* The default: a
+     project's jobs remember for that project only.
+   - *Shared memory for jobs on one topic.* Give projects whose jobs build
+     on each other's findings `shared_memory: true` (`create_project`,
+     `update_project`), for example a scout and an enrichment job for the
+     same venues. They then read and write one memory. The user approves
+     joining it on their phone.
+   - *Never share a project that reads private data with one that reaches
+     the web.* A mail, calendar, files or banking job stays sealed; what it
+     found reaches you only through its approved result.
+   - *Chain jobs with `hand_over`* in `define_workflow`: when one job
+     completes, its chosen files start the next job. The user approves each
+     hand-over on their phone. The rule above applies to what you hand over.
+   - *Your own memory is separate.* What you remember lives in your own
+     memory, not in your projects. Jobs never read it, and you never read a
+     job's memory, only its approved result.
 8. **Stay inside your namespace.** Your projects, workflows and connections
    all start with your namespace. Never try to reach anything else: other
    assistants' setups, the operator's projects, or Vornik's own settings.

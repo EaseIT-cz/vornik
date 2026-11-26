@@ -111,8 +111,8 @@ func TestInitChatRouter_OpenRouterBuildsClient(t *testing.T) {
 // TestResolveOpenRouterEndpoint verifies the baked-in default and the
 // override path.
 func TestResolveOpenRouterEndpoint(t *testing.T) {
-	assert.Equal(t, "https://openrouter.ai/api/v1", resolveOpenRouterEndpoint(""))
-	assert.Equal(t, "https://proxy.internal/v1", resolveOpenRouterEndpoint("https://proxy.internal/v1"))
+	assert.Equal(t, "https://openrouter.ai/api/v1", chat.OpenRouterEndpoint(""))
+	assert.Equal(t, "https://proxy.internal/v1", chat.OpenRouterEndpoint("https://proxy.internal/v1"))
 }
 
 // TestOpenRouterAttributionHeaders verifies the default identity (vornik

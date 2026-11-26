@@ -7,9 +7,12 @@ package service
 // always ticks.
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/benchlearning"
 	"vornik.io/vornik/internal/config"
@@ -27,7 +30,19 @@ func (c *Container) BenchLearningGate() (*benchlearning.Gate, error) {
 			c.benchGateErr = fmt.Errorf("bench.learning is set but VORNIK_DATA_DIR is not: the freeze needs the bench daemon's data directory")
 			return
 		}
-		c.benchGate, c.benchGateErr = benchlearning.Open(dir)
+		// The freeze names its database (GitHub #890, design §12.37): a study
+		// recreates the database for each arm, and a freeze from another
+		// database must not freeze a fresh arm.
+		id, err := benchDatabaseIdentity(context.Background(), c.DB)
+		if err != nil {
+			c.benchGateErr = fmt.Errorf("bench.learning: read this database's identity for the freeze: %w", err)
+			return
+		}
+		var note string
+		c.benchGate, note, c.benchGateErr = benchlearning.Open(dir, id)
+		if note != "" {
+			c.Logger.Warn().Str("database", id).Msg(note)
+		}
 	})
 	return c.benchGate, c.benchGateErr
 }
@@ -46,4 +61,20 @@ func (c *Container) benchLearningForAPI() (config.BenchConfig, *benchlearning.Ga
 		return c.Config.Bench, nil
 	}
 	return c.Config.Bench, g
+}
+
+// benchDatabaseIdentity names the connected Postgres database by its name and
+// OID; the OID changes when the database is dropped and recreated, even under
+// the same name (GitHub #890). A learning bench runs on Postgres only
+// (BenchConfig.validate).
+func benchDatabaseIdentity(ctx context.Context, db *sql.DB) (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("no database connection")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var id string
+	err := db.QueryRowContext(ctx,
+		`SELECT 'database ' || current_database() || ' oid ' || oid::text FROM pg_database WHERE datname = current_database()`).Scan(&id)
+	return id, err
 }

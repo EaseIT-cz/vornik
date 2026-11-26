@@ -266,6 +266,9 @@ func buildRegistrySwarm(doc *bundleSwarmDoc, archetypes map[string]*rolelibrary.
 			SystemPrompt:       renderArchetypePrompt(arch, r.Params),
 			RequiredOutputKeys: append([]string(nil), arch.RequiredOutputKeys...),
 			MaxTokens:          arch.Runtime.MaxTokens,
+			// The archetype's tier, never a model: the instance's
+			// runtime.agent_llm.tiers picks the model (GitHub #880).
+			ModelTier: arch.ModelTier,
 			Runtime: registry.SwarmRoleRuntime{
 				Image:  composedRoleImage,
 				CPU:    arch.Runtime.CPU,

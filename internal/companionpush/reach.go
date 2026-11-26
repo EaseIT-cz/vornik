@@ -5,13 +5,19 @@ package companionpush
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // privateRanges are the only ranges a project's allowed_cidrs may open:
 // RFC 1918, IPv6 unique-local, and the RFC 6598 shared range that overlay
-// networks such as Tailscale use for LAN-style reach.
+// networks such as Tailscale use for LAN-style reach. They are what
+// dialguard.IsGrantablePrivate admits; ParseAllowedCIDRs needs them as
+// prefixes, and TestPrivateRangesMatchGrantablePrivate904 holds the two
+// equal (GitHub #904).
 var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
@@ -20,32 +26,29 @@ var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"),
 }
 
-// alwaysRefused reports addresses no push may reach, whatever a project
-// lists.
-func alwaysRefused(a netip.Addr) bool {
-	return !a.IsValid() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
-		a.IsInterfaceLocalMulticast() || a.IsMulticast() || a.IsUnspecified()
-}
-
-// isPrivate reports whether a lies in a range only allowed_cidrs opens.
-func isPrivate(a netip.Addr) bool {
-	for _, p := range privateRanges {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	return false
-}
-
 // reachAllowed decides one resolved address. It is unmapped first, so an
 // IPv4-mapped IPv6 address is judged as the IPv4 address it is.
+//
+// It is the daemon's one list, dialguard.IsBlockedIP, plus this guard's
+// grant: allowed_cidrs may open a refused address only if it is grantable
+// private and not a cloud metadata address. This is the
+// DialGuard.PrivateHosts rule, which applies to names (GitHub #904;
+// integrations-hub-design.md, "Change (2026-11-24): #904"). The list this
+// guard kept before admitted 0.0.0.0/8, 255.255.255.255 and blocked IPv4
+// addresses inside NAT64, 6to4 or IPv4-compatible IPv6, and let an opened
+// range reach the metadata address inside it (100.100.100.200,
+// fd00:ec2::254, fd20:ce::254).
 func reachAllowed(a netip.Addr, allowed []netip.Prefix) bool {
-	a = a.Unmap()
-	if alwaysRefused(a) {
+	if !a.IsValid() {
 		return false
 	}
-	if !isPrivate(a) {
+	a = a.Unmap()
+	ip := net.IP(a.AsSlice())
+	if !dialguard.IsBlockedIP(ip) {
 		return true
+	}
+	if !dialguard.IsGrantablePrivate(ip) || dialguard.IsCloudMetadata(ip) {
+		return false
 	}
 	for _, p := range allowed {
 		if p.Contains(a) {

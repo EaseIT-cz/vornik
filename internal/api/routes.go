@@ -287,6 +287,12 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 			// (/enable → EnableFeature, otherwise → GetFeature).
 			mux.HandleFunc("/api/v1/doctor/features", doctorHandlers.ListFeatures)
 			mux.HandleFunc("/api/v1/doctor/features/", doctorHandlers.routeFeaturePath)
+			// Provider profiles and tier resolution (GitHub #880), admin-class.
+			// The apply POST writes only runtime.agent_llm.tiers and .roles,
+			// from a shipped profile file, never from the request body.
+			mux.HandleFunc("/api/v1/models/profiles", doctorHandlers.ListModelProfiles)
+			mux.HandleFunc("/api/v1/models/profiles/", doctorHandlers.routeModelProfilePath)
+			mux.HandleFunc("/api/v1/models/tiers", doctorHandlers.ModelTiers)
 		}
 
 		// Admin API surface — admin-ui-design.md slice 1. Today this
@@ -380,6 +386,9 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// and companion minting is no longer an admin-only action.
 		mux.HandleFunc("/api/v1/companion/grant", server.CompanionGrant)
 		mux.HandleFunc("/api/v1/companion/keys", server.CompanionKeysList)
+		// Trusts binding companion keys to GitHub Actions workflows (GitHub
+		// #792, design 27 §C4): the same project gate as the grant.
+		mux.HandleFunc("/api/v1/companion/trusts", server.CompanionTrusts)
 		// The companion hooks' hint catalogue (#634): served to a companion
 		// key for its own project; one of the exact paths a companion key
 		// may use (isCompanionAllowedPath).
@@ -698,6 +707,10 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// request can start uncounted before the restart (GitHub #290).
 		// POST drains (a TTL lease), DELETE undrains. Admin-class only.
 		mux.HandleFunc("/api/v1/daemon/drain", server.DaemonDrain)
+		// The held start (GitHub #586): GET reports the hold, DELETE releases
+		// it (reload, remove the marker, start work). Admin-class only; one of
+		// the few routes the hold gate lets through (hold.go HoldAllowed).
+		mux.HandleFunc("/api/v1/daemon/hold", server.DaemonHold)
 		// Replacement of the operations credentials (GitHub #582 P4): the
 		// current instance_admin key only, the new value sealed to the caller.
 		mux.HandleFunc("/api/v1/operations/credentials/rotate", server.RotateOperationsCredential)
@@ -1371,6 +1384,12 @@ func WithAPIKeyLookup(lookup APIKeyLookup) AuthConfigOption {
 // authenticates, the request is refused when that key's MAPPED account is
 // disabled. Without it the invariant "revoking the account revokes every door
 // that authorizes" holds for web and chat and silently fails for keys.
+// WithOIDCTrusts enables GitHub Actions ID tokens bound to companion keys
+// (GitHub #792, design 27).
+func WithOIDCTrusts(trusts auth.OIDCTrustStore, keys auth.APIKeyByID, client *http.Client) AuthConfigOption {
+	return func(c *AuthConfig) { c.OIDCTrusts, c.APIKeyByID, c.OIDCHTTPClient = trusts, keys, client }
+}
+
 func WithOwnerAccessCheck(check auth.OwnerAccessCheck) AuthConfigOption {
 	return func(c *AuthConfig) { c.OwnerAccess = check }
 }
@@ -1521,6 +1540,9 @@ func serverAuthOptions(server *Server) []AuthConfigOption {
 	}
 	if server != nil && server.apiKeyLimiter != nil {
 		opts = append(opts, WithAuthAPIKeyLimiter(server.apiKeyLimiter))
+	}
+	if server != nil && server.oidcTrusts != nil && server.apiKeyRepo != nil {
+		opts = append(opts, WithOIDCTrusts(server.oidcTrusts, server.apiKeyRepo, oidcJWKSClient()))
 	}
 	if server != nil && server.rateLimitMetrics != nil {
 		opts = append(opts, WithAuthRateLimitMetrics(server.rateLimitMetrics))

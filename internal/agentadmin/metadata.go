@@ -21,6 +21,9 @@ type UpdateProjectInput struct {
 	// MaxConcurrentTasks sets maxConcurrentTasks, 1 to
 	// agent_admin.max_concurrent_tasks (part 06 §6.9, GitHub #798).
 	MaxConcurrentTasks json.RawMessage `json:"max_concurrent_tasks,omitempty"`
+	// SharedMemory turns the namespace's shared memory on (an approval) or
+	// off (applies at once) (part 24 §24.6 S3).
+	SharedMemory *bool `json:"shared_memory,omitempty"`
 }
 
 func (r *Renderer) updateProject(st *State, raw json.RawMessage) Change {
@@ -37,8 +40,11 @@ func (r *Renderer) updateProject(st *State, raw json.RawMessage) Change {
 	if st.Projects[pid] == nil {
 		return refuse(verb, st.Namespace, "there is no project %q", pid)
 	}
-	if len(in.Purpose) == 0 && len(in.DisplayName) == 0 && len(in.MaxConcurrentTasks) == 0 {
-		return refuse(verb, st.Namespace, "supply purpose, display_name or max_concurrent_tasks")
+	if len(in.Purpose) == 0 && len(in.DisplayName) == 0 && len(in.MaxConcurrentTasks) == 0 && in.SharedMemory == nil {
+		return refuse(verb, st.Namespace, "supply purpose, display_name, max_concurrent_tasks or shared_memory")
+	}
+	if in.SharedMemory != nil && pid == agentns.ID(st.Namespace, "home") {
+		return refuse(verb, st.Namespace, "the home project holds the shared memory; set shared_memory on the projects that share it")
 	}
 	p := st.Projects[pid]
 	concurrency := 0
@@ -77,11 +83,29 @@ func (r *Renderer) updateProject(st *State, raw json.RawMessage) Change {
 	if err != nil {
 		return refuse(verb, st.Namespace, "project source cannot be edited: %v", err)
 	}
+	if in.SharedMemory != nil && *in.SharedMemory != p.SharedMemory {
+		if content, err = patchSharedMemory([]byte(content), *in.SharedMemory); err != nil {
+			return refuse(verb, st.Namespace, "project source cannot be edited: %v", err)
+		}
+	}
 	c := Change{Class: Inert, Ops: []FileOp{{Op: OpReplace, Path: path, Content: content}}, ReadSet: map[string]string{}, Locks: []string{lockProject(pid), path}}
 	expect(st, c.ReadSet, path)
 	var did []string
 	if len(updates) > 0 {
 		did = append(did, fmt.Sprintf("updated the name or purpose of project %q", pid))
+	}
+	// Joining the shared memory is widening; leaving it applies at once
+	// (part 24 §24.6 S3).
+	if in.SharedMemory != nil && *in.SharedMemory != p.SharedMemory {
+		if *in.SharedMemory {
+			c.Class = Widening
+			c.Sentence = fmt.Sprintf("Your assistant (%s) wants project %q to share memory.", st.Namespace, pid) + sharedMemorySentence(st, pid)
+			if len(updates) > 0 || concurrency > 0 {
+				c.Sentence += " It also updates the project's other settings."
+			}
+			return c
+		}
+		did = append(did, fmt.Sprintf("stopped project %q from sharing memory (its memory is its own again; nothing was moved)", pid))
 	}
 	// Against the value in force, as set_budget does (§6.9): 0 is no
 	// per-project limit, so any number lowers it.
@@ -159,4 +183,51 @@ func setScalar(mapping *yaml.Node, key, value, tag string, style yaml.Style) err
 	mapping.Content = append(mapping.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value, Style: style})
 	return nil
+}
+
+// patchSharedMemory sets or clears memory.shared_with_namespace in a project
+// mapping, keeping every other key (part 24 §24.6 S3). Clearing drops the
+// key, and the memory mapping when it is left empty.
+func patchSharedMemory(source []byte, shared bool) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(source, &doc); err != nil {
+		return "", err
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("expected one project mapping")
+	}
+	root := doc.Content[0]
+	var mem *yaml.Node
+	memAt := -1
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "memory" {
+			mem, memAt = root.Content[i+1], i
+		}
+	}
+	if shared {
+		if mem == nil {
+			mem = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "memory"}, mem)
+		}
+		if err := setScalar(mem, "shared_with_namespace", "true", "!!bool", 0); err != nil {
+			return "", err
+		}
+	} else if mem != nil {
+		for i := 0; i+1 < len(mem.Content); i += 2 {
+			if mem.Content[i].Value == "shared_with_namespace" {
+				mem.Content = append(mem.Content[:i], mem.Content[i+2:]...)
+				break
+			}
+		}
+		if len(mem.Content) == 0 {
+			root.Content = append(root.Content[:memAt], root.Content[memAt+2:]...)
+		}
+	}
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }

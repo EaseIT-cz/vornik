@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"time"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/version"
 )
 
@@ -267,7 +268,9 @@ func BuildRequest(endpoint string, event Event) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if u.Scheme != "https" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
+	// Send dials with a plain client, which never checks where a name
+	// resolves: loopback literals and exactly "localhost" only (#168).
+	if u.Scheme != "https" && !dialguard.IsLoopbackHostForPlainDial(u.Hostname()) {
 		return nil, fmt.Errorf("telemetry endpoint must use https")
 	}
 	q := u.Query()

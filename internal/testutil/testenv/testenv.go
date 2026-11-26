@@ -30,11 +30,20 @@ var inherited = []string{
 	"CONTAINER_HOST",
 }
 
+// GitMaintenanceForeground is the GIT_CONFIG_PARAMETERS value Clean adds
+// (GitHub #856, testing design 19 §11.1). Git then runs the maintenance it
+// starts after a fetch or commit in the foreground, instead of as a detached
+// process that can still be writing in a t.TempDir when the test's cleanup
+// removes it. Daemon git keeps detaching, on purpose (process-spawn law
+// design, "Note 2026-11-25 (#856)").
+const GitMaintenanceForeground = "'maintenance.autoDetach'='false' 'gc.autoDetach'='false'"
+
 // Clean is the ONLY environment a test gives a process it starts. The
 // allowlist is read from the test's own environment at call time (so a
 // t.Setenv("HOME", …) is honoured); extra entries follow it, and for a
 // duplicated key the last entry wins (os/exec keeps the last value).
 // No VORNIK_* variable is ever inherited: a test sets each one it needs.
+// GIT_CONFIG_PARAMETERS is set, never inherited (GitMaintenanceForeground).
 func Clean(extra ...string) []string {
 	env := []string{"NO_PROXY=*", "no_proxy=*"}
 	for _, k := range inherited {
@@ -42,6 +51,7 @@ func Clean(extra ...string) []string {
 			env = append(env, k+"="+v)
 		}
 	}
+	env = append(env, "GIT_CONFIG_PARAMETERS="+GitMaintenanceForeground)
 	return append(env, extra...)
 }
 

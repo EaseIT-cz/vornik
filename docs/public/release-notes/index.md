@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: e81c0e357e051032a333fe62c0549f0103f7c616082e5a25a939cfd4774f4d7c
+      sha256: bacfcc077d08762e0cfb46ceddbda561375d845b591c67e4605d04cdf281813a
 ---
 # Release Notes
 
@@ -17,11 +17,523 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ---
 
+## 2026.11.8
+
+!!! warning "Upgrade requirements"
+    - **Tailnet addresses are now private**. Vornik treats
+      carrier-grade NAT, 100.64.0.0/10, where Tailscale assigns addresses,
+      like a LAN range. An agent project's API or MCP server on a tailnet
+      peer stops working until its host is on
+      `agent_admin.private_api_hosts`, and its URL must be https. Before
+      upgrading, add to that list the host of each agent connection on a
+      tailnet (one whose host is a `*.ts.net` name or resolves into
+      100.64.0.0/10). For a connection whose URL is a 100.x address, list
+      the address. After
+      upgrading, `vornikctl doctor` reports `agent_connections_cgnat` as an
+      ERROR naming each such connection still unlisted; list its host or
+      remove the connection.
+    - **Other daemon clients lose tailnet reach with no list to restore
+      it:** an OIDC issuer, a broker URL or a Bedrock image URL on a
+      100.64.0.0/10 address is refused. A hub probe target there needs
+      `integrations.allowed_hosts`. Self-hosted model endpoints keep their
+      tailnet reach, and a model on a tailnet peer still needs its approval
+      as a remote one. On a managed instance, a customer's own model
+      endpoint on that range is refused, as a LAN one already was.
+    - **An approval waiting at the upgrade can be refused once**. An agent's request to connect an API or MCP server now
+      records whether `agent_admin.private_api_hosts` gave it intranet
+      reach, and the apply refuses it if that changed after filing. A
+      request filed before the upgrade records none, so if its host is on
+      the list it is refused when approved, with "the operator's list of
+      intranet hosts changed after you were asked"; the agent asks again
+      and the new approval names the host.
+    - **A quickstart install keeps its old service unit until you replace
+      it.** The shipped unit is now `Type=notify`, so systemd waits for the
+      daemon to report ready and a boot that hangs is restarted after 300 s
+      instead of showing as running forever. The updater never rewrites
+      your unit: an install made by an older quickstart keeps
+      `Type=simple`, and the update warns and names the command. To get the
+      bounded start, install the shipped unit:
+      `install -m 0644 deployments/podman/systemd/vornik.service ~/.config/systemd/user/vornik.service && systemctl --user daemon-reload`
+      (from your checkout).
+
+### New features
+
+- **An agent's jobs can share a memory, and a job can start the next one**.
+  - **Before:** each project an agent such as Hermes built for a job kept
+    its own memory, which nothing else could read. The venue-scouting job's
+    results never reached the enrichment job unless Hermes copied them by
+    hand.
+  - **Shared memory, by opt-in:** a project created or updated with
+    `shared_memory` reads and writes the namespace's shared memory
+    (`<namespace>--home`); you approve joining on your phone. Every other
+    project's memory stays sealed, so a job that reads private data never
+    feeds one that reaches the web.
+  - **Handover:** a workflow can declare `hand_over` in `define_workflow`.
+    When it completes, it starts another workflow of the namespace and hands
+    it chosen output files as document inputs. You approve the hand-over on
+    your phone. A loop is refused; a chain stops after three hand-overs from
+    one delegation. Each attempt is counted on
+    `vornik_agent_handovers_total`.
+  - **For the agent:** `describe_installation` now lists the five ways to
+    lay out projects (`patterns`), and the admin guidance and tool
+    descriptions say the same.
+  - The agent's own memory is unchanged: it stays where its memory key is.
+    Existing job memory stays in each project; to keep it after a project
+    joins the shared memory, move it with `vornikctl memory reassign`.
+
+- **Start the daemon held, then release it**. A
+  `start-held` marker file in the data directory makes the next start
+  serve its listeners without starting any work: no scheduler, autonomy,
+  channel polling or task leases. `/readyz` answers 503 `"status":"held"`
+  with its checks, so an upgrade can verify the new version before it
+  touches anything. `vornikctl daemon release` reloads the config files,
+  removes the marker and starts work; a release that fails stays held or
+  exits, and the marker decides. A hold past its deadline (30 minutes by
+  default) stays held, reports `overdue` and alerts once. While held,
+  webhooks get 503. After a release the daemon redelivers the GitHub App
+  deliveries that failed while it was held, up to 200, and
+  `GET /api/v1/daemon/hold` reports how many it could not. On a managed
+  instance, `managed-upgrade` now starts the new version held, checks
+  `/readyz` and doctor, and releases it; a held version that fails those
+  checks is rolled back before it has done any work.
+
+- **Intranet hosts per project, by address, port or pinned addresses**. An `agent_admin.private_api_hosts` item may now be an IP
+  address (`10.0.0.5`, a 100.x tailnet address, IPv6) or carry a port
+  (`nas.lan:8443`), which limits it to that port. An item may also be a
+  mapping with `host`, `addresses` (the addresses or CIDRs the host may
+  resolve to: anything else is refused, public or private) and `projects`
+  (the agent projects it serves). Plain names keep serving every agent
+  project; name projects when more than one exists. The approval names
+  the host and any pins and records the grant; a restart that changes
+  the grant before the approval applies makes the apply refuse.
+  `describe_installation` lists the hosts an agent's projects may reach,
+  and `vornikctl doctor` (`agent_private_hosts_unused`) warns about an
+  entry no approved connection uses. A listed host's private reach now
+  holds on the URL's own port only, and its client follows redirects to
+  its own origin only: a server that redirected to another port or to
+  plain http on itself is refused there.
+
+- **Shipped roles name a model tier, not a model**. The
+  swarms and project templates Vornik ships no longer pin Bedrock or Ollama
+  models. Each role names a tier instead (`complex`, `coding`, `standard`,
+  `trivial` or `vision`), and every tier runs on your setup model until you
+  map it. Map tiers in `runtime.agent_llm.tiers`, or apply a shipped
+  provider profile with `vornikctl models profile apply bedrock` or
+  `ollama-cloud`. `vornikctl models tiers` shows what each role runs on.
+  Setup names the profile that matches your endpoint, and a managed
+  instance sets tiers from its catalogue through `setup/managed`
+  (operations API 1.6.0). An installed instance keeps its own swarm files,
+  models included. Guide: [Choose the models your roles run on](../guides/model-tiers.md).
+
+- **opencode connects to Vornik in one command**. `vornikctl
+  companion connect opencode` checks a companion key and stores it in a file
+  only you can read. It then writes into opencode's config directory:
+  - an MCP entry that runs Vornik's bridge (no opencode config holds the key);
+  - a plugin that adds Vornik's working rules and a session digest to the
+    system prompt;
+  - the companion skills, as `skills/vornik-*`.
+  `doctor --client opencode` checks the install, and `disconnect opencode`
+  removes it. Tested live with opencode 1.14.37. The plugin uses an opencode
+  hook marked experimental, and `doctor` warns when your opencode version
+  differs from the tested one. Guide: [opencode](../guides/opencode.md).
+- **The App review measures itself**. A canary run gives the
+  review a generated diff of planted fake secrets and decoys, then scores
+  what it caught instead of posting. It posts nothing and calls GitHub for
+  nothing. Schedule it weekly with autonomy's cron mode, and set floors after
+  four measured runs; with no floors set it only reports. See
+  [Forge](../features/forge.md#measuring-the-review-the-canary).
+- **PR reviews read scanner results as SARIF**. When your
+  pipeline uploads a `.sarif` file as its CI artifact, a review shows one
+  line per finding: level, rule, file, line and message. The App review's
+  triager merges these with the reviewers' findings, and a finding still
+  posts only on a line the pull request adds. Code snippets and fingerprints,
+  which can hold the secret a scanner found, are never shown.
+- **Cursor connects to Vornik in one command**. `vornikctl
+  companion connect cursor` checks a companion key, stores it in a file only
+  you can read, and installs a Cursor plugin: an MCP entry that runs
+  Vornik's bridge (no Cursor config holds the key), an always-applied rule
+  with Vornik's working rules, the companion skills, and a session hook that
+  adds your delegations and recent memory to a new chat. Tested against
+  Vornik's companion endpoint as installed; not yet in a live Cursor
+  session. Guide: [Use Vornik from Cursor](../guides/cursor.md).
+- **Autonomy can observe before it acts**. With
+  `autonomy.observe: true`, a project's autonomy loop runs as usual, records
+  what it would have started (`WOULD_START`, with the prompt) and starts
+  nothing. The project page counts the last 7 days' proposals and shows the
+  latest five; `vornikctl autonomy evaluations --outcome WOULD_START` lists
+  them all. New projects start in observe mode; existing projects keep
+  acting, because an absent key means `false`. Guide:
+  [Observe first](../guides/autonomy.md#observe-first).
+- **Each agent role can set how much its model reasons**.
+  `reasoning: off | low | medium | high` on a swarm role, or on a model's
+  `runtime.agent_llm.model_limits` entry, is sent to the provider in its
+  own form. A model that refuses the setting is retried once without it;
+  a Bedrock model that refuses only `off` (GLM 5.3) gets `low` instead.
+  `vornik_chat_reasoning_requests_total{model, requested, applied}`
+  counts the calls on the OpenAI-compatible routes. Measured on Ollama
+  Cloud `glm-5.3-flash`: `off` took a small answer from 41 to 6 completion
+  tokens.
+- **Each companion key has a request limit**. A companion key
+  may make 5 requests a second, with bursts of up to 50; past that the
+  companion endpoint answers 429 with `Retry-After`. A leaked key or a
+  client stuck in a loop no longer calls as fast as the daemon answers.
+  Change or turn off the default with `api.rate_limit.companion_key`
+  (`rps`, `burst`, `off`). A key whose own row sets a limit keeps it.
+- **A GitHub Actions job can call the companion without a stored secret**. Bind a companion key to one workflow with `vornikctl
+  companion trust-github`; the job then authenticates with the ID token
+  GitHub issues to its run. Every claim must match exactly (repository id
+  and name, ref, workflow file, event, audience), and a run on another
+  branch, a fork or a pull request gets a 401. `vornikctl companion grant
+  --oidc-only` mints a key whose secret is never printed.
+- **Secret findings in stored artifacts are counted**.
+  `vornik_artifact_secret_findings_total{type, outcome}` counts each one as
+  `rewritten`, `stored` (detect mode) or `dropped` (a heuristic rule, which
+  never rewrites an artifact), so you can see how often each rule fires.
+- **Any agent that speaks MCP can use Vornik**. `vornikctl
+  companion connect generic --print` checks a companion key, stores it in a
+  file only you can read, and prints the MCP entry to paste, never the key.
+  `vornikctl companion instructions --write AGENTS.md` gives the agent
+  Vornik's working rules. Measured on 2026-11-20: Gemini CLI and opencode
+  each stored, recalled and refuted a note and delegated a task, in about
+  100 seconds; neither gets a session digest. Grant such a key with
+  `--repo-scope`: without one, an agent with no Vornik hooks stores its
+  notes unscoped. Guide: [Use Vornik from any agent](../guides/any-agent.md).
+- **Task, execution and lease IDs are shown short in the console**. Every page shows `T-fee9`, `X-a1b2` and `L-9c4d` instead
+  of the full ID, which took a line of its own on a phone. Hover over a
+  short ID, or open its link, for the full one. Instincts (`I-fee9`) and
+  control-plane proposals (`P-fee9`) are short too, and an approver device
+  shows `dev_…` and its last 6 characters, as on the phone.
+  IDs you chose (projects, workflows, swarms), a detail page's own ID, and
+  data subject request and incident IDs stay whole.
+- **`setup/status` reports a restart generation**.
+  `pending_generation` counts the settings saved that need a restart, and
+  `loaded_generation` the count the running process started with. When
+  they differ, a restart is still owed, even if one already happened while
+  the change was being saved. Operations API 1.5.0.
+
+### Fixes
+
+- **A re-run of an incomplete erasure, rectification or restriction keeps
+  every run's report.** A re-run used to overwrite the first run's stored
+  report, so after it nothing recorded what the first run had erased or
+  corrected. The stored report now keeps the latest run at the top, plus
+  the run number and every earlier run's report, oldest first. A report
+  stored before this release reads as run 1.
+
+- **`vornikctl memory recheck-urls` never probes a private or metadata
+  address.** It kept its own list of private addresses, which missed a
+  cloud metadata address and several encoded forms of blocked addresses,
+  so it could learn whether hosts at those addresses were alive. It now
+  uses Vornik's one list of private addresses, checked before the request,
+  at each redirect and at connect time.
+
+- **An oversized OIDC key set is named in the log, not cut off silently.**
+  A key set over 1 MiB used to be truncated, so every GitHub Actions token
+  was refused with only a JSON parse error as the logged cause. The log
+  now says the key set is over the 1 MiB cap. Tokens are still refused,
+  as before; only the reason changed.
+
+- **The skill distiller treats recalled memory as untrusted.** A step that
+  only searched memory was accepted as safe, so web text that had reached
+  project memory could feed a distilled skill. Such a step is now judged
+  by what its searches returned: fetched web content, or anything the
+  distiller cannot check, keeps it out of a skill.
+
+- **A model is checked before it is saved.** Saving a role's model or a
+  tier mapping now makes one live test call through the instance's router
+  (15 s timeout). A model that does not answer is refused with the
+  provider's reason and nothing is written; one that answers without
+  tools is saved with a warning. On a managed instance, a model outside
+  the instance's catalogue is refused everywhere it can be saved, and a
+  step that resolves to one fails before its container starts.
+
+- **The doctor reports a retired model at once.** A model that answers
+  HTTP 410 used to show only through a failure rate, after enough calls,
+  and the message did not say it was gone. `model_calls_live` now lists
+  gone models first, with no minimum number of calls, and names each role
+  that still points at one.
+
+- **The adaptive router sees the project's workflows, and one "none" is
+  not final.** The router was not shown the candidate workflows with
+  their descriptions, so it could misjudge, and a first "none" failed the
+  task. Its prompt now lists every candidate with its description, and a
+  first "none" gets one corrective retry; a second "none" still fails as
+  `ROUTE_NO_FIT`.
+
+- **Autonomy's first evaluation after a restart waits for the leader
+  election.** It used to run before the election had started, so a due
+  evaluation could be refused after its model call was already paid for,
+  and a replica without the lease ran it too. It now runs after the
+  election, on the leader only.
+
+- **A `run_workers: false` node runs no leader-only work.** Such a node
+  used to act as if it were always the leader, so a UI node could run the
+  autonomy loop and the retention sweeper beside the worker node.
+  Retention now deletes only from worker nodes. Single-node installs are
+  unchanged.
+
+- **Autonomy proposals follow a retention window.** Rows recording
+  autonomy's decisions were never pruned, and a proposed task's prompt
+  can name a person. They now expire with the tool-audit window
+  (`tool_audit_days`), and `vornikctl retention` shows them as
+  `autonomy_evals`. The record of processing lists them as autonomy
+  proposals.
+
+- **The doctor's retention check states the defaults that apply.** With
+  retention on and no window set, it said the sweeper prunes nothing. In
+  fact the compiled defaults apply: tasks, executions and artifacts after
+  60 days, LLM usage and chat audit after 90, tool audit after 180. The
+  check now lists them, names the data with no default (memory chunks and
+  task messages), and still warns, because the defaults were not chosen
+  for your purposes.
+
+- **Healing can repair a shared workflow, and a one-model install is told
+  why it gets no candidates.** A healing request could not read a
+  workflow outside the project's own files, so it answered "the file does
+  not exist". It can now read and propose an edit to the workflow its
+  trigger names; the edit still needs a passing trial and your
+  promotion. When the config assistant and its judge share a model, every
+  candidate is refused; a new doctor row, `healing_judge_family`, and a
+  start-up warning now say so and name `config_assistant.judge_model`.
+
+- **A healing replay keeps its link to the task it replays.** The link
+  was written before the replay's execution existed, so it was lost on
+  every replay and a warning fired each time. It is now written when the
+  execution starts.
+
+- **Instincts learn from real tool errors, and work on SQLite.** A tool
+  call was counted as failed whenever its output contained a word like
+  "error", so reading source code counted as a failure and tool-swap
+  instincts were learned with no counter-evidence. Only an error the
+  daemon observed now counts, and a swap in a failed step counts against
+  the instinct; the instincts learned by the old rule are retired. On
+  SQLite, budget instincts could not be stored at all; the table is
+  rebuilt once to accept every kind.
+
+- **An agent that rewrites a file with the same content is told nothing
+  changed.** Such a write used to answer "wrote N bytes", and the model
+  wrote again until the loop detector stopped it. It now writes nothing
+  and says the file already holds exactly that content.
+
+- **A failure caused by the output cap is no longer reported as a missing
+  role.** The failure explainer matched the word "role" in the output-cap
+  message's advice and showed the missing-role remedy. It now matches only
+  the messages a missing role produces.
+
+- **`vornikctl` treats a command run from automation as non-interactive.**
+  Four commands mistook `/dev/null` for a terminal: `auth login` printed a
+  typing hint, `agent connect --api-key-stdin` refused an empty key,
+  `init project` printed prompts, and `daemon operations-credentials`
+  refused to write to `/dev/null`. Each now checks for a real terminal.
+
+
+- **A failed web chat reply no longer shows the error text**.
+  When a reply failed before any words appeared, the chat page showed
+  "Chat dispatch failed:" and the raw error, to every viewer, including
+  project members who are not operators. That error can carry the model
+  provider's response, its address or part of a key. The page now shows
+  the same notice Telegram does ("Sorry, I could not answer: the model call
+  failed. Please try again."), and the error goes to the daemon log.
+
+- **Slack says when it could not answer**. A Slack message
+  whose reply failed got no answer at all; the error went only to the
+  daemon log. Slack now posts the same notice as Telegram and the web chat,
+  where the answer would have gone, at most once per conversation per hour.
+  It never shows the error text. A failed `/vornik` command gets the notice
+  at channel level, where its answer would have posted. Notices are counted
+  on `vornik_channel_failure_notices_total{channel="slack"}`.
+
+- **A tool result the output guard cannot scan is withheld visibly**. If the scanner failed, the model already got an empty
+  result instead of the unscanned text, but nothing was logged and the
+  code said the opposite. The model is now told the result was withheld,
+  the turn carries a `scan_failed` guard warning, and the failure is
+  counted on `vornik_dispatcher_output_guard_scan_panics_total`.
+
+- **A hand-over finds the file the first job wrote**. Vornik
+  stores each output under a dated name (`enrich-20261125-a8f2.md`), and
+  the hand-over looked for the plain name (`enrich.md`), so every
+  hand-over was refused with "the job finished without" the file. It now
+  matches the name the job wrote.
+
+- **An assistant's hand-over request no longer fails after you approve it**. An assistant could name a hand-over file by its bare name
+  (`enrich.md`), the form a workflow's output list uses. Vornik showed the
+  request for approval and then refused it while applying it, so the phone
+  said "Could not be applied". A bare name is now completed to
+  `artifacts/out/enrich.md`, and any other path that cannot be applied is
+  refused when the assistant asks, before it reaches your phone.
+
+- **A benchmark batch that could not be verified is re-run, not skipped**. A step that failed before its container started was read
+  as a run with no image identity, so its batch could not be verified and
+  the pass stopped at its end. Such a step is no longer counted as a run,
+  and a batch whose journal cannot be verified is re-run on resume.
+
+- **A rejected healing candidate no longer blocks the next one**. A workflow can have one pending proposal at a time.
+  Rejecting a candidate left its proposal pending, so every later
+  candidate for that workflow failed with "workflow already has a pending
+  proposal". Rejecting a candidate now rejects its pending proposal too.
+  The benchmark autopilot rejects a candidate whose trial failed.
+
+- **The config assistant retries once when its reply is cut off**. A reasoning model can spend its whole output budget
+  thinking and never answer. The assistant now asks again once, one
+  reasoning level lower (high to medium, medium to low, low to off), and
+  refuses `ASSISTANT_REPLY_TRUNCATED` only if the retry is cut off too.
+
+- **Every workflow step sees every earlier step's files**.
+  A step was handed only the previous step's `artifacts/out/` files, while
+  workflows built through the admin tools tell each step that earlier
+  steps' files are there. In a four-step workflow, step 4 could not read
+  what step 1 or step 2 wrote. Every later step now receives them; a file
+  a later step rewrites is handed on in its newest version. An automatic
+  resume restages the files of every step it carries over.
+
+- **A workflow resumed after a pause still has its earlier steps' files**. After an approval, a wait for child tasks or a daemon
+  restart, the next step started without the files the steps before the
+  pause had written. It now finds them, as an uninterrupted run does.
+
+- **A git command stopped at its time limit takes its child processes with
+  it**. Vornik killed only `git`, so a transport or
+  `index-pack` it had started could keep running, hold the command open and
+  keep writing in the repository. Vornik now stops the whole process group.
+  Git's own background maintenance is left alone, as before.
+
+- **Telegram task control**:
+  - `/inbox` points each task to `/status <id>`. Before, it pointed to
+    `/task`, which does not exist.
+  - The assistant's own retry re-queues a task the way `/retry` does:
+    atomically, failed, cancelled or completed alike.
+  - The assistant can no longer cancel a task that is waiting for your
+    approval; answer the approval instead.
+  - A database error is no longer quoted in a reply; the reply says the
+    action could not be done right now.
+
+- **An agent's API call says when the API answered with an error**.
+  - **Before:** `query_api` handed a workflow role only the API's response
+    body. A redirect or error with an empty body reached the role as an
+    empty result, so a role reported "no results" for a call that had
+    failed. `list_apis` showed only the API's host, so a role could not
+    tell that the base URL already included a path such as `/res/v1`, and
+    repeated it.
+  - **Now:** an answer that is not a 2xx starts with `HTTP <status> from
+    provider "<name>".`. A redirect also says that `query_api` does not
+    follow redirects and that paths are relative to the base URL.
+    `list_apis` shows an agent API's full base URL, path included.
+  - **What you might see:** error answers in a role's tool results now
+    carry this first line. Successful answers are unchanged.
+
+- **A model endpoint counts as local only when Vornik can reach it** (security).
+  - **Before:** an agent model endpoint whose address was an IPv6 form
+    carrying a private IPv4 address (NAT64, 6to4, IPv4-compatible), or a
+    link-local address, counted as local. It skipped the device approval
+    a remote model needs, and every call to it was then refused.
+  - **Now:** an endpoint is local only when the model guard admits it:
+    loopback or a private LAN address. Those shapes now count as remote
+    and need an approval; calls to them are still refused.
+
+- **The configuration assistant reports a cut-off reply instead of "no
+  change"**.
+  - **Before:** a reasoning model that spent its whole output budget
+    thinking returned an empty reply. The assistant read that as its
+    final answer and refused with NO_CHANGE and no reason. Self-healing
+    counted that as a producer failure, the same as a timeout.
+  - **Now:** a reply cut off at the output-token limit is refused as
+    `ASSISTANT_REPLY_TRUNCATED`, naming the tokens spent and the remedy.
+    A NO_CHANGE carries the assistant's reason, or says it gave none, and
+    self-healing answers it with 422 `HEALING_NO_CHANGE`: the assistant
+    found nothing to fix. The new `config_assistant.reasoning` (`off`,
+    `low`, `medium`, `high`) sets the reasoning level asked of the
+    assistant's model on every call.
+
+- **`vornikctl doctor` exits 0 when the only non-OK checks are SKIPPED**.
+  - **Before:** a SKIPPED check, such as a feature that is not wired,
+    made the command exit 1, although its summary listed no issue.
+    Scripts read that as a failure.
+  - **Now:** it exits 0 when every check is OK or SKIPPED, and 1 when any
+    check is WARNING, ERROR or an unknown status. `--json` still exits 0
+    and `--offline` still exits 1 on a failed check.
+
+- **Every address guard refuses what the daemon's guard refuses** (security).
+  - **Before:** A2A webhooks, companion push and the scraper kept their own
+    lists of private addresses. Each admitted some address the daemon's
+    dial guard refuses: 0.0.0.0/8, 255.255.255.255, multicast (the
+    scraper's image and calendar fetches), and IPv6 forms that carry a
+    private IPv4 address, such as 64:ff9b::a9fe:a9fe (169.254.169.254
+    through a NAT64 translator). A companion push range opened with
+    `companion_push.allowed_cidrs` also reached the cloud metadata address
+    inside it (100.100.100.200, fd00:ec2::254, fd20:ce::254).
+  - **Now:** each guard decides by the daemon's one list, and an
+    `allowed_cidrs` range never opens a metadata address. The scraper's
+    `encode_image` and `ical_events`, and the `web_fetch` check before a
+    page loads, refuse the same ranges as `web_submit`: also documentation,
+    benchmarking and reserved addresses, and every NAT64, 6to4 and Teredo
+    address.
+  - **What you might see:** a push, webhook or scraper fetch to such an
+    address now fails with a refusal. No supported target uses one.
+
+- **A config change that fails to apply no longer hides a bad reload**.
+  - **Before:** when an approved change failed, Vornik reverted the files
+    and reloaded, but it ignored that reload's result, and no reload had a
+    time limit.
+  - **Now:** every reload the control plane makes is bounded at 10 seconds.
+    One that fails, times out or is stuck is logged and shown by
+    `vornikctl doctor` (`control_plane_restore_reload`), with the remedy:
+    fix the file and reload, or restart.
+- **A reminder that cannot be delivered retries, then says so**.
+  - **Before:** a reminder whose send failed stayed "firing" forever. It was
+    never delivered, never retried and never reported.
+  - **Now, a text reminder** is tried three times: at its time, one minute
+    later, and five minutes after that. Then a one-shot reminder becomes
+    `expired` with its last error, and a recurring one moves on to its next
+    occurrence.
+  - **A scheduled-task reminder** is not retried, because a retry could
+    start the task twice.
+  - **To find them:** `vornikctl doctor` lists reminders that expired
+    undelivered in the last seven days (`reminders_undelivered`).
+
+- **CI artifact content reaches a review as text, masked**.
+  GitHub serves an artifact as a ZIP. Forge had stored the ZIP's bytes as
+  the "excerpt", so a review saw binary instead of your plan or report. Forge
+  now unpacks the archive, and it masks secret-shaped values with the
+  daemon's secret detector before storing anything. With `secrets.enabled`
+  off, the content is withheld and the review says so. A row stored before
+  this release is shown as withheld.
+
+- **The daemon names config keys it does not read**. At
+  start it logs each key in `config.yaml` that no setting declares, and
+  `vornikctl doctor` reports them (`config_undeclared_keys`). The removed
+  `chat.thinking_enabled` and `chat.thinking_budget` had been accepted
+  silently, so a config that set them read as "thinking off" while it did
+  nothing.
+- **`vornikctl restore --clean` no longer empties the database when the
+  restore fails**. The clean and the replay now run in one
+  transaction, so a failed restore leaves the database as it was, and the
+  vector extension is kept rather than dropped.
+- **A managed upgrade no longer fails at its install step**.
+  `--accept-eula` no longer prompts on a non-terminal standard input, and a
+  failed acceptance's last error line is now in the upgrade's reason
+  instead of being discarded.
+- **A Community release no longer stops when an upstream source archive
+  disappears**. The release rebuilds the agent image's
+  third-party source archive from the previous release's copy, checking
+  every file against its pinned checksum; 2026.11.7's run had failed when
+  `microsoft/onnxruntime` stopped answering.
+- **An agent that writes a file with the bytes it already holds is told
+  so**. `file_write` writes nothing and answers that the file
+  already holds exactly this content, so the agent goes on instead of
+  writing again. In the 2026-11 agent benchmark, 18 of 196 runs were
+  stopped by the loop guard for repeating that write. Takes effect with
+  this release's agent image.
+- **A step that runs out of time says so**. Its error now
+  reads "step X ran out of its 30m0s time budget (the container was
+  stopped)", or names the execution's wall-clock cap, instead of "failed
+  waiting for container: podman wait timed out", which read as a host
+  fault. The failure class does not change.
+
+---
+
 ## 2026.11.7
 
 !!! warning "Upgrade requirements"
-    - **GitHub tokens now reach only the repositories a project names**
-      (GitHub #820). Each token the daemon mints for a GitHub App is scoped
+    - **GitHub tokens now reach only the repositories a project names**. Each token the daemon mints for a GitHub App is scoped
       to the project's `repo` (or a `github_app` block's `repo_allowlist`).
       A project naming a repository the App installation does not cover
       used to get an installation-wide token; it now gets none, and its
@@ -32,8 +544,7 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
       that calls it with neither now stops with an error. Pass
       `--repo owner/name` (repeatable) for the repositories the token is
       for.
-    - **A hand-made GitHub block may not use the instance's App key**
-      (GitHub #812). A `github`, `forge.github` or `github_app` block whose
+    - **A hand-made GitHub block may not use the instance's App key**. A `github`, `forge.github` or `github_app` block whose
       key file is the key of the App created from the console is refused
       when the configuration loads. Move such a project to
       `use_registration: true`, which takes the App and installation from
@@ -41,7 +552,7 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ### Features
 
-- **Use Vornik from AWS DevOps Agent** (GitHub #844). An AWS DevOps Agent
+- **Use Vornik from AWS DevOps Agent**. An AWS DevOps Agent
   investigation can recall your team's incident memory and the procedures
   an operator approved in Vornik. With a wider key, it can also store its
   finding and hand follow-up work to a sandboxed workflow. Register your
@@ -49,62 +560,60 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
   tools your key lists. The
   [AWS DevOps Agent guide](../guides/aws-devops-agent.md) has the two key
   profiles and how to reach Vornik privately or over HTTPS.
-- **A companion key is offered only the tools it may call** (GitHub #844).
+- **A companion key is offered only the tools it may call**.
   `tools/list` used to show every memory and skill tool to every key, and
   refused the ones outside the key's scopes only when they were called. It
   now lists only what the key's scopes allow. A key granted `--memory-all
   --skill-all` sees the same tools as before.
-- **A read-only key for AWS DevOps Agent on a Vornik-hosted instance**
-  (GitHub #846). **Connect your companion** gains *Connect AWS DevOps
+- **A read-only key for AWS DevOps Agent on a Vornik-hosted instance**. **Connect your companion** gains *Connect AWS DevOps
   Agent*, which mints a key that reads memory and approved skills only.
   The key table now shows what each key can do.
-- **HTTPS from the installer** (GitHub #839). On a host with a public DNS
+- **HTTPS from the installer**. On a host with a public DNS
   name and Caddy installed, `VORNIK_PUBLIC_HOSTNAME=<name>` makes the
   quickstart put Caddy in front of the daemon, with a certificate from
   Let's Encrypt over port 443 only. Caddy adds no credential: people sign
   in with their own keys, and the login lockout sees each person's real
   address. Thanks to Veaceslav Mindru, whose community pull request this
   builds on.
-- **Vornik 101** (GitHub #839). A short guide to where Vornik fits, with an
+- **Vornik 101**. A short guide to where Vornik fits, with an
   optional lab that connects Claude Code and finishes one task. Written by
   Veaceslav Mindru.
-- **A companion review opens with its verdict** (GitHub #751). The review
+- **A companion review opens with its verdict**. The review
   workflows lead with GREEN or NOT GREEN and a numbered list of actions.
-- **Community pull requests are credited where they land** (GitHub #840).
+- **Community pull requests are credited where they land**.
   The public repository is written by an export, not by merges. A ported
   community change now carries its author as co-author on the public sync
   commit, and the export closes the pull request with a link.
-- **Create the GitHub App from the console** (GitHub #802). Integrations →
+- **Create the GitHub App from the console**. Integrations →
   *Review pull requests with GitHub* creates the instance's GitHub App
   through GitHub's App-manifest flow: GitHub fills in the permissions and
   events, and Vornik keeps the key and webhook secret. You never paste a
   key. It needs the instance's public `https` address
   (`server.public_base_url` or `auth.external_base_url`).
-- **Installing the App sets up review** (GitHub #800). Each repository you
+- **Installing the App sets up review**. Each repository you
   install the App on gets a review project of its own, with no YAML. The
   GitHub page lists the repositories and can pause one.
-- **The admin tools set concurrency and role limits** (GitHub #798, #805).
+- **The admin tools set concurrency and role limits**.
   `update_project` sets how many of a project's tasks run at once, and
   `define_swarm` sets a role's output tokens and tool steps. Each value is
   capped by a new `agent_admin` key, and a raise needs approval on your
   phone.
 
-- **A pull-request review that is good by default** (GitHub #801, #244,
-  #814). For a project set up by installing the App, secrets are masked
+- **A pull-request review that is good by default**. For a project set up by installing the App, secrets are masked
   before any model sees the diff, findings must quote the diff they are
   about, a review team reads it, and the result posts as a neutral check
   run with inline comments on the lines found. A large diff is read in
   parts, and the review says which files it did not reach.
-- **Manage approver phones from the console** (GitHub #763, #833). Manage →
+- **Manage approver phones from the console**. Manage →
   *Approver phones* lists the phones that approve sensitive actions, pairs
   a new one with a code, and revokes or removes one. It needs a signed-in
   browser session; an owner may pair a further phone but not revoke the
   last one.
 - **A managed instance's owner sees more, and changes nothing they should
-  not** (GitHub #764, #765). The owner reads the instance's swarms and
+  not**. The owner reads the instance's swarms and
   workflows, and sees and disconnects a project's MCP sign-in on its MCP
   tools page.
-- **Measure what learning adds, on the agent benchmark** (GitHub #809).
+- **Measure what learning adds, on the agent benchmark**.
   A learning study runs one model in four arms: alone, with instincts,
   with self-healing workflows, and with both. Each arm learns on a
   warm-up part of a task set and is measured on a held-out part, with
@@ -116,43 +625,40 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ### Fixed
 
-- **A pull-request review never publishes a secret it can recognise**
-  (GitHub #838, from a community contribution by Veaceslav Mindru). The
+- **A pull-request review never publishes a secret it can recognise** (from a community contribution by Veaceslav Mindru). The
   posted text is scanned, the quoted request and any CI notice included, and
   each credential-shaped value, HTTP Basic credentials among them, is
   replaced by `[REDACTED:<type>]`. An empty diff, or one over 1 MiB, is no
   longer reviewed as if it were the whole change: that review step fails
   with the reason, and nothing is posted. Reviews are pinned to the commit they reviewed.
-- **An agent's task key reads only its own task's messages** (GitHub #832).
+- **An agent's task key reads only its own task's messages**.
   It could read a sibling task's messages in the same project.
-- **A repeated run is told what the earlier one did** (GitHub #604). When a
+- **A repeated run is told what the earlier one did**. When a
   task runs again after a restart, an interrupted run or a failure, its
   first agent step now lists the tools the earlier run called and is asked
   to check before repeating anything outside the workspace (a push, a pull
   request, a comment, a message). Tool names are listed, never their
   arguments.
-- **Agents no longer repeat an identical edit until the run is stopped**
-  (GitHub #831). A `file_edit` that changes nothing is refused, and a miss
+- **Agents no longer repeat an identical edit until the run is stopped**. A `file_edit` that changes nothing is refused, and a miss
   says why the text did not match (whitespace, or where it differs).
-- **Reviews and dev runs fail less often for the wrong reason** (GitHub
-  #830, #612). The analyst must name its pinned test cases, so a missing
+- **Reviews and dev runs fail less often for the wrong reason**. The analyst must name its pinned test cases, so a missing
   list is retried instead of failing the run; a write that carries the end
   of a tool call is refused, so a review file never keeps the model's next
   turn.
-- **Phone approvals** (GitHub #795, #806). An approved change outlives the
+- **Phone approvals**. An approved change outlives the
   phone's request, a written change is never rejected afterwards, and a
   failed apply can be dismissed or retried on the phone and in the console.
-- **Memory** (GitHub #459). A knowledge-graph entity stored without a
+- **Memory**. A knowledge-graph entity stored without a
   vector during an embedder outage is embedded once the embedder is back.
-- **Managed hosting** (GitHub #807). An owner who brings their own key can
+- **Managed hosting**. An owner who brings their own key can
   enable memory, and types one endpoint for chat and embeddings.
-- **Community Edition** (GitHub #816). Six Community features that answered
+- **Community Edition**. Six Community features that answered
   only on Enterprise now answer on Community Edition.
-- **Regression detection** (GitHub #817). The baseline is the seven days
+- **Regression detection**. The baseline is the seven days
   before the day compared, so a one-day regression is no longer diluted.
-- **Codex pricing** (GitHub #772). The shipped price table has the Codex
+- **Codex pricing**. The shipped price table has the Codex
   models' cached-input rates.
-- **An upgrade prices new models** (GitHub #776). Your `pricing.yaml` was
+- **An upgrade prices new models**. Your `pricing.yaml` was
   copied once at install and never took a model added to the shipped
   table, so that model's spend was charged at the default rate. Now an
   unedited `pricing.yaml` follows the release, and an edited one gains the
@@ -160,7 +666,7 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
   have is changed, and the upgrade lists the models whose prices you set
   differently. The previous file is kept as `.pricing.yaml.pre-merge`.
   `vornikctl doctor` names any shipped model your file still lacks.
-- **The setup guide finishes on Community Edition** (GitHub #815). With
+- **The setup guide finishes on Community Edition**. With
   `api.auth_enabled: true`, step 2 (*Choose what it is for*) answered
   every option with "Could not create it: This is an Enterprise Edition
   feature". The project-template routes now work in both editions, for
@@ -308,30 +814,27 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ### Fixes
 
-- **The Enterprise packages ship the registry and project templates**
-  (GitHub #726). The RPM and deb installed no `configs/` tree, so a fresh
+- **The Enterprise packages ship the registry and project templates**. The RPM and deb installed no `configs/` tree, so a fresh
   package install had no registry and the daemon stopped at start ("no
   registry config directory found"). The package now carries the shipped
   swarms, workflows, role library and project templates, and installs them
   into `/etc/vornik/configs` on install and on upgrade, as the daemon's
   user, keeping files you edited. A registry you keep directly in
   `/etc/vornik` is left alone.
-- **A managed instance can rewrite its own configuration** (GitHub #728).
+- **A managed instance can rewrite its own configuration**.
   Managed setup patches the configuration file as the daemon's user, which
   could not write beside the root-owned file. Provisioning now gives the
   daemon its configuration file and lets it write in `/etc/vornik`, while
   the files root owns there stay out of its reach.
-- **`vornikctl playbook show` resolves the codes doctor prints** (GitHub
-  #702). `doctor` names error codes such as `UPSTREAM_RATE_LIMITED`;
+- **`vornikctl playbook show` resolves the codes doctor prints**. `doctor` names error codes such as `UPSTREAM_RATE_LIMITED`;
   `playbook show` answered "Unrecognised failure class" for them. It now
   shows the entry that covers the code and says it resolved it.
-- **`doctor fallback_rungs` stops alarming about fixed problems** (GitHub
-  #703). A fallback model removed from the configuration, or one that has
+- **`doctor fallback_rungs` stops alarming about fixed problems**. A fallback model removed from the configuration, or one that has
   worked since its last failure, kept the check at ERROR for up to 30 days.
   The check now compares its 30-day history against the current
   configuration and the model's own recent successes.
 
-- **Companion hint hooks hold their claims on every host** (GitHub #687).
+- **Companion hint hooks hold their claims on every host**.
   The Claude Code and Codex hint hooks and the recall nudges claimed a slot
   with `mkdir` and relied on one concurrent caller winning. On Ubuntu 26.04,
   whose `mkdir` is uutils coreutils 0.10.0, more than one caller won in 13
@@ -357,162 +860,140 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ### Security
 
-- **The Ollama-compatible API no longer forwards a provider's error text**
-  (GitHub #667). `/api/chat` and `/api/generate` used to answer a provider
+- **The Ollama-compatible API no longer forwards a provider's error text**. `/api/chat` and `/api/generate` used to answer a provider
   error with the provider's own text, which could hold the upstream account
   name and links. They now answer as the OpenAI-compatible proxy does: a
   class code and a fixed or daemon-built message. The provider's text goes
   to the daemon log. A buffered error now carries its class status (400,
   429 or 503) where it was always 502.
 - **The companion's recall nudge no longer keeps state in a shared temp
-  path** (GitHub #651). It uses the plugin's data directory, else your own
+  path**. It uses the plugin's data directory, else your own
   runtime directory, else it stays silent, and refuses a symlinked or foreign
   state directory. Claude Code plugin 0.50.4, Codex plugin 0.45.2.
-- **Mirrored files re-marked `never` leave the corpus** (GitHub #657). A
+- **Mirrored files re-marked `never` leave the corpus**. A
   file mirrored into a project's memory and later marked `disclosure: never`
   (or given excluded sections, or broken front matter) now has its chunks
   retired in the next pass. A corpus rollback does not restore them.
-- **Agent read tools cannot be raced out of the workspace** (GitHub #455).
+- **Agent read tools cannot be raced out of the workspace**.
   `file_read` and `read_many_files` open through the workspace root and check
   the opened file, as the write tools do. A symlink that stays inside the
   workspace still works. Ships in the agent image.
-- **The config assistant refuses tokenised calendar URLs** (GitHub #219).
+- **The config assistant refuses tokenised calendar URLs**.
   A Google Calendar secret address, an Outlook published calendar or an
   iCloud public calendar URL anywhere in a project's files, prose included,
   is now a secret-hygiene finding. Other providers' feeds are not
   recognised. Move such URLs into a secret.
-- **Memory catches a short unlabeled credential** (GitHub #438). A random
+- **Memory catches a short unlabeled credential**. A random
   24 to 39 character token with mixed case and digits and no label is now
   redacted on its way into memory; a Google Places ID is left alone.
 
 ### Improvements
 
-- **Vornik guides how Hermes works** (GitHub #686). With the memory key,
+- **Vornik guides how Hermes works**. With the memory key,
   the Hermes plugin (0.23.0) carries Vornik's standing rules in each new
   session's prompt, hints at the moment of need (review after a commit,
   ingest after a design, recall after a failed test), and one check before
   finishing, as Claude Code and Codex have. The Hermes memory key is now
   granted the review and ingest workflows; see the Hermes setup guide.
-- **A guide to publishing your own A2A expert** (GitHub #637): publishing,
+- **A guide to publishing your own A2A expert**: publishing,
   caller keys, the answer policy, the retrieval policy, and why the
   expert's memory is the boundary.
-- **Claude Desktop and Cowork connect with one command** (GitHub #589).
+- **Claude Desktop and Cowork connect with one command**.
   `vornikctl companion connect claude-desktop` stores the key in a file only
   you can read and adds the built-in bridge to Claude Desktop's config: no
   Node, no token in that file. `vornikctl companion doctor --client claude-desktop`
   names each failure and its fix.
-- **The overview says what needs you first** (GitHub #603). Needs you (the
+- **The overview says what needs you first**. Needs you (the
   inbox's first rows with their actions, approver-device requests, the last
   doctor report's errors), then health problems only, or one "All clear"
   line. The statistics stay below, as At a glance.
 
 ### Fixes
 
-- **Only the leader runs the watchdog's startup scan** (GitHub #442), so a
+- **Only the leader runs the watchdog's startup scan**, so a
   daemon joining a multi-daemon install no longer repeats the leader's sweep.
-- **A chunk the embed DLQ could not take is retried, not lost** (GitHub
-  #437, #677). It keeps its queue row instead of being released, whether
+- **A chunk the embed DLQ could not take is retried, not lost**. It keeps its queue row instead of being released, whether
   the embed call failed or its vector could not be stored or came back
   empty or the wrong size.
-- **A cancelled migration run no longer leaves its lock held** (GitHub
-  #457), so the next daemon to start does not wait on it.
-- **A task message and its counters are written together on SQLite**
-  (GitHub #451), as on PostgreSQL.
-- **Two knowledge-graph updates of one edge keep both sources on SQLite**
-  (GitHub #452).
-- **A reset to origin keeps the clone's uncommitted changes** (GitHub
-  #484). They are saved to a `refs/vornik/discarded/*-dirty-*` ref first;
+- **A cancelled migration run no longer leaves its lock held**, so the next daemon to start does not wait on it.
+- **A task message and its counters are written together on SQLite**, as on PostgreSQL.
+- **Two knowledge-graph updates of one edge keep both sources on SQLite**.
+- **A reset to origin keeps the clone's uncommitted changes**. They are saved to a `refs/vornik/discarded/*-dirty-*` ref first;
   recover them with `git stash apply <ref>`.
 - **Workflow proposals are applied and rolled back by the config writer
-  only** (GitHub #462). A refusal writes nothing and answers 409
+  only**. A refusal writes nothing and answers 409
   (`APPLY_IN_PROGRESS` or `WRITER_FENCED`).
-- **The memory recall audit has a retention horizon** (GitHub #549): the
+- **The memory recall audit has a retention horizon**: the
   tool-call audit's window, at least 180 days unless that floor is
   overridden, once retention is enabled (it is off by default).
-- **A retry the model circuit rejected keeps its attempt** (GitHub #492),
+- **A retry the model circuit rejected keeps its attempt**,
   so tasks released together after an outage no longer run out of attempts
   on rejects.
-- **Tool grants and API audits name the right role in every workflow**
-  (GitHub #551), not the default workflow's.
-- **The web scraper says when its network is down** (GitHub #601), instead
+- **Tool grants and API audits name the right role in every workflow**, not the default workflow's.
+- **The web scraper says when its network is down**, instead
   of reporting an SSRF-guard refusal.
-- **Admin UI edits wait for other configuration changes** (GitHub #676),
+- **Admin UI edits wait for other configuration changes**,
   so a UI save and a control-plane apply cannot overwrite each other.
-- **The backlog refresh keeps the clone's local work** (GitHub #675):
+- **The backlog refresh keeps the clone's local work**:
   local-only commits and uncommitted changes are saved to
   `refs/vornik/discarded/*` refs before the reset, as a task-start reset
   does.
-- **Deleting a project on some S3-compatible stores deletes every object**
-  (GitHub #443), not only the first 1,000; a delete that cannot finish is
+- **Deleting a project on some S3-compatible stores deletes every object**, not only the first 1,000; a delete that cannot finish is
   reported as incomplete.
-- **Secret checks no longer reveal a secret's length** (GitHub #445): the
+- **Secret checks no longer reveal a secret's length**: the
   `/metrics` scrape token and the broker's internal key are compared as
   fixed-length digests.
-- **A parent waiting on its children no longer counts as needing you**
-  (GitHub #671): the row stays in the inbox, uncounted, and the overview
+- **A parent waiting on its children no longer counts as needing you**: the row stays in the inbox, uncounted, and the overview
   can say "All clear".
-- **Doctor counts calls made with a model override** (GitHub #458), so its
+- **Doctor counts calls made with a model override**, so its
   per-model failure counts include them.
-- **Failed embeddings back off longer each time** (GitHub #674), up to 24
+- **Failed embeddings back off longer each time**, up to 24
   hours, instead of every 10 minutes.
-- **Placeholder text is easier to read on the light theme** (GitHub #486):
+- **Placeholder text is easier to read on the light theme**:
   it meets 4.5:1 contrast in both themes.
 - **The benchmark grader and the scraper login browser have a memory
-  limit** (GitHub #460): half the host's memory, no swap.
-- **Memory recall queries are scanned for secrets before they are stored**
-  (GitHub #680), like chat transcripts and task messages.
-- **The design-edit hint sees DESIGN.md** (GitHub #682), whatever the case of
+  limit**: half the host's memory, no swap.
+- **Memory recall queries are scanned for secrets before they are stored**, like chat transcripts and task messages.
+- **The design-edit hint sees DESIGN.md**, whatever the case of
   the name (companion plugins 0.50.5 and 0.45.3).
-- **Config changes are refused on a daemon that is not the config writer**
-  (GitHub #681): on a multi-daemon install they answer 409 and write
+- **Config changes are refused on a daemon that is not the config writer**: on a multi-daemon install they answer 409 and write
   nothing; a single daemon is not affected.
-- **A config reload no longer drops a project whose file it cannot read**
-  (GitHub #683, #669): the project keeps its previous configuration, the
+- **A config reload no longer drops a project whose file it cannot read**: the project keeps its previous configuration, the
   other changes apply, and `vornikctl config reload` exits non-zero with the
   warning.
-- **A restart no longer refills the knowledge graph's retry budget**
-  (GitHub #493): the count of a chunk's uncounted provider-error retries is
+- **A restart no longer refills the knowledge graph's retry budget**: the count of a chunk's uncounted provider-error retries is
   stored with the chunk.
-- **The canary guard runs where it can roll back** (GitHub #485): on the
+- **The canary guard runs where it can roll back**: on the
   daemon that holds the config-writer lease.
-- **The lead reads a long thread's newest messages** (GitHub #464). On a
+- **The lead reads a long thread's newest messages**. On a
   thread over 50 messages the lead now sees the latest ones, the operator's
   newest directive included.
-- **An approved change that cannot apply no longer deadlocks its project**
-  (GitHub #579). A verified revert frees the namespace; an approval whose
+- **An approved change that cannot apply no longer deadlocks its project**. A verified revert frees the namespace; an approval whose
   effect keeps failing is recorded failed after 60 attempts (about an hour).
-- **A closed approval says which task above it was cancelled** (GitHub
-  #490). The inbox shows it for 24 hours, and a stale Telegram button
+- **A closed approval says which task above it was cancelled**. The inbox shows it for 24 hours, and a stale Telegram button
   answers with the reason instead of "already handled".
-- **Agent benchmark tasks no longer see earlier tasks' work in git**
-  (GitHub #655). Each repeat now starts on a one-commit history, and the
+- **Agent benchmark tasks no longer see earlier tasks' work in git**. Each repeat now starts on a one-commit history, and the
   earlier history moves to an archive no agent can read. Harness version 11;
   journals from harness 10 and 11 do not compare.
-- **A hand-configured rootless install runs its first agent task** (GitHub
-  #663). With `userns_mode` empty, rootless Podman now starts agents with
+- **A hand-configured rootless install runs its first agent task**. With `userns_mode` empty, rootless Podman now starts agents with
   keep-id; `server.address: ":8080"` gives agents a reachable callback URL;
   and the new doctor check `agent_daemon_reach` flags a loopback listen
   address that agents cannot reach.
-- **An empty git repository is bootstrapped** (GitHub #659). A project
+- **An empty git repository is bootstrapped**. A project
   directory made with `git init` and no commit gets a seed commit, instead of
   failing every task at merge.
-- **The agent benchmark runs unattended past a failed task** (GitHub #600,
-  #660). A failed task's leftover files are archived instead of stopping the
+- **The agent benchmark runs unattended past a failed task**. A failed task's leftover files are archived instead of stopping the
   next task, and the reset commit no longer needs a git identity on the host.
-- **A pipeline failure is no longer graded as a compile failure** (GitHub
-  #661). A benchmark task that failed before its code reached the workspace
+- **A pipeline failure is no longer graded as a compile failure**. A benchmark task that failed before its code reached the workspace
   is graded `pipeline_failed`, not `does_not_compile`. Pass rates do not
   change.
-- **A memory version pushed and then replaced is labelled out of date**
-  (GitHub #550). It was labelled as a draft awaiting its push for good. A
+- **A memory version pushed and then replaced is labelled out of date**. It was labelled as a draft awaiting its push for good. A
   document redacted on upload now says so, instead of the same false label.
-- **Doctor's fallback advice no longer depends on read order** (GitHub
-  #668). `model_health` lists every fallback the roles pinning a model name,
+- **Doctor's fallback advice no longer depends on read order**. `model_health` lists every fallback the roles pinning a model name,
   with the number of roles for each. It also counts roles with no fallback,
   and roles whose fallback is the model itself. Before, it kept the first
   role it read, so two runs could disagree.
-- **Doctor names a provider's usage limit instead of blaming the model**
-  (GitHub #665). A failed call no longer counts as "degenerate output" in
+- **Doctor names a provider's usage limit instead of blaming the model**. A failed call no longer counts as "degenerate output" in
   `model_health`: the token median reads only calls that reached the model.
   An upstream usage or rate limit now reaches the agent as
   `429 UPSTREAM_RATE_LIMITED` instead of a generic `502 PROVIDER_ERROR`.
@@ -561,14 +1042,14 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
   memory-firewall policy routes, which answered 400 to everyone, now work.
 - **A project-scoped key no longer reads global instincts** (security). A
   scoped caller sees only its project's instincts; a global one is 404.
-- **An A2A caller key is bounded** (security, #617). Its tasks are now
+- **An A2A caller key is bounded** (security). Its tasks are now
   attributed to it, so its budget cap and the daily quota see them; spend
   before this release was not attributed and does not count. A submit whose
   spend or count cannot be read is refused (503). The doctor check
   `a2a_corpus_walk` names a caller key whose A2A tasks retrieved more than
   500 distinct memory chunks in the last 24 hours. It reports the key and the
   count, never the chunks, and blocks nothing.
-- **A role can be capped at a sensitivity tier** (security, #618).
+- **A role can be capped at a sensitivity tier** (security).
   `memorySearch.maxSensitivity: public` keeps the role's search to two kinds
   of chunk: chunks an operator set public, and files under
   `memory.public_source_prefixes` (default `docs/public/`) that the daemon
@@ -1144,7 +1625,7 @@ A brand, Hermes, approvals, memory and agent-admin release.
   - A role granted the `document_render` helper can convert staged Markdown to
     a PDF or HTML file.
   - Google document links are no longer redacted as high-entropy strings.
-  - Adding an MCP server with an existing API name is refused (#286). *(Ships
+  - Adding an MCP server with an existing API name is refused. *(Ships
     in 2026.10.6; corrected 2026-10-13.)*
 - **Approvals and devices.**
   - A lost pairing-poll response no longer unpairs the browser.
@@ -1161,7 +1642,7 @@ A brand, Hermes, approvals, memory and agent-admin release.
   - Guarded redirects stop after 10 hops.
   - Live task pages close dead websocket connections.
   - Skill reviews are bound to the revision they were shown.
-  - Memory consolidation skips refuted and superseded notes (#298). *(Ships in
+  - Memory consolidation skips refuted and superseded notes. *(Ships in
     2026.10.6; corrected 2026-10-13.)*
 - **Redirect discovery.** A new skill investigates an unexpected public
   redirect and reports only what independent evidence supports. See
@@ -2133,937 +2614,37 @@ no output stated alongside it), and restores the memory-benchmark track record
 with an explanation of the axis change that broke it. See
 [Benchmarks](../benchmarks/results.md).
 
-
-## 2026.8.9
-
-**A stuck execution no longer dies at an unrelated step.** A step result that
-was not valid JSON was stored as-is and failed at the *next* checkpoint, so an
-execution died several steps away from the cause with a confusing
-`failed to marshal execution checkpoint` error. Such a result is now stored as a
-readable diagnostic that keeps the original text, and the execution continues.
-
-**Delegations and checkpoints survive a deleted ancestor task.** If a parent
-task had been pruned by retention or removed with its project, the lineage walk
-failed instead of stopping — surfacing as
-`delegation cycle check failed: not found`. A missing ancestor now simply ends
-the chain.
-
-**The watchdog no longer re-reports the same stuck execution every sweep** when
-its task has already been deleted, and the stuck-execution counters now include
-those cases instead of under-counting them.
-
-**Scheduled reports deliver the work, not the routing.** A scheduled task that
-delegates to a child produced its output on the child, and delivery only looked
-at the parent — so the attached files could be internal routing transcripts
-rather than the report. Delivery now collects the whole task tree and leaves
-per-step transcripts out.
-
-**`vornikctl mcp connect` tells you when it asks for fewer scopes than the
-server offers.** A daemon-level connection deliberately does not inherit write
-scopes — that is unchanged — but it now prints a `WITHHELD:` block listing what
-was not requested and the two ways to grant it. Previously the narrowed request
-was invisible, which made a read-only grant look like a server with no write
-tools.
-
-**New metric: `vornik_mcp_gate_unrestricted_total{path,reason}`.** Counts MCP
-calls that applied no role allowlist, with the reason named
-(`no_task_id`, `deps_unwired`, `role_not_found`, `role_declares_none`, and
-others). These calls were always permitted by design; they were simply not
-visible. A rising number means roles are not resolving — not that something was
-blocked.
-
-**Right-to-erasure now removes derived data.** Erasing a subject's content
-previously deleted the stored chunks and left the knowledge-graph entities,
-edges and quarantined pre-ingest copies derived from them — all of which are on
-the retrieval path. Erasure now settles those too and records what it removed.
-Retention, which is a separate legal basis, parks that graph data instead of
-deleting it, with a horizon you can disable for a legal hold
-(`retention.graph_quarantine_days: -1`).
-
-**Agent tool advertisement follows execution on every path.** A third
-advertisement path could offer a tool to a role's model that the execution gate
-would refuse. Roles now see only what they can call.
-
----
-
-## 2026.8.8
-
-**Action required if you allowlist outbound URLs.** Anonymous telemetry now
-reports to `https://telemetry.vornik.io` instead of
-`https://telemetry.vornik.io/v1/collect.json`. The collector still accepts the
-old path, so an older release keeps reporting, but egress rules that match the
-full URL need updating. What is collected has not changed: aggregate counts of a
-fixed set of values, a request body that is never parsed or stored, and the same
-retention windows. See [Telemetry and privacy](../reference/telemetry-and-privacy.md).
-
-**`vornik telemetry sample` now shows you the real request.** It previously
-rebuilt the payload for display, which could in principle drift from what was
-actually sent; it now prints the request itself. Contributed by
-[@vmindru](https://github.com/vmindru).
-
-**A reporting step could fail after doing the work.** The step that writes a
-feature's changelog was asked to identify the relevant commits before writing the
-file. On a repository whose history offers no clear boundary — no tags, no merges
-— that search has no end, and the step could exhaust its tool budget without ever
-writing the file it was required to produce. It now writes the changelog first
-from information it already has, then enriches it with a bounded look at history.
-An inconclusive search can now cost detail in the changelog; it can no longer
-cost the step.
-
-**Agent steps could fail for work they had actually done correctly.** Before
-storing a step's result, the daemon scans it for anything that looks like a
-credential and masks what it finds. That masking was applied before the result was
-checked against the step's declared output fields — and because it replaces text
-without regard for the surrounding JSON, masking an identifier could leave the
-result unreadable. The step was then failed for "missing required fields" that
-were present all along, and its tool-call counts were recorded as blank.
-
-Ordinary output triggered it: test-case ids, commit hashes, generated
-identifiers. The check now runs on the result as the agent wrote it, while masking
-still governs everything that is stored, displayed or forwarded — no change to
-what counts as a credential or what is kept. Measured on a benchmark deployment,
-the affected failures went from 10 in 14 reporting steps to none, with masking
-still occurring on the steps that now pass.
-
-If you have historical step-failure data, treat "missing required fields" counts
-recorded before this release as an upper bound rather than a measurement.
-
-**Steps could be recorded under the wrong failure reason.** Two related issues:
-a step that exhausted its wall clock while stuck repeating itself was recorded as
-a timeout rather than as a stuck step, and text appearing in an agent's own log
-output could influence how a failure was categorised. Both are corrected. This
-matters if you act on failure categories — a stuck step is not fixed by granting
-it more time, which is what a timeout label implies.
-
-**A review decision could be ignored.** A workflow condition read a field that
-the agent was not actually required to produce, so the condition could never be
-satisfied and work was rejected downstream. The field is now required where it is
-read.
-
-**A failure that should have stopped a task could send it in a loop.** Two
-gate-failure paths did not honour the strict-failure setting and instead routed
-into recovery. They now terminate as configured.
-
-**Failed steps carry more diagnostic detail.** The log excerpt kept with a failed
-step previously retained only the beginning of the step's output, which is rarely
-where the problem is. It now keeps both the failure message and the end of the
-log.
-
-## 2026.8.7
-
-**Two roles were failing most of the time because we asked them to restate
-something the system already knew.** Both are fixed, and both were measured
-before and after on a benchmark deployment. Neither was a model limitation.
-
-**A tester could claim tests passed without listing what it checked.** The rule
-requiring the list of validated cases was enforced after the fact, but the
-machine-readable contract the model is decoded against marked that list
-optional — so the model was doing exactly what it was permitted to do, and the
-work was rejected afterwards at the cost of a retry. The list is now required
-where it binds. Measured on the same deployment: the failure went from 37 in 50
-attempts to none, and the retry ladder stopped being entered at all.
-
-**A step could fail for not mentioning a file it had just written.** Where a
-step declares an output file, the daemon verifies it against the real
-filesystem. That check passed — and then the step was failed anyway because the
-agent's own summary of what it produced was empty. A verified file now settles
-the question; the agent's omission is still recorded, but no longer fails the
-step. This does not weaken the opposite check: an agent claiming a file it never
-wrote is still caught. Measured: first-attempt success rose from 36% to 100%,
-and the work took one model call per step instead of 2.3.
-
-**Field descriptions in an output schema now reach the model.** They were
-dropped on the way to the prompt, so agents saw field names with no explanation
-of what belonged in them.
-
-**A daemon whose configuration fails to load now stops instead of serving.**
-Previously it kept running with a synthetic fallback, so a task naming a
-workflow that no longer existed could still report success — having never run
-that workflow. Relatedly, the `pedantic` setting now actually takes the strict
-path it describes.
-
-**Agents are told when their checkout is read-only.** They were looping on
-writes that could never succeed, which accounted for most of the stuck-agent
-reports.
-
-**New: output-contract scoring for workflows.** Workflows that declare an
-output file are now scored on whether they delivered it, across nine shipped
-workflows. This measures delivery, not correctness — a workflow that writes a
-valid but empty file scores full marks — so treat it as a regression guard for
-"this workflow stopped producing its output", not as a quality score.
-
-**Other fixes:** adaptive workflows now record a terminal outcome for each
-step; a parent task waiting on children no longer needs a restart to unstick; a
-tool call that a provider flattens into a single argument string is split back
-apart; a refused tool grant explains why; deduplicated deliverables are
-surfaced; published HTML is preserved when the page host fails; scheduled task
-attachments are delivered; and workflow timeout proposals are scoped globally.
-
----
-
-## 2026.8.6
-
-**Upgrade if you run any role on Bedrock with a declared output schema — those
-steps have been failing outright.** The agent's final turn deliberately offers
-no tools, but the conversation still carried tool records, and Bedrock rejects
-that pairing. The step produced no result at all. Fixed by converting those
-records to plain text on the final turn.
-
-**A failed step now tells you why it failed.** Previously almost every agent
-failure was recorded as "the container exited non-zero", collapsing four
-distinct faults into one label. Failures are now recorded with their actual
-cause — a stuck tool loop, an exhausted tool budget, a context overflow, or a
-broken output rule.
-
-**Agents are now shown the output rules they are judged against.** A role can
-require that, say, a claim of passing tests is accompanied by the list of cases
-checked. Those rules were enforced after the fact and never communicated, so
-work was rejected for a contract the agent had never seen. The rules are now
-part of the agent's instructions and are checked before it finishes, with one
-chance to correct.
-
-**An agent that repeats itself is warned before the step is ended**, and an
-agent that runs out of tool calls now produces its best answer instead of
-nothing. The record still shows the budget was exhausted, so this improves the
-output without hiding the cause.
-
-**A fallback model gets its own time budget.** When a primary model was
-unavailable, the replacement inherited a timeout sized for the original and
-could not finish in it — so failover reliably failed. It now gets a budget of
-its own.
-
-**The daemon no longer refuses to start when a container-runtime check is
-merely slow**, and benchmark runs now verify the model's real context window
-against the endpoint instead of trusting configuration.
-
-No configuration changes are required. If you pin per-model context windows,
-confirm they match what your endpoint actually serves.
-
----
-
-## 2026.8.5
-
-**Upgrade if your tasks ever retry — retried work has not been billed to
-anything.** A workflow step's spend was stored under an id that did not name the
-execution, so when a task retried, the retry overwrote the row of the attempt it
-retried. On a measured ledger, 24.8% of step-spend rows were missing, and 98.9%
-of those were this collision. Budget enforcement, the spend dashboard and
-per-key attribution all understated by the cost of every retry. Historical rows
-cannot be recovered — the figures were overwritten, not merely hidden — but new
-spend records correctly from this release.
-
-**Cached prompt tokens are counted on streamed calls.** Streamed completions were
-not asking for usage, so cache hits recorded nothing. Prefix caching on
-self-hosted servers was already working and simply invisible.
-
-**New: an adoption dashboard at `/ui/insights/adoption`.** Shows how much of the
-product each team has actually exercised — companion usage, RAG queries, memory
-writes and channel activity, not just task counts — and names the capabilities
-nobody has tried yet. Designed to be useful on deployments that have *not*
-enabled auth, where everything is attributed to nobody.
-
-**Security.** Slack interaction responses are now pinned to Slack's own host, so
-a forged payload cannot redirect a response elsewhere. Go 1.26.6 picks up fixes
-for 7 standard-library CVEs.
-
-**Rebuild your agent image** (`make build-agent`). The degenerate-loop diagnostic
-used to assert the context window was exhausted; a measured run found a loop at
-17% of context, so an operator following that text would raise a limit that was
-never the constraint. It now reports the measured figure and says plainly when
-context is *not* the cause.
-
----
-
-## 2026.8.4
-
-**Upgrade if you run open-weight models on your own hardware — agentic work did
-not function at all.** Vornik sent a `response_format` directive alongside its
-tool definitions. Any server implementing that with guided decoding then
-constrains the model to emit schema-shaped JSON, so it can never emit a tool
-call. Hosted APIs tolerated the combination; self-hosted endpoints did not.
-Agents answered in a few tokens of prose, the loop recorded success, and the
-step then failed its output contract. The directive is now withheld whenever
-tools are offered.
-
-**Timeouts no longer assume fast inference.** New optional
-`speed_aware_timeouts` and `default_step_timeout` settings; both default to
-previous behavior.
-
-**Dashboard failures are counted by when they failed**, not by when their task
-was created, so a spike lands on the day it happened.
-
-**Rebuild your agent image** (`make build-agent`) — the `response_format`,
-finalization and nudge fixes live in the container, not the daemon.
-
----
-
-## 2026.8.3
-
-**Upgrade if you use Bedrock embeddings — semantic search has been silently
-keyword-only.** The query vector was never computed on that transport, so hybrid
-search ran with no semantic arm while `memory/stats` still reported 100% embedded
-and nothing was logged. Recall changes noticeably after upgrading, and reranker
-cost appears where it previously did not.
-
-**Embedding spend now appears in your spend rollups.** It was never recorded
-before, on any provider — re-embedding a mid-sized corpus is roughly $0.60–0.75 on
-a hosted embedder and was reported as `$0.00`. This is not new spend; it is spend
-that was always happening and never billed. Look for the role **Memory · Embedder**
-on `/ui/spend`. A `~` before a token count means the provider reported no token
-count and the total is derived from text length rather than measured.
-
-**New: `vornikctl bench memory`** — a retrieval-quality benchmark with a pinned
-dataset, an LLM judge and a per-run journal. It is what found the defects above,
-plus two more: recall was not reproducible (ranking ties broke arbitrarily), and
-the embed queue could lose chunks across a restart, leaving them permanently
-unretrievable by semantic search.
-
-**The main dashboard gains a Learning tile** — skill-store maturity and the count
-of proposed skills waiting on your review, which nothing else on the landing page
-surfaced.
-
-Also: filter memory on when content *happened* rather than when it was stored,
-Cohere embeddings on Bedrock, `memory reembed --only-missing` for cheap gap
-repair, answer a steering checkpoint from a Slack button, and near-duplicate
-detection when a skill is proposed.
-
-Migrations apply automatically and are additive; no configuration changes.
-
----
-
-## 2026.8.2
-
-**Upgrade if you use vornik in Slack direct messages.** 2026.8.0 stopped a Slack
-bot answering DMs entirely — silently, with no reply and no visible error.
-**Both 2026.8.0 and 2026.8.1 are affected.**
-
-- **Fixed: Slack direct messages were dropped when `channel_allowlist` was empty.**
-  2026.8.0 correctly made an unconfigured `channel_allowlist` deny rather than
-  admit every channel in your workspace. But that new check ran *before* the
-  long-standing rule that a channel allow-list never applies to a direct message,
-  so it answered first and the DM rule never got a chance to.
-
-    An empty `channel_allowlist` is not a mistake — it is the normal setup for a
-    bot people talk to in DMs. Slack creates a DM's channel id the first time each
-    person writes to the bot, so you cannot list it in advance; `sender_allowlist`
-    is what controls a DM. Every deployment set up that way lost every DM, on
-    messages, `/vornik`, file uploads and voice memos alike. Because both
-    allow-list checks drop a message before doing any work, nothing appeared in
-    Slack and no task was created — the bot simply went quiet.
-
-    Direct messages are now exempt from `channel_allowlist` whether it lists
-    channels or is empty. This does not loosen anything: `sender_allowlist` still
-    gates DMs, and it also denies by default as of 2026.8.0, so a message from
-    someone you have not listed is still refused.
-
-    **If you worked around this by setting `allow_unlisted_senders: true`, remove
-    it.** On an installation with an empty `channel_allowlist`, that flag also
-    admits every channel in the workspace. You never needed it for DMs: with a
-    populated `sender_allowlist`, it is not consulted there.
-
-- **Fixed: the App Home tab promised channel access the bot did not have.** With
-  no `channel_allowlist` configured, the **Where I answer** section said "any
-  channel I have been added to" — which stopped being true in 2026.8.0, when an
-  empty list started denying every channel. The first page a Slack user opens was
-  telling them the bot would answer in places it silently ignored them. It now
-  says what is actually configured, and what to ask an admin for.
-
-- **Clarified: group DMs are not supported.** The direct-message exemption covers
-  one-to-one DMs only. Adding the bot to a group DM produces silence rather than
-  an answer; the App Home tab and the Slack guide now both say so, instead of
-  leaving you to find out.
-
-!!! tip "If a chat bot ever goes quiet"
-    Both Slack allow-list checks log a warning and stop before any model is
-    called, so a refused message leaves no trace in Slack and no task behind.
-    Searching the daemon log for `not on installation allowlist` distinguishes an
-    allow-list refusal from a genuine failure.
-
----
-
-## 2026.8.1
-
-**A security fix worth upgrading for.** Four built-in agent tools were available
-to every role regardless of the tool allow-list configured for it, plus fixes for
-a class of problem where a task finished successfully and its result never
-reached you.
-
-- **Security: four agent tools ignored per-role tool permissions.**
-  `memory_search`, `skill_fetch`, `get_conversation_window` and
-  `summarize_thread` were offered to, and usable by, every role — even roles whose
-  `allowedTools` did not list them. All four are read-only (project memory,
-  skills, conversation history), so this granted broader *read* access than you
-  configured rather than any ability to run commands or write data. If you rely on
-  role tool allow-lists to keep a role away from project memory, **upgrade**.
-  Deliberately ungated tools are now recorded explicitly with a reason, so the
-  distinction between "ungated on purpose" and "ungated by accident" is visible.
-- **Fixed: a finished task whose result never arrived, permanently.** The record
-  linking a task back to the chat it came from could be lost when a conversation
-  turn ran long. Once lost, the completion message and the **Send** button both
-  concluded the task had never come from a chat — and nothing ever repaired it.
-  That record is now written independently of the turn's own timing.
-- **Fixed: a delegated task's output was invisible on the task that requested it.**
-  When a request was routed to a sub-task, the page you opened showed only the
-  routing step's own small files and hid the actual deliverable. Output now
-  appears on the requesting task, and can be sent from there. Artifacts stay
-  strictly within their own project.
-- **Fixed: an unhelpful error when a result could not be delivered.** "This task
-  wasn't started from a chat channel" was shown even for tasks that plainly were.
-  The message now distinguishes a task that genuinely has no chat origin from one
-  whose origin record is missing, and offers a download link either way.
-- **Fixed: Community Edition was told to run an Enterprise-only command.**
-  `vornikctl report` pointed every reporter at `vornikctl support-report`, which
-  Community Edition does not include. It now explains what Community collects and
-  what to attach instead.
-- **Fixed: PDF output is now guaranteed by tests.** The agent image ships the PDF
-  toolchain and role prompts rely on it, but nothing verified it. A regression
-  test now renders a real PDF, including non-ASCII text.
-
-See [docs.vornik.io](https://docs.vornik.io) for the full documentation.
-
----
-
-## 2026.8.0
-
-**Vornik can authenticate to a remote MCP server on its own.** Connect a
-tool server by granting consent in the browser instead of pasting a token
-that expires. Plus a batch of fixes for things that were reporting success
-while doing nothing.
-
-- **New: OAuth 2.1 for MCP servers.** A remote MCP server that requires
-  authentication is now connected by clicking **Connect** on the MCP tab (or
-  `vornikctl mcp connect`). Vornik discovers the server's authorization
-  requirements, registers itself, runs the consent flow, and refreshes the
-  token as needed — telling you when a revoked grant needs reconnecting.
-  Servers that use a static header or a subprocess credential are supported
-  through the same `auth:` block. Verified against the published discovery
-  behaviour of eighteen well-known MCP servers.
-- **New: ask another Vornik a question.** A synchronous `consult` tool lets one
-  deployment put a question to another and wait for the answer.
-- **New: write to memory from a conversation.** Ask the assistant to remember
-  something and it will, behind an explicit confirmation step and an opt-in per
-  channel. Personal-scope notes carry their own expiry.
-- **New: richer Slack.** Inbound images are understood, there is a real App Home
-  tab, a turn that is thinking shows that it is working, threads can be followed
-  up without a mention, `/vornik` works in a DM, and the slash-command name is
-  per-deployment.
-- **Behaviour change — chat allowlists now fail CLOSED.** An empty
-  `allowed_users` (Telegram) or `sender_allowlist` / `channel_allowlist` (Slack)
-  used to admit **everyone**. Both bots are publicly addressable, so an
-  unconfigured allowlist was an open door that looked like an unset field. If you
-  rely on the old behaviour, set `telegram.allow_unlisted_users: true` or Slack's
-  `allow_unlisted_senders: true` — deliberately, and for development only.
-  Telegram logs at boot which way it will behave.
-- **Fixed: the knowledge-graph extractor was discarding most of its input.** A
-  reasoning model was spending its whole token allowance thinking and returning
-  nothing, and an empty answer was being recorded as "found no entities" and the
-  chunk marked done — so the loss was permanent and silent. Truncation is now a
-  distinct, counted outcome with bounded retries, and the graph stages request a
-  low reasoning effort. **If you raised the graph token cap to work around this,
-  put it back:** a bigger cap makes each failure more expensive, not less likely.
-  Chunks already marked extracted do not self-heal — run
-  `vornikctl memory regraph --project <id>` to reclaim them.
-- **Fixed: email now tells you when a job finishes.** Previously it only did so
-  for tasks created a particular way, and never if the daemon restarted in
-  between. The notice no longer depends on a working model to compose itself.
-- **Fixed: the control-plane proposal diff.** A configuration edit could render
-  as a wall of deletions it was not making, because unrelated lines got
-  reformatted and the diff had no positional pairing. It also had a size limit
-  below the size of a real `config.yaml`, which made whole-file edits impossible
-  to apply.
-- **Fixed: adding an MCP server no longer needs a restart.** The change applied
-  and reloaded, but every consumer of the server list was still reading the
-  boot-time configuration — so the server did not exist and could not be
-  connected.
-- **Fixed: GDPR erasure reaches entangled records.** A memory chunk concerning
-  several people can now be redacted and re-embedded rather than reported as
-  deferred.
-- **Fixed:** cron mode ignored `autonomy.workflow_id`; MCP subscriptions pinned a
-  transport and broke stdio servers; host-filesystem MCP tools were not treated
-  as mutating; the "Test endpoint" button called an authentication-protected
-  server unreachable.
+## Earlier releases
+
+One line per release. Upgrade requirements are kept in full.
+
+### 2026.8.x
+
+- **2026.8.9** — Invalid step results are stored as readable diagnostics so executions continue past the cause, delegations and checkpoints survive a deleted ancestor task, and right-to-erasure now also removes derived knowledge-graph data.
+- **2026.8.8** — Telemetry's reporting URL changed (update egress rules), credential masking no longer breaks the output-field check that failed correctly-completed steps, and failed steps now carry the failure message and end of the log.
+- **2026.8.7** — A tester role must now list the cases it checked and a step with a verified output file no longer fails for an empty summary, both measured to eliminate most retries; a daemon with broken config now stops instead of serving.
+- **2026.8.6** — Bedrock roles with a declared output schema had been failing outright and now work; failed steps report their actual cause instead of a generic container-exit label; and agents are now shown the output rules they are judged against.
+- **2026.8.5** — Retried step-spend was silently overwriting prior attempts (unrecoverable historically; fixed going forward), cached prompt tokens are now counted on streamed calls, and a new adoption dashboard shows how much of the product each team has used.
+- **2026.8.4** — Agentic work on self-hosted open-weight models was non-functional because a `response_format` directive blocked tool calls and is now withheld when tools are offered; new optional `speed_aware_timeouts` and `default_step_timeout` settings.
+- **2026.8.3** — Bedrock embeddings never computed a query vector so semantic search was silently keyword-only; embedding spend now appears in rollups; and `vornikctl bench memory` is a new retrieval-quality benchmark.
+- **2026.8.2** — Slack direct messages were silently dropped when `channel_allowlist` was empty (affects 2026.8.0 and 2026.8.1) and are now exempt; the App Home tab now reflects actual channel access.
+- **2026.8.1** — Four read-only agent tools (`memory_search`, `skill_fetch`, `get_conversation_window`, `summarize_thread`) were usable by every role regardless of its tool allow-list; a finished task's result could be permanently lost from its chat of origin.
+- **2026.8.0** — Vornik can self-authenticate to remote MCP servers via OAuth 2.1, chat allowlists now fail closed by default, and a knowledge-graph extractor that silently discarded most of its input is fixed (run `vornikctl memory regraph` to reclaim marked chunks).
 
 !!! note "New configuration keys"
     `telegram.allow_unlisted_users`, Slack `allow_unlisted_senders`. Both default
     to the safe value. See the configuration reference.
 
----
+### 2026.7.x
 
-## 2026.7.7
-
-**The assistant can see.** Send it a photo and it answers about the photo. Two
-legal obligations also moved from documented to enforced-in-code.
-
-- **New: media perception.** Images sent over any channel are now understood —
-  answered directly when the dispatcher's model can see them, otherwise handed
-  to a dedicated vision agent. Audio is transcribed; video yields a transcript
-  plus sampled keyframes. Previously a photo produced an honest "I cannot see
-  this", because the pixels were being discarded before they reached the agent.
-- **Behaviour change: the dispatcher model is now `minimax-m3`.** It is
-  multimodal, tool-use tuned, and **cheaper** than the model it replaces. If you
-  pin Bedrock models on swarm roles, check `vornikctl doctor`'s
-  `model_route_coverage` after upgrading — the default provider route moved, and
-  Bedrock ids are now pinned explicitly rather than relying on it.
-- **New: `vornikctl erase artifact <id>`.** Performs a complete GDPR Article 17
-  erasure — the extraction rows, the memory chunks derived from them, and the
-  stored files. Deleting an artifact alone never removed any of that: derived
-  embeddings survived and merely lost the pointer back to their source. Shows
-  you exactly what will go and asks before doing it.
-- **New: AI-disclosure observability.** Serve and failure counts for the EU AI
-  Act Article 50 notice are now exported, so you can show the obligation is
-  being met and notice if it ever stops.
-- **Fixed: the disclosure record can no longer be pruned.** It is the evidence
-  that the notice was served; retention now refuses to touch it outright rather
-  than merely omitting it from a list.
-- **New: GDPR data-subject rights.** `vornikctl subject` registers a person,
-  records what is held about them, and produces an Article 15 access or
-  Article 20 portability report. Identity verification is required before
-  anything is produced — an export handed to whoever asked would disclose that
-  person's data to a stranger. Records that also concern other people are listed
-  but their content is withheld, under Article 15(4).
-- **New: breach ledger.** `vornikctl incident` records a personal-data breach and
-  walks the Article 33/34 obligations, with the 72-hour clock running from when
-  you became *aware* rather than when the breach happened. `vornikctl doctor`
-  warns while there is still a day left and errors once the window closes.
-- **New: retention guidance.** The sweeper still ships off — enabling it on
-  upgrade would delete data you never agreed to lose — but the doctor now tells
-  you plainly that the deployment keeps personal data indefinitely, and a
-  recommended profile ships alongside your config to copy from. It also warns
-  when the sweeper is on with no windows, and when the memory-chunk window is
-  missing: long-term memory is the longest-lived personal data in the system.
-- **Fixed: a model was billing at the wrong rate.** `kimi-k3` was available but
-  unpriced, so its spend accrued at the default rate — the most expensive model
-  on that route was the one being mis-costed.
-- **Fixed: AI disclosure now covers two surfaces that are not channels.** The
-  Article 50(1) notice was served on every chat channel, but two paths reach a
-  person without being a channel and so bypassed it: code-review comments the
-  platform posts on pull requests, and autonomous posts to a third-party API. Both
-  now carry the notice. Review comments refuse to post if the disclosure is
-  unavailable rather than publishing undisclosed, and a gateway provider can be
-  marked as a **publication surface** — a write whose content lacks the notice is
-  refused, with the exact wording to add, so the agent corrects itself and retries.
-  Publication surfaces get their own wording, because "replies in this
-  conversation" is untrue of something the system authored.
-- **New: `vornikctl subject erase`.** Carries out an Article 17 erasure for a
-  verified request. It shows the plan and asks before destroying anything, names
-  each record's treatment, and lists what is retained under an exemption with the
-  legal ground — a subject told "erased" while records remain has been misled.
-  The Article 17(1) ground you record decides what happens to records that also
-  concern other people: under most grounds they are preserved, but under 17(1)(d)
-  or (e) the controller has no discretion to retain and the record goes in full.
-  Uploaded files are removed properly — the derived text, the memory built from
-  it, the stored file, and the row.
-  **Known limitation, stated because it affects the response a subject receives:**
-  removing one person's data from a record shared with others is not yet automated.
-  Those records are identified and reported, and the request is deliberately left
-  open rather than closed as complete.
-- **Docs: the records of processing and the DPA template were re-verified against
-  the code.** Both had gone stale in the direction that understates the platform —
-  the processing record still said no data-subject identifier existed, and the DPA
-  told a prospective controller that erasure was available only per project or per
-  record. Corrected, along with what the platform still cannot warrant.
-
----
-
-## 2026.7.6
-
-**A conversation-channels release.** The bot now keeps its bearings in email and
-Slack. **Two behaviour changes are visible to your users immediately** — Slack
-reply placement and the shape of inbound email in the prompt. Read those two
-items before upgrading.
-
-- **Behaviour change: Slack replies to a top-level message now land in the
-  channel, not in a thread.** A message sent inside a thread still gets an
-  in-thread reply, so the bot mirrors wherever the person chose to speak.
-  Deliberate: Slack threads become unfindable within days, so people follow up
-  in the channel anyway, and burying every answer in a thread fought that.
-  Expect a slightly busier channel and far less "where did the bot say that?".
-- **Fixed: Slack conversations in a channel had no memory.** Every top-level
-  message opened a brand-new empty session, so the bot had no recollection of
-  earlier threads — or even of the message someone typed a minute earlier. All
-  top-level messages in a channel now share one continuous conversation;
-  threads keep their own.
-- **New: the bot can reach a channel's earlier threads.** On a channel-level
-  turn it sees a short digest of the channel's recent threads — opening
-  question, latest answer, turn count, date — and can pull any one of them in
-  full when the digest is not enough. Reads are scoped to the caller's own
-  workspace and channel. Requires PostgreSQL; on SQLite, digests cover only the
-  current process lifetime.
-- **Behaviour change: inbound email now carries a `From:` and `Subject:` header
-  on the model's turn.** If you pin project prompts to an exact inbound email
-  shape, re-check them. Other channels are unchanged.
-- **Fixed: the email subject line never reached the model.** An instruction
-  written only in the subject — "add these books to rag", with the books
-  attached and an empty body — was silently dropped, and the bot answered as if
-  no instruction had been given.
-- **Fixed: the bot read its own quoted replies as somebody else's words.** Mail
-  clients quote the message being replied to, and the whole trailer was handed
-  to the model, which had no idea what its own address was. Reply someone said
-  "4" to a numbered list and the bot asked them what they meant. Quoted
-  trailers are now trimmed (Gmail, Apple Mail, Thunderbird, Roundcube, Outlook
-  including localised forms, forwards, plain `>` quotes), and the bot is told
-  its own address and that quoted text from it is its own earlier turn.
-- **Fixed: multi-party email threads were unattributable.** With two people on a
-  thread the bot could not tell their messages apart. Each turn now records its
-  sender.
-- **Fixed: Slack retries no longer produce duplicate replies**, and Slack slash
-  commands are handled as first-class inbound.
-- **Fixed: inbound Slack and GitHub webhook events could reach a channel with no
-  receiver attached** and land in logs only, when observability initialisation
-  rebuilt the HTTP server after startup.
-- **Fixed on Community edition: operator profiles.** The operator memory page
-  renders and saves — its storage and UI route were not fully wired.
-- **New operator skills for the Claude Code / Codex companion:**
-  `configure-vornik` (find the tree the daemon actually reads, scaffold, then
-  validate → reload → confirm), `troubleshoot-vornik` (route by symptom to the
-  right diagnostic instead of improvising) and `report-problem` (file an
-  anonymised upstream issue, with review before submit). These were described
-  under 2026.7.5 but landed after that release was cut — 2026.7.6 is the first
-  release that actually contains them.
-
-Upgrading requires no configuration changes and adds no migrations. The Slack
-and email changes take effect when you restart the daemon.
-
----
-
-## 2026.7.5
-
-**A security-and-governance release.** Two full security audits — the ten-day
-contribution window and then the whole tree — found and fixed 37 issues, one
-critical in each pass. **Upgrading is recommended.** Alongside that, you get
-per-task spend caps, parallel workflow steps, and a safety net under automated
-cost tuning. This release also adds **anonymous usage telemetry, enabled by
-default** — read that item before upgrading.
-
-- **New: anonymous usage telemetry, on by default.** Vornik now reports two
-  lifecycle events — a successful install, and a project creation — to
-  `telemetry.vornik.io`. What goes out: the event type, the release version, an
-  OS and architecture category, which Vornik-owned path created the project, and
-  for a project the built-in template name (or `custom`) plus whether autonomy
-  was switched on. **Nothing else.** No installation identifier, hostname,
-  username, project name, path, repository, prompt, task content, config value,
-  key, endpoint, model name, or error text — and no hashes of any of those. A
-  build from source reports its version as `dev` rather than a commit, so the
-  version can't single out one machine. The service sees your IP while handling
-  the request, as any HTTPS service does; it is not part of the payload and is
-  never stored alongside an event, so reports can't be linked to each other or to
-  a machine. Only aggregate counts are retained.
-
-    Turn it off at install time by answering `n` to the prompt, or
-    `VORNIK_TELEMETRY=off` for an unattended install; afterwards set
-    `telemetry.enabled: false`. An explicit config choice always beats the
-    environment. Run `vornikctl telemetry sample` to print the effective setting
-    and the exact request that *would* be sent, without sending anything. Full
-    detail in the Telemetry and privacy reference.
-- **Security: upgrade recommended.** A ten-day contribution audit (21 findings)
-  plus a whole-tree trust-boundary pass (10 findings) plus a review of those
-  fixes (6 more) — all with root-cause fixes and regression tests. The two
-  critical ones: the **macOS installer** could execute arbitrary commands inside
-  the provisioned VM if an attacker controlled its environment variables, and
-  **archive extraction** could write outside its target directory by following a
-  planted symlink. Also closed: several safety gates that silently *allowed* work
-  when they couldn't read their own inputs (per-task API budgets reset by a DB
-  blip, task-cost forecasts proceeding while limits were blind, taint checks
-  reporting "off" when unwired), incomplete SSRF blocklists in both the daemon
-  and the scraper, unguarded browser subresource/WebSocket egress, and gateway
-  errors that leaked full request URLs into agent-visible messages.
-- **Cap what a single task can spend.** A new per-task budget stops one runaway
-  task from eating a project's allowance: the forecast at creation *refuses* a
-  task that would breach its cap, ~80% emits a warning, and 100% parks the task
-  for your decision (increase / reduce / abandon) instead of failing it. Spend
-  accumulates across resumes. Set `default_task_budget_usd` on the project (with
-  an optional per-task override and a `max_task_budget_usd` clamp) —
-  **0 or unset leaves everything as it was.**
-- **Workflows can fan out in parallel.** A new `parallel` step runs several
-  branches at once and joins them with `all`, `quorum:<n>`, or `best_effort`,
-  so a research or review stage no longer has to run serially. See
-  `configs/workflows/parallel-research.md` for a worked example.
-- **Memory search tells you how much to trust a result.** `memory_search` now
-  returns a trust verdict (high / medium / low) computed from stored confidence,
-  validation status and freshness — not from an opaque relevance score. A low
-  verdict automatically widens the search, and an aged result with no expiry is
-  capped at medium so a stale decision can't be presented as current.
-- **A safety net under automated cost tuning.** After a cost-tuning change is
-  applied, a canary compares quality and cost before and after, and
-  **automatically rolls the change back** if it regressed — then holds that knob
-  in a cooldown. With that guard in place you can optionally let *proven* changes
-  apply without a human: only for knobs with a track record of passed canaries,
-  and only when the last change there was made by a person. Off by default, and
-  scoped by an explicit per-swarm allow-list that means *none* when left empty.
-- **Autonomous writes can be gated on untrusted input.** vornik now records
-  whether each agent step consumed untrusted content and can hold a write whose
-  lineage traces back to it, with the contributing sources attached for your
-  review. Defaults to **advisory** (observe-only, no behavior change) so you can
-  watch it before switching a project to `enforce`.
-- **Report a problem without leaking your environment.** `vornikctl report`
-  builds an anonymized problem report and a prefilled GitHub issue for you to
-  review before submitting — secrets, emails, home paths, IPs and hostnames are
-  stripped at a single choke point. If it can't anonymize something, it refuses
-  rather than guessing. The installer offers the same thing when a fresh install
-  fails.
-- **Fewer first-run surprises.** A pass over a clean install fixed agent-LLM
-  connectivity, unwritable rootless workspaces, the daemon not surviving logout,
-  and Postgres not restarting after a reboot. The bundled demo project now ships
-  with autonomy **off** so a fresh install can't burn tokens unattended, and
-  `vornikctl doctor` gained checks for agent-LLM reachability, upstream API-key
-  validity (with a live probe), and agent-image UID mapping. Three doctor checks
-  also stopped reporting *correct* setups as problems — a router-based model
-  config, a secret externalized to a file rather than an env var, and a prompt
-  that tells an agent **not** to use a tool it was deliberately denied.
-- **Fixed: `vornikctl` couldn't read its own config on a fresh install.** Every
-  config-loading command failed with `database name is required` while the daemon
-  on the same host ran fine — the `${...}` placeholders in `config.yaml` are
-  filled from an environment file that the daemon got from systemd and the CLI
-  did not. The CLI now reads the same files (`vornik.env` and `secrets/env`
-  alongside the existing `secrets/*.env`), and if a placeholder genuinely has
-  nothing to resolve to, the error names the variables instead of reporting the
-  field as missing.
-- **Fixed: no models listed when a model-fallback map was configured.**
-  `vornikctl models list` printed nothing — and the models API returned an empty
-  list — for any deployment setting `chat.router.model_fallbacks`, because model
-  discovery was lost inside the provider chain. The same gap blanked the
-  Ollama-compatible `/api/tags` endpoint, the doctor's model-reachability check,
-  and the template model picker, and quietly turned per-provider readiness probes
-  into no-ops. The models API now returns `501` when nothing can enumerate models,
-  so an empty list means empty rather than broken.
-- **Fixed: an attached document could be reviewed from memory instead.** A
-  review delegated with a file attached could end up reviewing stale recalled
-  chunks rather than the attachment, because extracting the upload at submit time
-  suppressed staging the file for the agent. Workflows that declare they need
-  input artifacts now always get the raw file. The Claude Code and Codex
-  companion plugins ship as 0.13.0 and 0.11.0 with corrected guidance; installed
-  clients pick that up on their next marketplace update.
-- **New: your coding assistant can now configure and troubleshoot Vornik.** Both
-  companion plugins bundle an operator lifecycle triad — `configure-vornik`,
-  `troubleshoot-vornik`, and the existing `report-problem` — so setup, diagnosis,
-  and filing a bug each follow a guarded path over Vornik's own tooling instead
-  of being improvised. `configure-vornik` leads with the configuration traps that
-  fail silently: the config tree is found by a fallback chain rather than one
-  environment variable, `VORNIK_CONFIGS_DIR` is ignored without complaint unless
-  the directory already holds `projects/`, `swarms/`, and `workflows/`, and
-  editing the wrong copy of a config is the usual reason a correct change does
-  nothing. `troubleshoot-vornik` routes by symptom to the right diagnostic —
-  `doctor --offline` when the daemon is down, the failure-class playbook when a
-  task fails — and hands off to `report-problem` when it runs out of road.
-- **Behavior changes to note.** A `web_fetch` of a page with a blocked or
-  unresolvable third-party asset now **succeeds** and lists what it refused in a
-  new `denied_subresources` field, instead of failing the whole fetch. Inbound
-  email that fails delivery five polls in a row is dropped with an error log
-  rather than retried forever (this is what stops one bad message from blocking
-  your inbox). If you override the macOS installer's quickstart URL it must now
-  be `https://` and have a published `.sha256` alongside it.
-
-
----
-
-## 2026.7.4
-
-**A model-resilience release.** Your non-swarm LLM paths now fail over and
-recover automatically, tool budgets got safer defaults and clearer warnings, and
-model-health is fully visible in the doctor.
-
-- **Automatic model fallback for non-swarm paths.** A new
-  `chat.router.model_fallbacks` map (primary model → fallback model) lets the
-  chat/dispatcher/autonomy/wizard path and the built-in workers (narrator,
-  memory consolidation, titler, classifier, judge, …) fail over to a configured
-  twin when a model's circuit opens — and return to the primary automatically
-  when it recovers. Previously only swarm-role agents had this; an upstream
-  outage would stall the rest. Empty map = unchanged behavior.
-- **Model health is fully observable.** `vornik doctor` now reports **both**
-  circuit breakers — the chat-router breaker (`model_circuits`) and the
-  agent-container breaker (`agent_model_circuits`) — as separate checks, so an
-  open circuit is visible where you look. The troubleshooting guide explains the
-  two breakers and why an open agent circuit can leave the chat one showing
-  closed.
-- **Tool-budget refinements.** An operator-started task keeps its full tool
-  budget across a crash-and-resume (instead of dropping to the tighter
-  autonomous cap); startup warns when a role's tool-budget config won't take
-  effect (a warm role, or a role with no base limit); and the `standard`
-  complexity tier now downscales to 0.5× of a role's configured budget (the base
-  is reserved for genuinely complex work) — **note this behavior change** if you
-  relied on `standard` running at the full configured budget.
-- **Scheduled updates.** Reminders can now run a task on a cadence and deliver
-  its outcome, not just static text — ask the bot for a recurring digest or
-  weekly plan ("every Monday at 7, plan my week") and it will spawn the task
-  and message you the result when it's done. Pause and resume it from chat, the
-  CLI, or the web UI's reminders table, and edit a recurring reminder's cadence
-  or project in place from chat instead of recreating it. A slow run never
-  overlaps itself, and an interrupted daemon can't lose or double-send an
-  outcome. See [vornikctl reminders](../reference/vornikctl.md) and
-  [Observability](../guides/observability.md) for the new metrics.
-- **macOS install.** The one-liner `curl -fsSL https://get.vornik.io | bash`
-  now works on **macOS** as well as Linux — the same command; the script detects
-  your OS. On macOS it provisions a small Linux VM and runs the stack inside it,
-  so the zero-egress agent isolation is preserved exactly as on Linux. See
-  [Getting started](../getting-started/index.md#macos-inside-a-linux-vm).
-- **Control-plane: apply tuning changes without waiting for an idle window.** A
-  *value-only* workflow edit — e.g. reclaiming an over-provisioned step timeout —
-  now applies even while tasks that use the workflow are in flight; only
-  *structural* changes still wait for an idle window. Recommendations that go
-  stale (their config target changed since they were drafted) now **auto-retire**
-  instead of lingering as un-appliable, and the detector re-files a fresh one.
-- **Control-plane hub is tidier.** The proposals inbox hides closed
-  (rejected / rolled-back) rows by default and paginates; the skills browser
-  hides retired skills by default; system-retired rows carry a distinct label so
-  they don't read as human rejections; and long MCP/dispatcher tool descriptions
-  now collapse behind a toggle.
-- **Safer rollback.** Rolling back an applied change is refused when a later
-  change overwrote the same target (or it was hand-edited), so a rollback can no
-  longer silently clobber newer state — roll back the newer change first. The
-  hub hides the rollback button on a proposal that's been superseded.
-
-
----
-
-## 2026.7.3
-
-**A hardening + security release.** The headline is a full security pass over
-the code base, alongside autonomy workspace-state hygiene, a manifest-driven
-config installer, wizard composition convergence, an Ollama Cloud chat
-provider, and a broad fix batch.
-
-- **Security hardening.** A sweep of the static-analysis backlog: path handling
-  for user-supplied project/swarm/workflow identifiers is centralised on one
-  confinement primitive; e-mail envelope addresses reject control-character
-  injection; result pre-allocations are bounded; a webhook echo is HTML-escaped;
-  admin redirects are constrained to same-origin; and session/chat cookies set
-  `Secure` automatically when served over HTTPS (without breaking plain-HTTP
-  deployments). Additional trust-scope and config-path hardening also landed.
-- **Autonomy workspace hygiene.** Failed/cancelled tasks no longer strand
-  tracked-file residue in the shared workspace clone; the prelude auto-commit
-  now attributes honestly (`backlog: marker checkpoint` / `rescue: stranded
-  tracked changes`) instead of blaming the next task. **Scripts grepping the
-  old `auto-commit: workspace-root prelude` message must update.** A new
-  `vornik_executor_residue_discard_total{project}` metric flags workspace
-  contract violations.
-- **RAG-ingest quality gating.** A task's output is ingested into memory only
-  once the producing task succeeds, so failed runs no longer deposit garbage;
-  `vornikctl memory purge-producer-failed` retro-cleans older residue. Backlog
-  items are marked done at the success terminal, not at dispatch.
-- **Agent LLM circuit breaker.** Per-agent model calls now get the same
-  circuit-breaker / fast fail-over as the chat router.
-- **Manifest-driven config tree.** A single manifest drives what installs into
-  the deployed config tree, with drift-checking across all deployable subtrees.
-- **Ollama Cloud provider.** A new chat sub-provider for Ollama's hosted
-  open-weight models, separate from the local Ollama route; pricing refreshed.
-- **Wizard convergence.** The project wizard normalises and repairs
-  compositions (dropping undeclared params, defaulting required ones) and
-  retains the last good build.
-- **Quality-of-life.** Progressive-disclosure skill injection; friendlier
-  internal-role labels on the spend dashboards; the Fix-It Doctor link now works
-  on every deployment; an inbox mobile pass; and a turnkey in-place update
-  script for Community quickstart installs.
-
-
----
-
-## 2026.7.2
-
-**The operator-experience release: describe an automation in plain language,
-watch tasks narrate themselves, and repair failures from a guided chat.** This
-cycle is built for operators who never want to touch YAML — plus a
-control-plane copilot, a learning loop for knowledge skills, and an
-autonomous backlog-to-PR pipeline for those who do.
-
-- **Automation Composer.** Describe what you want automated in chat and the
-  composer assembles a validated project — roles, workflow, schedule —
-  grounded in your connected MCP servers and models, with a Plan/Graph/YAML
-  preview before anything is committed. Ships **disabled by default**
-  (`composer.enabled`) while quality gates soak; the classic wizard remains
-  the default.
-- **Narrated execution.** Running tasks tell their story on the task pages,
-  and can push progress to the chat channel that started them (opt-in per
-  project). Completion is deliverable-first: output artifacts appear as cards
-  you can send straight to chat.
-- **Fix-It Doctor.** Failed tasks open into a repair chat that gathers the
-  failure context and proposes fixes; every applied action is deny-by-default,
-  audited, and rollback-able.
-- **"My requests" home.** A new Outcome Inbox groups your work into request
-  cards with status rollups and inline actions for anything awaiting you — and
-  it is now the default home page for non-admin users.
-- **Guided Integrations Hub** (Community). Set up Telegram, Slack, email,
-  GitHub App, and MCP integrations through guided forms that **probe the
-  credentials before saving**, with recheck and assisted troubleshooting.
-- **Control-plane copilot** (Enterprise console). Detectors watch for tunable
-  timeouts, failure-rate regressions, and self-healing incidents, and raise
-  **proposals** you can inspect, apply (gated, atomic, rollback-able — live
-  where non-disruptive), or withdraw, from the web console or
-  `vornikctl control-plane`. A diagnose-from-logs engine turns incidents into
-  ready-to-apply config changes.
-- **Knowledge skills learn.** Skills gathered from past work now carry usage
-  signals and mature (or decay) automatically, with distilled new-skill
-  proposals reviewed from Telegram, Slack, or the web inbox — and skills can
-  be promoted to **global**, applying across every project.
-- **Autonomous dev loop.** Agents can deposit work items into a per-project
-  backlog, and autonomy drives open items to **draft pull requests** through
-  an adversarial review loop; failed items are blocked visibly instead of
-  silently skipped.
-- **Model-health circuit breaker.** Unhealthy upstream models trip a breaker
-  and tasks fail over immediately instead of grinding through the retry
-  ladder. **On by default** with conservative thresholds; tune via
-  `chat.router.health.*`.
-- **Credential carryover.** Tools that mint credentials during a task can have
-  them captured (opt-in per tool) and surfaced to you at completion —
-  redaction stays fail-closed throughout.
-- **Telegram task control.** `/tasks`, `/status`, `/cancel`, `/retry`, plus
-  button-driven recovery steering and tap-to-copy command rendering.
-- **Community contribution: AWS Bedrock embeddings.** Native Bedrock embedding
-  support for memory/RAG — the first inbound community contribution.
-- **Quality of life.** Config saves never hang (invalid saves are rejected;
-  restart-required changes show a banner), a unified Artifacts panel, paused
-  tasks can be cancelled, per-MCP-server timeouts, and mobile layout fixes.
-
-!!! note "Restart to pick up new behavior"
-    The model-health circuit breaker and the new detectors start with the
-    daemon; restart after upgrading. All new configuration keys are additive.
-
----
-
-## 2026.7.1
-
-**A polish release: leaner large tool outputs, an end-to-end project-creation
-experience, and clearer edition boundaries.** This follow-up to 2026.7.0 keeps
-big tool payloads out of the model's context, finishes the guided
-project-creation flow, and tightens the Community/Enterprise line.
-
-- **Large tool outputs stay out of the context window.** The daemon can now hold
-  a large MCP tool result and hand the model a compact handle instead of the
-  full payload, and the per-result size cap is configurable (default raised to
-  256 KiB). A new image-encoding helper fetches and downscales an image to an
-  inline data URI, hardened against SSRF.
-- **End-to-end project creation.** Project templates gained list/multiselect
-  parameters, dynamic option sources, and conflict-free ID suggestions, with new
-  ready-made purpose templates (code reviewer, tool assistant, report pipeline,
-  docs↔RAG sync). A per-project **readiness page** (`/ui/projects/{id}/setup`)
-  runs config, schedule, secrets, MCP, model, and smoke checks and flags what is
-  still incomplete, and the conversational **project wizard** now composes a
-  project turn by turn from your live MCP servers and models, showing a summary
-  before it commits.
-- **Clearer edition boundaries.** Community Edition returns a typed
-  "Enterprise-only" response on Enterprise-gated admin routes, companion API-key
-  minting is available in Community, and the Memory Firewall and project
-  configuration are now Community features (cross-project context remains
-  Enterprise).
-- **Security & correctness.** Fixes for a cross-project access-control gap in the
-  UI, a server-side request-forgery path, and several query-efficiency
-  improvements on hot paths.
-- **Onboarding fixes.** The setup flow now correctly recognizes router- and
-  CLI-based chat providers as configured, clearing spurious "not configured" and
-  session-authentication errors on the setup and wizard pages.
-
-!!! note "Restart to pick up new behavior"
-    The configurable tool-result cap and media-handle behavior take effect after
-    a daemon restart.
-
----
-
-## 2026.7.0
-
-**A renamed, edition-aware platform with an AI-first install and a hardened
-memory/chat core.** This release completes the rename to **vornik**, introduces
-a clean Community/Enterprise edition seam, publishes the docs site, and lands a
-broad reliability pass across memory/RAG, chat providers, onboarding, and
-deployment.
+- **2026.7.7** — The assistant can now see sent images, hear transcribed audio, and read video keyframes; GDPR Article 17 erasure and Article 15/20 data-subject tooling landed; and AI-disclosure notice now covers pull-request comments and third-party API posts.
+- **2026.7.6** — Slack replies to top-level messages now land in the channel rather than a thread, channel-level Slack conversations now share one memory, and quoted email trailers are trimmed so the bot stops reading its own words as someone else's.
+- **2026.7.5** — A security release from two audits, whose critical fixes closed command execution in the macOS installer and a symlink escape in archive extraction; anonymous usage telemetry is now on by default; and per-task spend caps plus parallel workflow steps.
+- **2026.7.4** — Non-swarm LLM paths now fail over and recover automatically via `chat.router.model_fallbacks`; tool-budget refinements including a `standard` tier downscale; and reminders can run a task on a cadence and deliver the outcome.
+- **2026.7.3** — A security hardening pass (path confinement, cookie `Secure`, bounded allocations), autonomy workspace-state hygiene with an updated auto-commit message, and an agent LLM circuit breaker matching the chat router's.
+- **2026.7.2** — Automation Composer turns a plain-language description into a validated project (disabled by default), narrated execution shows task progress, and Fix-It Doctor opens failed tasks into a guided repair chat.
+- **2026.7.1** — Large tool outputs stay out of the context window via compact handles, end-to-end project creation with a readiness page, and clearer Community/Enterprise edition boundaries including Memory Firewall in Community.
+- **2026.7.0** — The product was renamed `swarmd` → **vornik** and `swarmctl` → **vornikctl** across commands, paths, env vars, and dashboards; edition-aware Community/Enterprise builds; and public docs at docs.vornik.io.
 
 !!! warning "This release renames the product"
     `swarmd` is now **vornik** and `swarmctl` is now **vornikctl**. Service
@@ -3071,119 +2652,13 @@ deployment.
     changed. Review your automation for the `swarmd` → `vornik` migration before
     upgrading, and always take a backup first.
 
-- **Vornik rename, end to end.** Source, commands, environment variables,
-  metrics, deployment files, Helm chart, Grafana dashboards, configs, and docs
-  moved from `swarmd` to `vornik`; `swarmctl` is now `vornikctl`.
-- **Edition-aware builds.** The codebase now has a clean Community/Enterprise
-  seam: every feature carries a CE/EE tag (shown in the docs and enforced in
-  code), and the Community Edition builds and ships independently under
-  AGPL-3.0.
-- **Published documentation.** Public docs are now served at
-  <https://docs.vornik.io>, with per-page edition markers and expanded
-  onboarding, architecture, configuration, CLI, security, and support material.
-- **AI-first install.** `AGENTS.md` is now a runbook a coding agent can execute
-  and verify end to end (install → LLM key → first task → its own persistent
-  memory); the getting-started path makes the AI-assisted install the preferred
-  route (short link: `agents.vornik.io`).
-- **Sharper memory recall.** Multi-term recall now uses a strict full-text query
-  with a relaxed fallback and all-term matches ranked first; a reranker-gated,
-  round-isolated retrieval path improves context assembly, scoped to
-  non-interactive use so interactive recall stays fast. By-id correction is now
-  the preferred way to fix a stale or wrong memory.
-- **More resilient chat.** Long conversations are summarized instead of dropped
-  when context overflows, chat providers share a tuned HTTP transport, and
-  persistent-timeout handling engages provider fallback faster.
-- **Companion & MCP.** A first-party Codex companion plugin joins the Claude
-  companion; companion memory gained a `memory_correct` tool (including a
-  surgical by-id refute mode) plus input-validation and reliability hardening.
-- **Deployment quickstarts.** A one-command, pgvector-backed local playground
-  and a hardened installer (clean re-checkout, safe cleanup, literal DB port);
-  PostgreSQL + pgvector is the recommended backend for memory/RAG.
-- **Fixes & hardening.** Rate-limit minute/hour buckets no longer cross-sum;
-  no-JavaScript pages render one consistent color scheme; Postgres integration
-  tests honor `POSTGRES_PORT`.
-
 !!! note "Restart required"
     Restart the daemon after upgrading to pick up the new behavior.
 
-Enterprise-edition capabilities (packaging and installers, SSO and admin
-surfaces, clustering, and more) also advanced this release — see the
-[Editions matrix](../editions.md) for what's included where.
+### 2026.6.x
 
----
-
-## 2026.6.1
-
-**A more visual control plane, safer to expose and support.** This release
-consolidates a large body of work: the web UI's capability tracks, a
-security/operability hardening pass, git-over-HTTPS workspace access, and
-content provenance.
-
-- **Edit workflows as a graph.** A new graph view (`/ui/workflows/{id}/graph`)
-  lets you wire steps visually — add/delete nodes, draw success/fail/gate edges,
-  set the entrypoint — with every change validated and hot-reloaded like the
-  form and YAML editors.
-- **Bulk actions & clone.** Multi-select on the Tasks list (bulk Cancel / Retry /
-  Close) and the Executions list (bulk Cancel); clone a workflow to a new id from
-  the editor.
-- **Insight area.** A **Trends** page (daily throughput, success rate, judge
-  abstain rate, recovery, and LLM spend) and a **Tool budget** page (actual
-  tool-use vs the configured complexity-tier budget, now with advisory
-  over/under-provisioning flags).
-- **Clone and push to a project workspace over HTTPS.** A project's git-backed
-  workspace can be cloned and pushed to with a per-project API key — no shell on
-  the box. Exposure is opt-in per project (`Project.Git.Enabled` +
-  `server.public_base_url`); push requires a key issued with `--allow-push`
-  (keys are read-only by default) and is blocked while a task holds the
-  workspace, so a push can't race a running job. Manage it from the new project
-  Git-access panel or `vornikctl key --allow-push`.
-- **Centralised log forwarding.** A new subsystem ships vornik's structured logs
-  and audit events to an external HTTP webhook (bearer-token) and/or syslog (TLS
-  with a pinned CA). Forwarding is scope-filtered, best-effort, and never blocks
-  the daemon; an empty or ship-all scope is refused.
-- **Run safely behind a reverse proxy.** Trusted-proxy real-client-IP resolution
-  (`server.real_ip`) recovers the true client IP from a configurable header —
-  trusted only when the immediate peer is in your `trusted_proxies` allowlist —
-  so brute-force lockout, rate limiting, and audit no longer collapse every user
-  to the proxy's address. Off by default.
-- **One-command support bundle.** `vornikctl support-report --task <id>` (or
-  `--since <window>`) produces a single, **redacted-by-default**, self-contained
-  diagnostic archive — lifecycle, audit, LLM usage, conversation, container and
-  daemon logs, redacted config, a doctor diagnosis, and version/health — so you
-  no longer hand-assemble evidence for a support thread.
-- **Smarter content redaction.** The output guard now knows whether scanned
-  content is first-party (produced by vornik) or third-party, so vornik's own
-  output is no longer over-redacted while untrusted content and secrets still
-  are.
-- **Structured recovery steering.** When a step fails, the lead can be offered a
-  typed recovery decision — re-route the workflow, fall back to a role's
-  configured model, retry, or skip — and successful recoveries are recorded so
-  they surface as a recovery trend.
-- **Outbound email attachments.** The email channel now sends replies as
-  `multipart/mixed`, delivering `send_artifact` outputs as attachments on the
-  threaded reply. File delivery is now channel-agnostic and shared with Telegram.
-- **More `vornikctl doctor` checks.** `model_health` (flags a model that is
-  failing or returning degenerate output and recommends its fallback),
-  `config_crlf` (detects — and with `--fix` repairs — CRLF line endings that
-  cause phantom config drift), `model_route_coverage` (every role's model
-  resolves to a route and has pricing), and `scraper_profile_freshness` (warns
-  on stale scraper login sessions).
-- **Clustering / fleet visibility.** Lightweight multi-node awareness:
-  heartbeat/relay logging and metrics, a probe library driven by an
-  expected-endpoints config, and an opt-in, leader-gated endpoint monitor with
-  operator alerting.
-
-Notable fixes: a **graceful restart no longer fails in-flight work** and
-**bounded graceful shutdown** force-closes stuck connections so a long-lived
-chat request can no longer hang a restart into a `SIGABRT` (pair with
-`TimeoutStopSec=90s`); the Bedrock adapter recovers SDK panics on
-cancel-during-shutdown; document extraction is hardened against zip-bombs, XXE,
-and OCR hangs; schema-config saves normalise CRLF→LF (with a CI gate) to stop
-phantom config drift; the multi-step "file does not exist" artifact-handoff bug
-is resolved with store-backed staging and an end-to-end regression guard; and
-first-eval-after-reload chat no longer emits a spurious "LLM error". Under the
-hood, recovery exits are now recorded and several previously design-only
-observability metrics are emitted.
+- **2026.6.1** — Workflows can be edited as a graph, project workspaces can be cloned and pushed over HTTPS with a per-project key, and `vornikctl support-report` produces a redacted self-contained diagnostic archive.
+- **2026.6.0** — Vornik can plan a labeled issue, make the change across subtasks, review its own diff, and open a draft pull request; self-improving workflows replay-test proposed repairs; and GitHub login for the web UI.
 
 !!! note "Upgrade"
     Restart the daemon to pick up the new behavior. Add `TimeoutStopSec=90s` to
@@ -3192,216 +2667,20 @@ observability metrics are emitted.
     are all opt-in — existing deployments are unaffected until you configure
     them.
 
----
+### 2026.5.x
 
-## 2026.6.0
+- **2026.5.9** — The conversational project-setup wizard now works end-to-end and can be pinned to its own model; new installs default to zero-egress agent network isolation; and prebuilt binaries plus RPM/DEB packages ship per release.
+- **2026.5.8** — Counterfactual replay re-runs a past task with one variable changed for side-by-side comparison, and memory items now carry policy metadata with advisory enforcement logging every retrieval by default.
+- **2026.5.7** — A new landing page with activity tiles, a project template gallery, per-project home pages, plain-language failure banners, and retry-from-the-failed-step in the UI.
+- **2026.5.6** — Runaway-loop protection caps adaptive routing depth, and adaptive routing no longer silently falls back to the default workflow but fails loudly instead.
+- **2026.5.5** — Recall improved via richer embedding context, reranking, diversification, and TTL enforcement; new `vornikctl memory` commands reclassify, reembed, and list prune candidates.
+- **2026.5.4** — Native AWS Bedrock support for chat and agents, faster interrupted-task recovery, and dashboards surfacing which models produce malformed output.
+- **2026.5.3** — Declarative output schemas for agent roles eliminate a class of wrong-shape failures, with `vornikctl doctor` flagging mismatches; security hardening across container isolation and secret detection.
+- **2026.5.2** — Failed tasks include a plain-language post-mortem explainer; web UI subtree now requires authentication and a cross-project access path was closed.
+- **2026.5.1** — Cancelled tasks now show their accumulated LLM cost, and autonomy's duplicate-suppression matches by topic similarity rather than exact text.
+- **2026.5.0** — A hallucination-detection pipeline flags unsupported claims across agents, chat, and autonomy; multimodal image input through chat; and secret redaction at every persistence point.
 
-**Fix GitHub issues end-to-end.** Label an issue (or open a pull request) and
-vornik can plan it, make the change across subtasks, review its own diff, and
-open a **draft pull request** for you to approve — hands-off, with the daemon
-doing the branch push and the review posting. Every automated PR is a draft, so
-nothing merges without you.
-
-Other highlights:
-
-- **Self-improving workflows.** When a workflow starts failing or getting
-  expensive, vornik can propose a repair, **replay-test it against real past
-  runs**, score it against the current version, and apply it only when you
-  approve — nothing changes on its own.
-- **The swarm learns from itself.** A new continuous-learning layer mines
-  reusable, confidence-scored fixes from past runs and surfaces them as advice
-  on failed tasks and to the planner. Advisory and opt-in.
-- **Refreshed control-plane UI.** A new translucent design with icon-rail
-  navigation, first-class Swarms / Workflows / Executions list pages, and
-  tidier per-page layouts.
-- **Feature Doctor.** A new command tells you which optional features are
-  enabled, ready, or blocked — and can turn one on for you, with a backup,
-  validation, and automatic rollback if anything is wrong.
-- **Sign in with GitHub.** Optional GitHub login for the web UI with per-project
-  access scoping, plus the groundwork for single sign-on.
-- **More model choices.** Free-tier hosted models with automatic fallback, and
-  per-role tool budgets that scale to task complexity so simple tasks stay cheap
-  and hard ones get more room to work.
-- **Public documentation** is now live at docs.vornik.io.
-- **Safer web fetching.** The research browser follows shortened links (e.g.
-  map short-URLs) to their real destination before applying your host
-  allowlist, and refuses to reach private or loopback network addresses.
-- **Security & safety hardening.** A broad audit-remediation pass across access
-  controls and memory-access policy.
-
-!!! note "Restart after upgrade"
-    A few of these are read from the daemon config at startup, so restart the
-    daemon after upgrading to pick them up.
-
----
-
-## 2026.5.9
-
-The conversational **project setup wizard** now works end-to-end: start a new
-project from a guided chat, resume or cancel a draft, and have it created and
-running just like a template-based project. You can pin the wizard to its own
-model independently of your default chat model.
-
-Other highlights:
-
-- **Official packages and binaries.** Releases now ship prebuilt `vornik` and
-  `vornikctl` binaries (Linux amd64 and arm64) plus RPM and DEB packages,
-  attached to each GitHub release.
-- **Stronger default network isolation for agents.** New installs default to a
-  zero-egress agent network: agents reach vornik for model and tool access but
-  cannot reach the internet. Roles that genuinely need outbound access can opt
-  in per role.
-- **More resilient chat under rate limits.** The model client now honors
-  rate-limit retry hints and backs off automatically instead of failing the
-  request.
-- **Chat history loads on page open.** The web chat view now shows your prior
-  conversation immediately instead of starting blank.
-
-!!! note "Structured output is model-dependent"
-    Features that need strictly structured model output (such as the wizard)
-    are most reliable on models that honor structured-output requests. The
-    wizard tolerates models that reply in prose, so it stays usable regardless.
-
-## 2026.5.8
-
-Two operator-facing capabilities landed alongside a large stability pass:
-
-- **Counterfactual replay.** Re-run any past task with a single variable
-  changed — a different model or a different prompt — and compare the original
-  and the new run side by side, including cost, latency, and per-step
-  differences. Available from the command line and the web UI.
-- **Memory policy controls.** Every memory item now carries policy metadata
-  (sensitivity, provenance, expiry, and access scope), and every retrieval is
-  recorded for audit. Three modes let you choose how strictly policies are
-  enforced: off, advisory (the default — nothing is blocked, but everything is
-  logged), or enforce. The default is safe to adopt without changing existing
-  workflows.
-
-This release also closed a broad set of reliability and security fixes across
-task execution, scheduling, memory, and inbound channels.
-
-## 2026.5.7
-
-A large **user-experience release**.
-
-- **New landing page** with at-a-glance tiles (active tasks, active chats,
-  today's spend, next autonomy run) and a cross-project activity feed.
-- **Project template gallery.** Browse a catalog of starter projects in the web
-  UI (or via `vornikctl init project --template <slug>`) and create one from a
-  simple form, filterable by domain.
-- **Per-project home page** with a readable summary card, autonomy status, and
-  an effective data-retention panel that shows your actual pruning windows.
-- **Friendlier error messages.** Failed tasks now show a plain-language banner
-  explaining what went wrong, with the technical detail tucked underneath.
-- **Retry a failed task from the step that failed**, directly in the UI.
-- **Smarter memory recall**, including optional date-range filtering ("what did
-  we discuss last week") and a resilience cascade so memory search keeps working
-  even if part of the search backend hiccups.
-- **High-availability friendliness.** If you run more than one vornik instance,
-  polling channels now coordinate so a single inbound message is handled once,
-  not duplicated.
-
-!!! note "Optional new settings"
-    The client request timeout is now configurable for long-running commands,
-    and projects gain optional `description` and retention settings that surface
-    on the new home page.
-
-## 2026.5.6
-
-A guardrails and memory-quality hardening release.
-
-- **Runaway-loop protection for adaptive workflows.** A misconfigured router
-  can no longer spawn an endless chain of child tasks; routing now caps its
-  depth and fails clearly instead of looping. If a workflow previously relied on
-  a silent fallback, review your candidate-workflow list (see the behavior note
-  below).
-- **More reliable memory classification**, including an optional background pass
-  that keeps newly ingested memory labeled without manual cleanup.
-
-!!! warning "Behavior change"
-    Adaptive routing no longer silently falls back to your project's default
-    workflow when a step picks an out-of-list choice — it now fails loudly. If
-    you depended on the old fallback, tighten your candidate list or disable
-    strict mode. Restart the daemon to pick up the new behavior.
-
-## 2026.5.5
-
-A memory-quality release focused on retrieval precision.
-
-- **Better recall** through a set of ranking improvements (richer embedding
-  context, reranking, result diversification, and time-to-live enforcement) that
-  surface more relevant memory without any change to how you use it.
-- **New memory maintenance commands**: reclassify, re-embed (for model
-  upgrades), and list prune candidates.
-
-```bash
-vornikctl memory reclassify --project <project>
-vornikctl memory reembed     --project <project>
-vornikctl memory prune-candidates --project <project>
-```
-
-## 2026.5.4
-
-A reliability release.
-
-- **Native AWS Bedrock support** for chat and agents, removing a translation
-  hop for Bedrock-hosted models.
-- **Sturdier scheduling and recovery.** Interrupted tasks recover faster,
-  models that get stuck producing the wrong output shape are stopped instead of
-  burning budget, and lease handling under heavy load is more robust.
-- **Model-quality visibility.** New dashboards surface which models are
-  producing malformed output and how often retries recover, so you can spot a
-  poorly behaving model and swap it.
-
-!!! note "Upgrade"
-    Restart the daemon after upgrading. If you build the agent image yourself,
-    rebuild it to pick up this release's runtime improvements.
-
-## 2026.5.3
-
-A reliability and output-correctness release.
-
-- **Declarative output schemas.** Agent roles can declare the exact shape of
-  their output in one place, eliminating a whole class of "valid output, wrong
-  shape" failures. `vornikctl doctor` flags mismatches before they cause a
-  failed run.
-- **Security hardening** across container isolation, secret detection, webhook
-  authentication, and API input validation.
-
-!!! note "Upgrade"
-    Restart the daemon to activate the new schema enforcement.
-
-## 2026.5.2
-
-A reliability and observability release.
-
-- **Per-task post-mortem explainer.** Failed tasks now include a plain-language
-  paragraph explaining why they failed, alongside the step outcomes and audit
-  trail.
-- **Security fixes**, including requiring authentication on the web UI subtree
-  and closing a cross-project access path.
-
-## 2026.5.1
-
-Cancelled tasks now show their accumulated LLM cost in the UI, and autonomy's
-duplicate-suppression now matches by topic similarity rather than exact text.
-
-## 2026.5.0
-
-The **trustworthy-output** release. A multi-phase hallucination-detection
-pipeline now runs across agents, chat replies, and the autonomy loop, flagging
-unsupported claims (a quoted URL that was never fetched, a referenced file that
-was never produced, a numeric claim with no source) and either failing the step
-for retry or surfacing the finding in the UI.
-
-Also in this release: multimodal task input (image uploads through chat), an
-additional first-class chat provider, secret detection and redaction at every
-persistence point, and a larger operator UI (spend deep-dive, live tool-call
-audit stream, routing-decision panel).
-
----
-
-## Earlier releases (2026.4.x)
+### 2026.4.x
 
 The 2026.4 series built vornik from its first stable release into a capable
 multi-agent platform. Notable user-facing milestones:

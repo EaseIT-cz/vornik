@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -425,7 +426,10 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	exp, ids, blob, hash, err := assembleSubjectExport(ctx, repo, req)
+	// The report states recipients and retention windows from the
+	// configuration (Art 15(1)(c), (d); GDPR design §4.22, #470).
+	cfg := loadExportConfig(config.Load, os.Stderr)
+	exp, ids, blob, hash, err := assembleSubjectExport(ctx, repo, req, cfg)
 	if err != nil {
 		return err
 	}
@@ -451,12 +455,28 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+// loadExportConfig loads the configuration for the report's recipients and
+// retention windows, best effort: a failure must not block the right of
+// access, so it is reported to w and nil is returned, which the report states
+// as unknown (review 6a1e, GDPR design §4.22).
+func loadExportConfig(load func() (*config.Config, string, error), w io.Writer) *config.Config {
+	cfg, _, err := load()
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: config not read (%v); the report states recipients and retention as unknown\n", err)
+		return nil
+	}
+	return cfg
+}
+
 // assembleSubjectExport builds the Art 15 / Art 20 report for a request and
 // returns it with the subject's identifiers, the serialised artefact and its
 // hash. It writes nothing: the caller emits the artefact and actions the
 // request. Split from runSubjectExport so the artefact the subject receives is
 // testable on a real store (GDPR design §4.20, #115).
-func assembleSubjectExport(ctx context.Context, repo *subjectstore.Repository, req datasubject.Request) (
+//
+// cfg supplies the recipients and retention windows (§4.22, #470); nil leaves
+// them stated as unknown, never empty.
+func assembleSubjectExport(ctx context.Context, repo *subjectstore.Repository, req datasubject.Request, cfg *config.Config) (
 	exp *datasubject.Export, ids []datasubject.Identifier, blob []byte, hash string, err error) {
 	links, err := repo.ListLinks(ctx, req.SubjectID)
 	if err != nil {
@@ -484,6 +504,10 @@ func assembleSubjectExport(ctx context.Context, repo *subjectstore.Repository, r
 		return nil, nil, nil, "", err
 	}
 	exp.SetIdentifiers(ids)
+	if cfg != nil {
+		exp.SetRecipients(subjectRecipients(cfg))
+		exp.SetRetention(subjectRetention(cfg))
+	}
 
 	// Belt: assert the Art 15(4) property on the finished artefact before it
 	// leaves the process. The leak is silent and the report looks plausible

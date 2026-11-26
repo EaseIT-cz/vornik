@@ -14,6 +14,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "reviewer"
+    modelTier: "complex"
     description: "Read-only code, doc, and test-coverage reviewer. Produces structured critiques in artifacts/out/review.md."
     model: "{{.defaultModel}}"
     runtime:
@@ -30,6 +31,7 @@ roles:
         - "glob"
 
   - name: "analyst"
+    modelTier: "complex"
     description: "Data validation and research gathering. Reads inputs, queries memory, emits structured findings."
     model: "{{.defaultModel}}"
     runtime:
@@ -47,6 +49,7 @@ roles:
         - "memory_search"
 
   - name: "summarizer"
+    modelTier: "complex"
     description: "Distills long inputs into operator-readable summaries. The sole writer role in companion swarms."
     model: "{{.defaultModel}}"
     runtime:
@@ -62,6 +65,7 @@ roles:
         - "read_many_files"
 
   - name: "rag-ingester"
+    modelTier: "standard"
     description: "Bulk async document ingest: copies each source in context.inputArtifacts (staged at artifacts/in/<name>) to artifacts/out/ for the executor's ingestOutputArtifacts hook to commit into project RAG memory. Bypasses the 64 KiB companion remember() per-call cap."
     aliases:
       - "ingester"

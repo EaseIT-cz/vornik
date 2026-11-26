@@ -115,6 +115,10 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 			Options:        c.contextOptions(),
 			ResponseFormat: ResponseFormatStructFromContext(ctx),
 			PromptCacheKey: PromptCacheKeyFromContext(ctx),
+			// GitHub #869: the stream path builds its own request, so it
+			// carries the level here too, or streaming would drop it.
+			ReasoningEffort:    c.streamReasoningEffort(ctx),
+			ChatTemplateKwargs: c.reasoningTemplateKwargs(ctx),
 		},
 		Stream:        true,
 		StreamOptions: streamOptions{IncludeUsage: true},
@@ -188,11 +192,19 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 		if json.Unmarshal(respBody, &apiErr) == nil && apiErr.Error != nil {
 			msg = apiErr.Error.Message
 		}
-		return nil, &GatewayError{
+		gerr := &GatewayError{
 			Status:  resp.StatusCode,
 			Message: msg,
 			Body:    truncateLogString(string(respBody), 512),
 		}
+		// A model that refuses the reasoning field (GitHub #869): remember
+		// it and stream once more, which then sends no field, so this
+		// cannot loop. The 400 arrives before any text reaches onText.
+		if req.ReasoningEffort != "" && isReasoningRefusal(gerr) {
+			rememberReasoningRefusal(c.endpoint, c.model)
+			return c.CompleteWithToolsStream(ctx, messages, tools, onText)
+		}
+		return nil, gerr
 	}
 
 	// If the server returned a regular JSON response instead of SSE
@@ -416,4 +428,15 @@ func readLimited(r interface{ Read([]byte) (int, error) }, limit int) ([]byte, e
 	buf := make([]byte, limit)
 	n, err := r.Read(buf)
 	return buf[:n], err
+}
+
+// streamReasoningEffort is the stream request's reasoning field: the level,
+// unless this model has refused it. A refusal on this path is remembered and
+// the stream retried once, as completeWithReasoning does for the non-stream
+// path.
+func (c *Client) streamReasoningEffort(ctx context.Context) string {
+	if reasoningRefused(c.endpoint, c.model) {
+		return ""
+	}
+	return openAIReasoningEffort(ctx)
 }

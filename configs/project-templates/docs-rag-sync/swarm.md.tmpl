@@ -4,6 +4,7 @@ displayName: "{{.displayName}} swarm"
 
 roles:
   - name: "lead"
+    modelTier: "complex"
     description: "Handles recovery checkpoints when a fetch or distill step fails."
     model: "{{.llmModel}}"
     runtime:
@@ -19,6 +20,7 @@ roles:
         - "memory_search"
 
   - name: "fetcher"
+    modelTier: "standard"
     description: "Fetches new/changed documentation into artifacts/out/fetched-docs.md."
     model: "{{.llmModel}}"
     runtime:
@@ -37,6 +39,7 @@ roles:
         - "memory_search"
 
   - name: "distiller"
+    modelTier: "complex"
     description: "Distills fetched docs into memory-ready sections and an ingest summary."
     model: "{{.llmModel}}"
     runtime:

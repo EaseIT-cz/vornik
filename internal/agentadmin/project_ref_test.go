@@ -130,8 +130,13 @@ func TestProjectReads_AreNamespaceGuarded(t *testing.T) {
 		"createProject": "composes the id", "defineSwarm": "composes the id", "defineWorkflow": "composes the id",
 		"addMCPServer": "composes the id", "setBudget": "composes the id", "addAPI": "composes the id",
 		"requestCredential": "composes the id", "updateProject": "composes the id", "planInstall": "composes the id",
-		"approveServerTools": "checks FromID == ns", "removeWorkflow": "owner derived from a composed workflow id",
+		"approveServerTools": "checks FromID == ns", "liveIntegration": "checks FromID == ns", "removeWorkflow": "owner derived from a composed workflow id",
 		"removeProject": "takes an already composed id", "removeIntegration": "takes an already composed id",
+		// Part 24 (#920): the caller composed pid; the loop ranges over the
+		// namespace's own map, which is not an index by input.
+		"sharedMemorySentence": "takes an already composed id",
+		// The target's owner is derived from a composed workflow id.
+		"handOverSentence": "owner derived from a composed workflow id",
 	}
 	entries, _ := os.ReadDir(".")
 	seen := map[string]bool{}

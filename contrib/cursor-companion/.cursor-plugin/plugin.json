@@ -1,0 +1,23 @@
+{
+  "name": "vornik-companion",
+  "version": "0.2.1",
+  "description": "Vornik companion for Cursor (LLD 28): an MCP entry that runs vornikctl's bridge (the key stays in its file), an always-applied rule with Vornik's working rules, the companion skills, and a sessionStart hook that adds your delegations and recent memory to a new chat. Install with vornikctl companion connect cursor, which writes vornikctl's absolute path into mcp.json and hooks.json.",
+  "author": {
+    "name": "vornik"
+  },
+  "homepage": "https://vornik.io",
+  "repository": "https://github.com/EaseIT-cz/vornik",
+  "license": "Apache-2.0",
+  "keywords": [
+    "vornik",
+    "cursor",
+    "mcp",
+    "memory",
+    "delegation",
+    "agents"
+  ],
+  "rules": "./rules/",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

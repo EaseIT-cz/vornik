@@ -24,6 +24,13 @@ import (
 // the SSE event stream to extract usage + tool-call metadata that the
 // Responses API only exposes between event types.
 func (c *CodexSubscriptionClient) buildRequestBody(messages []Message, tools []Tool) ([]byte, error) {
+	return c.buildRequestBodyEffort(messages, tools, c.effortLevel)
+}
+
+// buildRequestBodyEffort is buildRequestBody with the resolved
+// reasoning.effort: codexEffort(ctx, c.effortLevel) at the call site, so a
+// request level overrides the route's (GitHub #869).
+func (c *CodexSubscriptionClient) buildRequestBodyEffort(messages []Message, tools []Tool, effort string) ([]byte, error) {
 	body := map[string]any{
 		"model":               c.model,
 		"stream":              true,
@@ -35,9 +42,9 @@ func (c *CodexSubscriptionClient) buildRequestBody(messages []Message, tools []T
 		// openclaw's default configuration.
 		"include": []string{"reasoning.encrypted_content"},
 	}
-	if c.effortLevel != "" {
+	if effort != "" {
 		body["reasoning"] = map[string]any{
-			"effort":  c.effortLevel,
+			"effort":  effort,
 			"summary": "auto",
 		}
 	}
@@ -121,31 +128,35 @@ func (c *CodexSubscriptionClient) buildRequestBody(messages []Message, tools []T
 	}
 	body["input"] = input
 
-	// Tool schema lives at top-level tools[] with type=function and
-	// name/description/parameters hoisted out of an inner `function`
-	// wrapper (which is the Chat Completions shape).
 	if len(tools) > 0 {
-		converted := make([]map[string]any, 0, len(tools))
-		for _, t := range tools {
-			params := t.Function.Parameters
-			if len(params) == 0 {
-				// The API rejects missing parameters — pass an
-				// empty object schema for no-arg tools.
-				params = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-			converted = append(converted, map[string]any{
-				"type":        "function",
-				"name":        t.Function.Name,
-				"description": t.Function.Description,
-				"parameters":  json.RawMessage(params),
-				"strict":      false,
-			})
-		}
-		body["tools"] = converted
+		body["tools"] = codexTools(tools)
 		body["tool_choice"] = "auto"
 	}
 
 	return json.Marshal(body)
+}
+
+// codexTools converts tools to the Responses shape: top-level tools[] with
+// type=function and name/description/parameters hoisted out of an inner
+// `function` wrapper (which is the Chat Completions shape).
+func codexTools(tools []Tool) []map[string]any {
+	converted := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		params := t.Function.Parameters
+		if len(params) == 0 {
+			// The API rejects missing parameters — pass an
+			// empty object schema for no-arg tools.
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		converted = append(converted, map[string]any{
+			"type":        "function",
+			"name":        t.Function.Name,
+			"description": t.Function.Description,
+			"parameters":  params,
+			"strict":      false,
+		})
+	}
+	return converted
 }
 
 func joinInstructions(parts []string) string {

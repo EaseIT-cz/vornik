@@ -141,7 +141,10 @@ func run(m *testing.M) (int, error) {
 		}
 		_ = logFile.Close()
 	}()
-	if err := waitHealthy(40 * time.Second); err != nil {
+	// 120 s, as the main e2e suite (wizard_lifecycle_test.go): under a full
+	// gate the SQLite migrations alone took 39 s (gate on b8417b183,
+	// 2026-11-20), and 40 s failed a daemon that was healthy at 17 s alone.
+	if err := waitHealthy(120 * time.Second); err != nil {
 		if b, rerr := os.ReadFile(logPath); rerr == nil {
 			fmt.Fprintln(os.Stderr, "[spawnlaw e2e] daemon log:\n"+string(b))
 		}

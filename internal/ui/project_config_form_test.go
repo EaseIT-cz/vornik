@@ -257,8 +257,9 @@ func TestBuildFormPatches_PathOrderAndShape(t *testing.T) {
 	// Judge / Trading / GitHub App. Counted explicitly so
 	// adding/removing a form field surfaces here rather than
 	// silently shifting structure. (45 → 46 on 2026-09-04 with
-	// retention.chat_audit_days.)
-	require.Len(t, patches, 46)
+	// retention.chat_audit_days; 46 → 47 on 2026-11-21 with
+	// autonomy.observe, emitted only while autonomy is on, GitHub #602.)
+	require.Len(t, patches, 47)
 
 	// Per-block presence: each top-level prefix appears at
 	// least once, in the expected emit order. Routing fields

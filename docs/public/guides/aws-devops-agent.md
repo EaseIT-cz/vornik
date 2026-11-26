@@ -95,6 +95,23 @@ Either way, expose only the TLS port. The daemon's own port (8080 by
 default) serves plain HTTP: keep it on loopback or close it in the firewall.
 Every request needs the key; without a valid key, Vornik answers 401.
 
+**Limits.** Each companion key may make 5 requests a second, with bursts of
+up to 50; past that Vornik answers 429 with `Retry-After`. Change it with
+`api.rate_limit.companion_key` (`rps`, `burst`) in `config.yaml`. One
+address that sends 15 wrong keys in 5 minutes is locked out for 15 minutes.
+When Vornik is reachable from the internet, also limit each address before
+any key is checked:
+
+```yaml
+api:
+  rate_limit:
+    per_ip:
+      rps: 20
+      burst: 40
+```
+
+Vornik-hosted instances already run with this.
+
 ## Connect in the DevOps Agent console
 
 1. Open **Capability Providers**, find **Vornik** under partner connectors,

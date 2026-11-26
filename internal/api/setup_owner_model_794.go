@@ -82,6 +82,35 @@ type setupStatusResponse struct {
 	onboarding.Status
 	RestartPending bool     `json:"restart_pending"`
 	RestartReasons []string `json:"restart_reasons"`
+	// The restart generation (§6.13 G2, G3; GitHub #799): left out when the
+	// counter could not be read, at start or now.
+	PendingGeneration *int64 `json:"pending_generation,omitempty"`
+	LoadedGeneration  *int64 `json:"loaded_generation,omitempty"`
+}
+
+// RestartGeneration is what setup/status reads for §6.13: the counter now,
+// and the value the daemon read at start (ok false: it did not parse).
+type RestartGeneration interface {
+	Read() (int64, bool)
+}
+
+// WithRestartGeneration wires the counter and the value read at start.
+func WithRestartGeneration(g RestartGeneration, loaded int64, loadedOK bool) ServerOption {
+	return func(s *Server) { s.restartGen, s.restartGenLoaded, s.restartGenLoadedOK = g, loaded, loadedOK }
+}
+
+// restartGenerations returns both fields, or neither when either is unknown.
+func (s *Server) restartGenerations() (pending, loaded *int64) {
+	if s.restartGen == nil || !s.restartGenLoadedOK {
+		return nil, nil
+	}
+	p, ok := s.restartGen.Read()
+	if !ok {
+		s.logger.Error().Msg("restart generation file does not parse; setup/status leaves the generations out")
+		return nil, nil
+	}
+	l := s.restartGenLoaded
+	return &p, &l
 }
 
 // restartReasons returns the wired source's reasons, sorted and unique, and
@@ -102,7 +131,8 @@ func (s *Server) restartReasons() []string {
 	return out
 }
 
-func writeSetupStatus(w http.ResponseWriter, status onboarding.Status, reasons []string) {
+func writeSetupStatus(w http.ResponseWriter, status onboarding.Status, reasons []string, pending, loaded *int64) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(setupStatusResponse{Status: status, RestartPending: len(reasons) > 0, RestartReasons: reasons})
+	_ = json.NewEncoder(w).Encode(setupStatusResponse{Status: status, RestartPending: len(reasons) > 0, RestartReasons: reasons,
+		PendingGeneration: pending, LoadedGeneration: loaded})
 }

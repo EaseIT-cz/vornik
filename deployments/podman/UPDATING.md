@@ -155,8 +155,13 @@ updater, which has no gate: read that release's box yourself.
 5. **Cutover** — stops the service, installs the new binaries, deploys config
    assets the release added (`scripts/config-deploy.sh`: it adds missing files,
    such as new templates, and never changes a file you have), and starts it.
-   Because the unit is `Type=notify`, systemd reports "ready" only after DB
-   migrations applied and health checks passed.
+   The shipped unit is `Type=notify` (since #898), so the start returns only
+   once the daemon sent `READY=1`: migrations applied and listeners serving.
+   A start that fails, or that is still not ready after `TimeoutStartSec`
+   (300 s), prints the rollback. A unit installed by an older quickstart is
+   `Type=simple`: the start returns at once and a hung boot is never timed
+   out. The update warns about it and names the command that installs the
+   shipped unit; the updater never rewrites the unit itself.
 6. **Verify** — polls `/readyz`, prints the DB migration version bump, then
    runs the newly installed `vornikctl doctor` against the upgraded daemon and
    prints its report. The doctor is a warning only: a finding (or a doctor that

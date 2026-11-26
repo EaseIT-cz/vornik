@@ -327,6 +327,9 @@ type brokerTaskParams struct {
 	taskType string
 	source   persistence.TaskCreationSource
 	idemKey  string
+	// extra are payload fields beside the broker ones, for a hand-over's
+	// lineage (part 24 §24.3 B2, #920); nil for every other run.
+	extra map[string]any
 }
 
 // createBrokerTask is the one path a broker task is created by, delegated or
@@ -343,6 +346,11 @@ func (s *Server) createBrokerTask(ctx context.Context, p brokerTaskParams) (*per
 		"prompt":        prompt,
 		"broker_inputs": p.inputs,
 		"broker":        map[string]any{"workflow": p.wf.ID},
+	}
+	for k, v := range p.extra {
+		if _, taken := payload[k]; !taken {
+			payload[k] = v
+		}
 	}
 	keyID := ""
 	if p.key != nil {

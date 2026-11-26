@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/secrets"
 )
 
@@ -49,6 +50,15 @@ type PostReviewHandler struct {
 	// one project's answer in at construction would apply it to every project.
 	// Nil = the gate cannot engage.
 	blocksApproval func(projectID string) bool
+	// canaryFloors resolves a project's canary floors (GitHub #873). Nil, or
+	// unset floors, measure only.
+	canaryFloors func(projectID string) registry.ProjectForgeCanary
+}
+
+// WithCanaryFloors attaches the per-project canary floors (GitHub #873).
+func (h *PostReviewHandler) WithCanaryFloors(f func(projectID string) registry.ProjectForgeCanary) *PostReviewHandler {
+	h.canaryFloors = f
+	return h
 }
 
 // WithCIGate attaches the CI-outcome store and the per-project switch, enabling
@@ -273,6 +283,9 @@ func firstNonEmpty(vals ...string) string {
 // Execute implements executor.SystemHandler.
 func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepInput) (executor.SystemStepResult, error) {
 	const name = "forge.post_review"
+	if h != nil && isCanaryTask(in.Task) {
+		return h.scoreCanary(in) // GitHub #873: score, never post
+	}
 	if h == nil || h.resolver == nil {
 		return executor.SystemStepResult{}, errors.New(name + ": handler is missing required dependencies (resolver)")
 	}

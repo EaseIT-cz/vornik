@@ -1069,6 +1069,11 @@ func (w *Workflow) Validate(filename string) error {
 	if err := w.Broker.Validate(); err != nil {
 		return WorkflowValidationError{File: filename, Field: "broker", Message: err.Error()}
 	}
+	if w.Broker != nil {
+		if err := validateHandOver(w.ID, w.Broker.HandOver); err != nil {
+			return WorkflowValidationError{File: filename, Field: "broker", Message: err.Error()}
+		}
+	}
 
 	return nil
 }

@@ -3,7 +3,9 @@ package repotest
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,7 +118,13 @@ func approverCappedCreateConcurrent(t *testing.T, h *approverHarness) {
 	const n = 2
 	var arrived sync.WaitGroup
 	arrived.Add(n)
+	// A retried filing (below) calls the hook again; only the first n calls
+	// are the barrier, or the WaitGroup would go negative.
+	var calls atomic.Int32
 	hooked.SetRedeemHookForTest(func() {
+		if calls.Add(1) > n {
+			return
+		}
 		arrived.Done()
 		done := make(chan struct{})
 		go func() { arrived.Wait(); close(done) }()
@@ -136,7 +144,18 @@ func approverCappedCreateConcurrent(t *testing.T, h *approverHarness) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			err := h.repo.CreateRequestCapped(h.ctx, h.hostAction(id, "hermes", h.now), limit, h.now)
+			// Under a full gate a SQLite commit can stall past busy_timeout
+			// and a filing gets SQLITE_BUSY: noise, not the race under test
+			// (#853, the class of #517). Retry it; the assertions are on the
+			// end state, which a retry cannot change (a late retry meets the
+			// cap). Postgres never returns SQLITE_BUSY.
+			var err error
+			for attempt := 0; attempt < 3; attempt++ {
+				err = h.repo.CreateRequestCapped(h.ctx, h.hostAction(id, "hermes", h.now), limit, h.now)
+				if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") {
+					break
+				}
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

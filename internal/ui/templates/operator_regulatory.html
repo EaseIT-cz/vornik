@@ -37,7 +37,7 @@
                 {{else}}<p class="text-sm text-gray-400">None.</p>{{end}}
                 <h3 class="text-sm text-gray-300">Incidents past or near the 72-hour notification deadline</h3>
                 {{if not .IncidentsRecorded}}
-                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no breach ledger. Incidents require PostgreSQL.</p>
+                <p class="text-sm text-gray-400">Not recorded on this deployment: no breach ledger is wired.</p>
                 {{else if .AttentionIncidents}}
                 <ul class="text-sm space-y-1">{{range .AttentionIncidents}}
                     <li><span class="font-mono">{{.ID}}</span> — {{.State}}, aware {{.Aware}}, deadline {{.Deadline}}{{if .Overdue}} <span class="text-red-700 font-semibold dark:text-red-400">OVERDUE</span>{{end}}</li>{{end}}
@@ -69,7 +69,7 @@
             <section id="incidents" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
                 <h2 class="text-base font-semibold text-gray-100">Security incidents (GDPR Art 33–34)</h2>
                 {{if not .IncidentsRecorded}}
-                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no breach ledger. Incidents require PostgreSQL (<code class="font-mono">vornikctl incident</code> refuses on SQLite).</p>
+                <p class="text-sm text-gray-400">Not recorded on this deployment: no breach ledger is wired.</p>
                 {{else if not .Incidents}}<p class="text-sm text-gray-400">No incidents recorded.</p>
                 {{else}}
                 <p class="text-xs text-gray-500">The Art 33(5) facts, effects and remedial action are shown as recorded or not, with their length, because they are free text that can name people; read them with <code class="font-mono">vornikctl incident</code>.</p>

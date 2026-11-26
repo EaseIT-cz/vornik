@@ -14,14 +14,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
 	"vornik.io/vornik/internal/github"
 	"vornik.io/vornik/internal/integrations"
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/rolelibrary"
 	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/telemetryclient"
 )
@@ -99,6 +102,14 @@ func (c *Container) initRegistry() error {
 	// registry and by every one the daemon builds later (the doctor's, the
 	// wizard's, the UI's), which start from the process default.
 	registry.SetDefaultAgentModelCatalogue(c.Config.AgentAdmin.ModelIDs())
+	// GitHub #880: a role that names a modelTier resolves through the
+	// instance's runtime.agent_llm tiers and roles maps, in every registry.
+	registry.SetDefaultModelResolution(c.Config.Runtime.AgentLLM.Tiers, c.Config.Runtime.AgentLLM.Roles)
+	if bad := registry.UnknownModelTiers(c.Config.Runtime.AgentLLM.Tiers); len(bad) > 0 {
+		c.Logger.Warn().Strs("keys", bad).
+			Str("tiers", rolelibrary.ModelTierList()).
+			Msg("runtime.agent_llm.tiers names a tier that does not exist; it maps no role")
+	}
 	publishDaemonMCPURLs(c.daemonMCPServers())
 	// GitHub #812: a hand-made github block may not use the instance's App
 	// key. Its path is fixed whether or not an App is registered; the
@@ -236,8 +247,11 @@ func (c *Container) initRegistry() error {
 			return err
 		}
 		c.reportReloadQuarantine(reloader)
-		// Re-wire autonomy manager so new/changed projects get loops.
-		if c.autonomyManager != nil {
+		c.warnUnroutedModels() // #881 C4
+		// Re-wire autonomy manager so new/changed projects get loops. Not
+		// before work has started: Reload starts loops, and a held start's
+		// release reloads before startWork (GitHub #586, §13.11.3).
+		if c.autonomyManager != nil && c.workStarted.Load() {
 			c.autonomyManager.Reload()
 		}
 		// Reconcile MCP servers to the newly-activated config.
@@ -778,5 +792,47 @@ func (c *Container) reportReloadQuarantine(reloader *config.ConfigReloader) {
 		Msg("registry reload: project file(s) refused; the projects keep their previous configuration until fixed")
 	if reloader != nil {
 		reloader.RecordReloadWarning(q.Error())
+	}
+}
+
+// unroutedNewModels returns, once each, the models the swarms name that seen
+// does not hold yet and that no router route serves; it adds every model to
+// seen (GitHub #881 C4). Static: it makes no model call.
+func unroutedNewModels(swarms []*registry.Swarm, seen map[string]bool, resolves func(string) (string, bool)) []string {
+	var out []string
+	for _, sw := range swarms {
+		for _, r := range sw.Roles {
+			for _, m := range []string{r.Model, r.ModelFallback} {
+				if m == "" || seen[m] {
+					continue
+				}
+				seen[m] = true
+				if resolves == nil {
+					continue
+				}
+				if _, ok := resolves(m); !ok {
+					out = append(out, m)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// warnUnroutedModels logs one warning per model the registry newly names that
+// no route serves (GitHub #881 C4).
+func (c *Container) warnUnroutedModels() {
+	if c.Registry == nil || c.chatRouter == nil {
+		return
+	}
+	c.reloadModelsMu.Lock()
+	defer c.reloadModelsMu.Unlock()
+	if c.reloadModelsSeen == nil {
+		c.reloadModelsSeen = map[string]bool{}
+	}
+	for _, m := range unroutedNewModels(c.Registry.ListSwarms(), c.reloadModelsSeen, c.chatRouter.Resolves) {
+		c.Logger.Warn().Str("model", m).
+			Msg("a swarm names a model that no chat route serves; steps on it will fail (the file was saved outside Vornik's checks)")
 	}
 }

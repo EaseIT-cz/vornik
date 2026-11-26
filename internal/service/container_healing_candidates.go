@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/persistence"
@@ -246,6 +247,10 @@ func (a *healingGeneratorUIAdapter) Generate(ctx context.Context, triggerID stri
 	}
 	return out.Proposal.ID, out.ByRecipe, nil
 }
+
+// Budget forwards the api server's generate budget (GitHub #908), so the
+// console and the admin API cut a generation at the same point.
+func (a *healingGeneratorUIAdapter) Budget() time.Duration { return a.srv.HealingGenerateBudget() }
 
 // mapHealingGenerateErrorUI translates producer failures into ui sentinels.
 // The stamp failure keeps its proposal id: the proposal EXISTS, and the

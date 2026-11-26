@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // Config is one bridge's connection.
@@ -317,11 +317,9 @@ func CheckEndpoint(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		h := u.Hostname()
-		if h == "localhost" {
-			return nil
-		}
-		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		// The bridge posts with a plain client, which never checks where a
+		// name resolves: no new name spelling (#168, review 4dca).
+		if dialguard.IsLoopbackHostForPlainDial(u.Hostname()) {
 			return nil
 		}
 		return fmt.Errorf("%s is plain http to another machine; the key would cross the network in cleartext (use https)", raw)

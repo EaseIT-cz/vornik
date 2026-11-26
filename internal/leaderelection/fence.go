@@ -20,6 +20,11 @@ import (
 //   - a non-nil error if the lock row can't be read (caller should treat
 //     as "do not act" — fail closed).
 func (e *Elector) VerifyEpoch(ctx context.Context) (ok bool, current int64, err error) {
+	if e.repo == nil {
+		// Any elector with no lock store (a standby elector from NewStandby
+		// among them) holds no lock and never may write.
+		return false, 0, nil
+	}
 	row, err := e.repo.Get(ctx, e.workerID)
 	if err != nil {
 		if errors.Is(err, persistence.ErrNotFound) {

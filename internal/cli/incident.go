@@ -10,7 +10,7 @@ import (
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/incident"
-	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/persistence/subjectstore"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -146,7 +146,9 @@ func init() {
 	rootCmd.AddCommand(incidentCmd)
 }
 
-func openIncidentRepo(ctx context.Context) (*postgres.IncidentRepository, func(), error) {
+// openIncidentRepo opens the breach ledger on the configured driver, Postgres
+// or SQLite (GitHub #475; GDPR design §4.21).
+func openIncidentRepo(ctx context.Context) (*subjectstore.IncidentRepository, func(), error) {
 	cfg, _, err := config.Load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load config: %w", err)
@@ -155,12 +157,12 @@ func openIncidentRepo(ctx context.Context) (*postgres.IncidentRepository, func()
 	if err != nil {
 		return nil, nil, fmt.Errorf("open database: %w", err)
 	}
-	db, err := requirePostgresDB(backend, "incident")
+	repo, err := incidentStoreFor(backend)
 	if err != nil {
 		_ = backend.Close()
 		return nil, nil, err
 	}
-	return postgres.NewIncidentRepository(db), func() { _ = backend.Close() }, nil
+	return repo, func() { _ = backend.Close() }, nil
 }
 
 // withIncident loads an incident, applies a transition, and saves it. The

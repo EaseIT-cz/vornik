@@ -179,7 +179,7 @@ func TestChatPostMessage_DispatcherErrorSurfacedInBanner(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	assert.Contains(t, body, "Chat dispatch failed")
+	assert.Contains(t, body, "could not answer") // #862: the notice, never the raw error
 }
 
 // erroringDispatcher is a stub Doer whose Process returns a

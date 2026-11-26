@@ -32,6 +32,9 @@ var lifecycleFields = map[string][]string{
 	KindAttemptFailed: {"attempt", "step_id", "error_class", "will_retry"},
 	KindClosed:        {},
 	KindReplayGap:     {"oldest_seq"},
+	// Part 24 §24.3 B5 (#920): the agent sees what its job handed over.
+	KindHandOverStarted: {"target_workflow", "target_task_id"},
+	KindHandOverRefused: {"target_workflow", "reason"},
 }
 
 // LifecycleKind reports whether the lifecycle view keeps kind.

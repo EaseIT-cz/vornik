@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"vornik.io/vornik/internal/restartgen"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -251,6 +252,11 @@ type ProviderSet struct {
 	// container_http.go after the DB is ready.
 	BBTraceServiceFactory func(db *sql.DB, reg prometheus.Registerer) api.BlackBoxTraceService
 
+	// CounterfactualStamperFactory builds the stamp the executor calls after
+	// it creates a replay's execution row (GitHub #912): one Postgres UPDATE
+	// of the counterfactual provenance columns. Nil in Community.
+	CounterfactualStamperFactory func(db *sql.DB) executor.CounterfactualStamper
+
 	// BBReplayEngineFactory builds the api.BlackBoxReplayEngine adapter and the
 	// upgraded contracts.HealingApplier from the DB, task creator, task repository,
 	// and registerer. Nil in Community. Called lazily in container_http.go after DB +
@@ -382,6 +388,12 @@ func WithBootProvenance(p *config.Provenance) ContainerOption {
 // for a restart (#758 W1); the API's setup apply route calls it.
 func WithRestartRequest(fn func()) ContainerOption {
 	return func(c *Container) { c.restartRequest = fn }
+}
+
+// WithRestartGeneration hands the container the restart generation read at
+// start (GitHub #799, operations-API design §6.13).
+func WithRestartGeneration(g *restartgen.File, loaded int64, ok bool) ContainerOption {
+	return func(c *Container) { c.restartGen, c.restartGenLoaded, c.restartGenLoadedOK = g, loaded, ok }
 }
 
 func WithEdition(e string) ContainerOption {

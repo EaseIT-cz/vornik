@@ -38,6 +38,8 @@ func contentSeamContainer(t *testing.T, enabled bool) *Container {
 		Tasks:       sqlite.NewTaskRepository(db.DB),
 		// GitHub #680: the recall audit is a content seam too.
 		MemoryRetrievalAudit: sqlite.NewMemoryRetrievalAuditRepository(db.DB),
+		// GitHub #602: an observe-mode proposal stores model text.
+		AutonomyEvaluations: sqlite.NewAutonomyEvaluationRepository(db.DB),
 	}
 	return c
 }
@@ -72,8 +74,9 @@ func TestContentSeams395_DecoratedAndCountedWhenScanningIsOff(t *testing.T) {
 	// The doctor's snapshot names every store present.
 	reason, stores := c.redactionSeamsState()
 	require.Equal(t, auditredact.ReasonSecretsDisabled, reason)
-	require.Len(t, stores, 5)
+	require.Len(t, stores, 6)
 	require.Contains(t, stores, auditredact.StoreMemoryRetrievalAudit)
+	require.Contains(t, stores, auditredact.StoreAutonomyEvaluations)
 }
 
 func TestContentSeams395_DetectorFailureIsAnError(t *testing.T) {
@@ -119,7 +122,7 @@ func TestContentSeams395_IdempotentAndUpgradesABypass(t *testing.T) {
 
 	reason, stores := c.redactionSeamsState()
 	require.Equal(t, auditredact.ReasonNone, reason)
-	require.Equal(t, "chat_audit_log,chat_system_prompts,step_prompts,task_messages,memory_retrieval_audit", strings.Join(stores, ","))
+	require.Equal(t, "chat_audit_log,chat_system_prompts,step_prompts,task_messages,memory_retrieval_audit,autonomy_evaluations", strings.Join(stores, ","))
 }
 
 // The Postgres rebuild replaces every handle with an undecorated one; the

@@ -3,15 +3,15 @@ sources:
     - path: internal/executor/handlers/forge/publication_838.go
       sha256: 96f252c61ddaa7561c4c1f5ee6aa8b1dd73b340296458db7cba94afc5467d9a8
     - path: internal/executor/handlers/forge/post_review.go
-      sha256: b9e2db489741b614b38cb79cb94641bddb483184842139d5e72f99542db72b2e
+      sha256: a9b61a47e6298f9cbd73d49f8bf739bde8b28f61a9241a8b0a098e77076dd312
     - path: internal/forge/github/github.go
       sha256: 466960e1c2eaeb34a2f9460c6b215fbae8cf095e5571099f751d78742c9088b8
     - path: internal/api/middleware.go
-      sha256: e5340e7e3d069dd2f2d7e1509edb8e7511df7b555dec30e8f7fb0dd54a38fcb8
+      sha256: e98d5f8bf564c9c40c2c2c4c390fcdda98e8f57d866432c6de957b006d89210f
     - path: internal/api/admin_class_auth.go
       sha256: 8f952ecfcc872c4f41b6541e48fa1c80ce79728d9eb95d14c7c27b96a8ab8c9b
     - path: internal/spawn/spawn.go
-      sha256: f99a83e5cde3f5ba2a2a3f0428069be713ab70fd8c0501c32b0d43201bb22533
+      sha256: 7fb7a4f20b06d411480c3496ab62f7b9205c2e71bc2ad83da3e5d930eff79c89
     - path: internal/sandboxtool/sandboxtool.go
       sha256: 98e975950b0e5be019b7801c4f9b9138d231ab586a3e170f46b89f45dc4e0272
     - path: internal/runtime/manager.go
@@ -19,7 +19,7 @@ sources:
     - path: internal/secrets/secrets.go
       sha256: fbfba932278463c3455ca9832bdbac634d355b3137b3225ba64cb5eac78d230e
     - path: internal/netguard/netguard.go
-      sha256: 7c26dd6c35779aa45022cdf5f7fa5f7d0809628de516b3a6fc21977e27dcf331
+      sha256: 55862b02e7ad36c377cb0aaa2fec04133341e72d3b936d0af0e5072dff8865c0
     - path: internal/outputguard/outputguard.go
       sha256: e5090fd8f664c75d4c8095b5b401c451d02a3663140db5e2b4d7fa9d348bcc0d
     - path: internal/egressscan/egressscan.go
@@ -41,7 +41,7 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 16 November 2026, against `main` before release 2026.11.6.
+**Last reviewed:** 24 November 2026, against `main`.
 
 **In short:** models run in locked-down containers and only propose. The
 daemon decides what takes effect, holds the credentials, and scans
@@ -207,6 +207,14 @@ flowchart TB
   not say which part failed. A hash must be known to ask, so the ledger
   cannot be enumerated. Public routes skip the general per-IP limiter, so
   each applies its own: 5 requests per second per address, burst 10.
+- **A daemon started held serves almost nothing.** When an upgrade starts
+  the daemon held (the `start-held` marker file), every listener answers
+  503 except the probes, `/metrics`, the read-only doctor and the hold
+  endpoint. The agent socket and the relay listener answer nothing. The
+  list is an allowlist, so a new route stays refused while held. Only an
+  admin-class caller can release the hold (`vornikctl daemon release`);
+  on a managed instance that is the operations listener alone. Releasing
+  writes an admin-audit row.
 - **Admin class is decided once per request.** One decision function governs
   the operator surface (configuration, reloads, daemon-wide repairs); a
   second decides who may read error text and logs (operator, scrubbed, or
@@ -418,6 +426,15 @@ flowchart TB
   rotation, the console's edit pages, workflow proposals) change files only
   on the daemon that holds the config-writer lease; another daemon answers
   409 and changes nothing.
+- **Applying a model profile writes only the profile's models.**
+  `POST /api/v1/models/profiles/{name}/apply` (`vornikctl models profile
+  apply`) takes an admin-class key. It replaces `runtime.agent_llm.tiers` and
+  `.roles` with the maps from a profile file shipped under
+  `configs/model-profiles`, and nothing else. The name must be a plain slug,
+  and a request body that carries any field other than `apply` is refused, so
+  a caller cannot write a model of its choosing through it. The write is
+  locked, backed up, validated, restored on failure, and audited as
+  `models.profile.apply`.
 - **A reload never drops a running project it cannot read.** When a running
   project's file stops decoding, the reload keeps that project's last good
   definition, applies every other change, and reports the refused file;
@@ -448,8 +465,9 @@ flowchart TB
 ### Approvals and approver devices
 
 - Sensitive actions (an assistant's new connection or credential, a
-  widening of its reach, a proposed write) are approved on a **paired
-  phone**, not in the requesting channel. Pairing is started by the operator
+  widening of its reach, such as a project joining its namespace's shared
+  memory or a workflow handing its output to another, a proposed write) are
+  approved on a **paired phone**, not in the requesting channel. Pairing is started by the operator
   from `vornikctl`.
 - A device's session cookie rotates on every decision; a copied cookie dies
   at the device's next approval, and a browser riding a device's approvals
@@ -542,7 +560,9 @@ flowchart TB
 
 - **Third-party content is scanned on the way to a model**, including MCP
   tool results, for injection attempts, credential leakage and encoded
-  payloads. Findings name the rule that produced them.
+  payloads. Findings name the rule that produced them. A result the scan
+  cannot finish (the scanner fails) is withheld from the model, logged and
+  counted; the model is told it was withheld.
 - Content from outside is wrapped in an untrusted-content envelope whose
   close tag the model can see; the wrapper fails closed on malformed or
   over-encoded input.
@@ -560,8 +580,10 @@ flowchart TB
   policy to chunks and audits every retrieval decision. A connected
   assistant's deposits land unverified and low-confidence, and its
   corrections cannot overrule an operator's.
-- Learned skills are never drafted from goals whose words came from a third
-  party (webhook, forge, chat or A2A).
+- Learned skills are never drafted from third-party material: not from goals
+  whose words came from a webhook, forge, chat or A2A, and not from a step
+  whose memory searches returned fetched web content or anything the
+  distiller cannot verify.
 
 ### Secrets
 
@@ -604,6 +626,13 @@ flowchart TB
   was cut and reviewed as if it were whole. A pull request with no new
   commits since the last review stays a no-op.
 - **A review is pinned to the commit it reviewed.**
+- **CI artifacts reach a review masked.** Forge unpacks an uploaded artifact
+  in memory, with a cap on uncompressed size and file count, then masks every
+  file and file name with the secret detector before storing it. A rescan
+  must find nothing; otherwise, or without a detector, the content is
+  withheld. A SARIF file is shown only as its level, rule, file, line and
+  message, never its code snippets or fingerprints. The text reaches a model
+  marked as untrusted data.
 - **What it does not do.** It cannot take back a credential already
   committed to a public repository; rotate any exposed credential. Detection
   matches known shapes, so a credential in a shape it does not know can still
@@ -612,23 +641,57 @@ flowchart TB
 ### Outbound connections and SSRF
 
 - Every outbound client has a timeout and a read cap.
-- A dial guard refuses loopback, link-local, private, special-use and
-  reserved ranges, including IPv6 transition forms that embed a blocked IPv4
-  address (NAT64, 6to4, IPv4-compatible), and the cloud instance-metadata
-  addresses (IPv4 and the IPv6 ones in private ranges) even where private
-  ranges are allowed. A hostname is judged by the address it resolves to, and
-  guarded clients ignore proxy environment settings. One list decides for
-  every guard. An operator-listed allowed host is an explicit vouch and
-  bypasses the list, metadata addresses included.
-  Operator-listed private ranges are allowed only where a feature needs them.
+- The daemon's dial guard refuses loopback, link-local, RFC 1918, IPv6
+  unique-local (fc00::/7), carrier-grade NAT (100.64.0.0/10), 0.0.0.0/8,
+  broadcast, multicast and unspecified addresses, IPv6 transition forms that embed a refused IPv4 address (NAT64,
+  6to4, IPv4-compatible), and the cloud instance-metadata addresses (IPv4
+  and the IPv6 ones in private ranges) even where private ranges are
+  allowed. A hostname is judged by the address it resolves to at each dial,
+  and guarded clients ignore proxy environment settings. One list decides
+  for every address guard: the daemon's model, MCP, agent API, hub and
+  broker clients, `vornikctl memory recheck-urls`, A2A webhooks, companion
+  push and the web-write check. The web-write check and the scraper also
+  refuse documentation, benchmarking, reserved, Teredo and every NAT64 and
+  6to4 address. The scraper, which is not Go, keeps one table that tests
+  hold equal to the daemon's web-write table and that refuses every
+  address shape the one list refuses. An operator-listed allowed host is an
+  explicit vouch and bypasses the list, metadata addresses included.
+  Operator-listed private ranges (`agent_admin.private_api_hosts`,
+  `companion_push.allowed_cidrs`) are allowed only where a feature needs
+  them, and never open a metadata address.
+- **Carrier-grade NAT, 100.64.0.0/10, is private.** Tailscale assigns
+  tailnet addresses from this range. An agent API or MCP server on a
+  tailnet peer dials like a LAN host: only over https, and only when the
+  operator lists its host, or its 100.x address, in
+  `agent_admin.private_api_hosts`.
+  Self-hosted model endpoints still reach the range, as they reach the LAN
+  (a managed instance's customer endpoint does not), but a model on a
+  tailnet peer still counts as remote and needs its approval. The OIDC, image-fetch,
+  push and broker clients refuse it with no list to undo that. Every guard
+  that checks addresses treats the range as private; companion push opens
+  it through a project's `allowed_cidrs`. `vornikctl doctor`
+  (`agent_connections_cgnat`) reports an ERROR for each approved agent
+  connection on the range that is not on the list.
 - An agent project's approved API or MCP server reaches a private address
   only on a host the operator names in `agent_admin.private_api_hosts`, and
-  only over https. A listed host still never reaches loopback, link-local or
-  metadata addresses, each API or server still needs its approval on an
-  approver device, and a managed instance refuses the setting. Before
-  approval, a failed tool listing on a listed host tells the agent only that
-  it could not connect. `test_connection` reports a refused address as
-  `blocked_private_address`.
+  only over https, on the URL's own port. An entry is a name or an IP
+  address, optionally with a port, which then limits it to that port. It
+  may pin addresses (every dial of the host must land inside them, public
+  or private) and may name the agent projects it serves. A plain entry
+  serves every agent project; name projects when more than one exists. A
+  listed host never reaches loopback, link-local or metadata addresses,
+  which cannot be listed. Each API or server still needs its approval on
+  an approver device. The approval names the host and any pins, and
+  records which entry granted it; if a restart changed that grant before
+  the approval applies, the apply is refused and the agent must ask again.
+  A granted connection follows only redirects to its own origin. A
+  managed instance refuses the setting. Before approval, a failed tool
+  listing on a listed host tells the agent only that it could not
+  connect. `test_connection` reports a refused address as
+  `blocked_private_address`. `describe_installation` shows an agent the
+  listed hosts (not the pins) that serve its projects, and `vornikctl
+  doctor` (`agent_private_hosts_unused`) warns about an entry no approved
+  connection uses.
 - Redirects that would carry secrets are refused; gateway redirects stay on
   the same origin.
 
@@ -687,6 +750,23 @@ flowchart TB
   reads memory and approved skills only, and AWS asks customers to allowlist
   read-only tools as well. What it remembers, with a wider key, lands as a
   note under the memory gates, never as a verified fact.
+
+  Each companion key may make 5 requests a second, with bursts of 50,
+  unless the operator changes `api.rate_limit.companion_key`.
+
+  A CI job may authenticate as a companion key without holding its secret:
+  the operator binds the key to one GitHub Actions workflow (the
+  repository's numeric id and name, the branch or tag ref, the workflow
+  file, the events), and the job presents the ID token GitHub issues to its
+  run. Vornik checks the token's RS256 signature against GitHub's published
+  keys, its issuer, expiry, `nbf` and `iat`, that it carries exactly one
+  audience equal to the trust's, and every bound claim exactly; there are no
+  wildcards. The key must still be a live companion key whose owner is not
+  disabled. Any failure is a 401 that counts toward the per-address
+  lockout, never a fall-through to another credential. `pull_request` is
+  refused as an event (its ref never names a branch); `pull_request_target`
+  is allowed only when the operator names it, because it serves the base
+  branch's identity to a job that may run a pull request's code.
 - **The plugins keep hint state only in the plugin's own data directory**
   (or the user's runtime directory when the user owns it), never in a shared
   temp path, and refuse a state directory that is a symlink or that another
@@ -804,6 +884,13 @@ flowchart TB
    [AI transparency](ai-transparency.md#how-ai-generated-output-is-marked).
 8. **Image signatures are not verified.** Pin images by digest or use a
    private registry with content trust.
+9. **An unpinned listed name reaches the whole of its private range.** A
+   `private_api_hosts` entry without `addresses` vouches for a name, not an
+   address: the name may resolve to any RFC 1918, ULA or CGNAT
+   (100.64.0.0/10, Tailscale's range) address, never loopback, link-local
+   or metadata. Whoever controls that name's DNS chooses which private
+   host it reaches. List only names whose DNS you control, list the IP
+   address instead, or pin the entry's `addresses`.
 
 ---
 
@@ -812,4 +899,4 @@ flowchart TB
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.7 -->
+<!-- summary-reviewed-through: 2026.11.8 -->

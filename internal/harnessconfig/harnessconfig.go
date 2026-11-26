@@ -29,6 +29,9 @@ const (
 	ClaudeDesktop = "claude-desktop"
 	Codex         = "codex"
 	Hermes        = "hermes"
+	// OpenCode is the companion's opencode adapter (LLD 29, GitHub #841). It
+	// is not in Harnesses: agent connect does not offer it.
+	OpenCode = "opencode"
 )
 
 // Harnesses lists them in the order help text shows.
@@ -133,6 +136,11 @@ func Path(harness string, env Env) (string, error) {
 			return filepath.Join(h, "config.yaml"), nil
 		}
 		return filepath.Join(env.Home, ".hermes", "config.yaml"), nil
+	case OpenCode:
+		if x := get("XDG_CONFIG_HOME"); x != "" {
+			return filepath.Join(x, "opencode", "opencode.json"), nil
+		}
+		return filepath.Join(env.Home, ".config", "opencode", "opencode.json"), nil
 	}
 	return "", fmt.Errorf("unknown harness %q (one of %s)", harness, strings.Join(Harnesses, ", "))
 }
@@ -149,6 +157,8 @@ func Set(harness string, content []byte, e Entry) ([]byte, error) {
 		return setTOML(content, e)
 	case Hermes:
 		return setYAML(content, e)
+	case OpenCode:
+		return setOpenCode(content, e)
 	}
 	return nil, fmt.Errorf("unknown harness %q", harness)
 }
@@ -166,6 +176,8 @@ func Remove(harness string, content []byte, e Entry) ([]byte, bool, error) {
 		return removeTOML(content, e)
 	case Hermes:
 		return removeYAML(content, e)
+	case OpenCode:
+		return removeMap(content, "mcp", e)
 	}
 	return nil, false, fmt.Errorf("unknown harness %q", harness)
 }
@@ -218,17 +230,43 @@ func setJSON(content []byte, e Entry, typed bool) ([]byte, error) {
 }
 
 func removeJSON(content []byte, e Entry) ([]byte, bool, error) {
+	return removeMap(content, "mcpServers", e)
+}
+
+// removeMap removes the entry from the server map under key.
+func removeMap(content []byte, key string, e Entry) ([]byte, bool, error) {
 	m, err := decodeJSONObject(content)
 	if err != nil {
 		return nil, false, err
 	}
-	servers, _ := m["mcpServers"].(map[string]any)
+	servers, _ := m[key].(map[string]any)
 	if _, ok := servers[e.Name()]; !ok {
 		return content, false, nil
 	}
 	delete(servers, e.Name())
 	out, err := encodeJSON(m)
 	return out, true, err
+}
+
+// ---- opencode (LLD 29 B2): opencode.json's "mcp" map takes
+// {"type": "local", "command": [argv...]}. A file with comments does not
+// decode as JSON and is refused, so a user's comments are never dropped.
+
+func setOpenCode(content []byte, e Entry) ([]byte, error) {
+	m, err := decodeJSONObject(content)
+	if err != nil {
+		return nil, fmt.Errorf("%w (a config with comments is not edited; add the entry by hand)", err)
+	}
+	servers, _ := m["mcp"].(map[string]any)
+	if m["mcp"] != nil && servers == nil {
+		return nil, errors.New("mcp is not an object; edit the file by hand")
+	}
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	servers[e.Name()] = map[string]any{"type": "local", "command": append([]string{e.Command}, e.Args()...)}
+	m["mcp"] = servers
+	return encodeJSON(m)
 }
 
 // ---- YAML (Hermes): the repo's comment-preserving editor.

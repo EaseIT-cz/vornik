@@ -115,7 +115,7 @@
                                 <td class="px-4 py-2 text-xs text-gray-300 max-w-md">
                                     <div>{{.Action}}</div>
                                     {{if .Trigger}}<div class="text-xs text-gray-500 font-mono mt-0.5 truncate" title="{{.Trigger}}">{{.Trigger}}</div>{{end}}
-                                    <div class="text-xs text-gray-700 font-mono mt-0.5">{{.ID}}</div>
+                                    <div class="text-xs text-gray-700 font-mono mt-0.5" title="{{.ID}}">{{shortID .ID}}</div>
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap">
                                     <span class="font-mono {{.StatusBadge}}">{{.Status}}</span>

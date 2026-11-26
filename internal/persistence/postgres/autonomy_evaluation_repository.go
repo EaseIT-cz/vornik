@@ -39,11 +39,13 @@ func (r *AutonomyEvaluationRepository) Record(ctx context.Context, e *persistenc
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO autonomy_evaluations (
 			id, project_id, outcome, reason, task_id,
-			task_type, workflow_id, prompt_hash, duration_ms, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			task_type, workflow_id, prompt_hash, duration_ms, created_at,
+			proposed_prompt
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`,
 		e.ID, e.ProjectID, e.Outcome, e.Reason, taskID,
 		e.TaskType, e.WorkflowID, e.PromptHash, e.DurationMs, e.CreatedAt,
+		nullIfEmpty(e.ProposedPrompt),
 	)
 	return mapDBError(err)
 }
@@ -54,7 +56,8 @@ func (r *AutonomyEvaluationRepository) Record(ctx context.Context, e *persistenc
 func (r *AutonomyEvaluationRepository) List(ctx context.Context, filter persistence.AutonomyEvaluationFilter) ([]*persistence.AutonomyEvaluation, error) {
 	query := `
 		SELECT id, project_id, outcome, reason, task_id,
-		       task_type, workflow_id, prompt_hash, duration_ms, created_at
+		       task_type, workflow_id, prompt_hash, duration_ms, created_at,
+		       proposed_prompt
 		FROM autonomy_evaluations
 		WHERE 1=1
 	`
@@ -144,7 +147,8 @@ func (r *AutonomyEvaluationRepository) LatestByProject(ctx context.Context) (map
 	query := `
 		SELECT DISTINCT ON (project_id)
 		       id, project_id, outcome, reason, task_id,
-		       task_type, workflow_id, prompt_hash, duration_ms, created_at
+		       task_type, workflow_id, prompt_hash, duration_ms, created_at,
+		       proposed_prompt
 		FROM autonomy_evaluations
 		ORDER BY project_id, created_at DESC`
 	rows, err := r.db.QueryContext(ctx, query)
@@ -167,13 +171,15 @@ func scanAutonomyEvaluation(scanner interface {
 	Scan(dest ...any) error
 }) (*persistence.AutonomyEvaluation, error) {
 	var e persistence.AutonomyEvaluation
-	var taskID sql.NullString
+	var taskID, proposed sql.NullString
 	if err := scanner.Scan(
 		&e.ID, &e.ProjectID, &e.Outcome, &e.Reason, &taskID,
 		&e.TaskType, &e.WorkflowID, &e.PromptHash, &e.DurationMs, &e.CreatedAt,
+		&proposed,
 	); err != nil {
 		return nil, mapDBError(err)
 	}
+	e.ProposedPrompt = proposed.String
 	if taskID.Valid {
 		e.TaskID = &taskID.String
 	}

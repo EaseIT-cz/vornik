@@ -28,6 +28,7 @@ module.exports = {
             '../*.go',
             '!../*_test.go',
             '../../api/setup_handlers.go',
+            '../../api/setup_profile_offer_880.go',
         ],
     },
     // Class names assembled at render time, which no scan can see:

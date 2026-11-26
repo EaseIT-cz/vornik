@@ -306,16 +306,22 @@ func TestAutoResume_ResumeModeStartsAtTheFailedStep(t *testing.T) {
 	assert.Equal(t, []string{"research", "write"}, second.CompletedSteps)
 }
 
-// Without the resume marker the checkpointed handoff is never restaged: a
-// normal execution that starts mid-workflow (shutdown recovery) behaves as
-// before (§8.3 D4).
-func TestAutoResume_HandoffRestagedOnlyWithMarker(t *testing.T) {
+// GitHub #919 (15-artifact-store.md §14.3): the checkpointed handoff is
+// restaged on every re-entry, marker or not (it used to need the
+// automatic-resume marker, §8.3 D4 as first built); a fresh execution
+// (no completed steps) restages nothing.
+func TestAutoResume_HandoffRestagedOnEveryReentry_919(t *testing.T) {
 	h := []map[string]string{{"name": "research.md", "sourcePath": "/store/x", "class": "output"}}
 	st := executionState{StepHandoffs: map[string][]map[string]string{"research": h}}
-	assert.Nil(t, autoResumeHandoff(st, []string{"research"}), "no marker: nothing restaged")
+	assert.Equal(t, h, autoResumeHandoff(st, []string{"research"}), "no marker: restaged")
 	st.AutoResumedFrom = "e1"
-	assert.Equal(t, h, autoResumeHandoff(st, []string{"research"}))
-	assert.Nil(t, autoResumeHandoff(st, nil))
+	assert.Equal(t, h, autoResumeHandoff(st, []string{"research"}), "marker: restaged")
+	assert.Nil(t, autoResumeHandoff(st, nil), "fresh execution: nothing")
+	// RetryFromStep cuts completed_steps before its target, so a later
+	// step's checkpointed outputs, still present, are not staged
+	// (review-20261125-6ebf F1).
+	st.StepHandoffs["write"] = []map[string]string{{"name": "draft.md", "sourcePath": "/store/y", "class": "output"}}
+	assert.Equal(t, h, autoResumeHandoff(st, []string{"research"}), "only completed steps restage")
 }
 
 // §8.3 D3 on real git: a resume-mode failure that will retry keeps the

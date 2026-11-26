@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# service-shard-lane.sh — the race unit lane with internal/service sharded.
+# service-shard-lane.sh — the race unit lane with internal/service and
+# internal/ui sharded (internal/ui since #888, testing design 19 §16).
 #
 # GitHub #483, operator decision A9 (docs/plans/2026-10-21-operator-decisions.md).
 # The package alone exceeded the 10-minute race-lane timeout on loaded hosts
@@ -25,13 +26,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
 GO_BIN="${GO_BIN:-go}"
-PKG="${SHARD_PKG:-internal/service}"
-MANIFEST="${SHARD_MANIFEST:-scripts/service-test-shards.txt}"
+# SHARD_SETS lists "package=manifest" pairs (testing design 19 §16, GitHub
+# #888): internal/ui joined internal/service when it, too, neared the race
+# timeout on the CI VM. SHARD_PKG/SHARD_MANIFEST still name a single set.
+if [ -n "${SHARD_PKG:-}" ]; then
+  [ -z "${SHARD_SETS:-}" ] || { echo "service-shard-lane: set SHARD_SETS or SHARD_PKG, not both" >&2; exit 2; }
+  SHARD_SETS="$SHARD_PKG=${SHARD_MANIFEST:-scripts/service-test-shards.txt}"
+fi
+SHARD_SETS="${SHARD_SETS:-internal/service=scripts/service-test-shards.txt internal/ui=scripts/ui-test-shards.txt}"
 flags=("$@")
 
 die() { echo "service-shard-lane: $*" >&2; exit 2; }
-
-[ -f "$MANIFEST" ] || die "manifest $MANIFEST not found"
 
 TMPD="$(mktemp -d)"
 sweep_pid=""
@@ -47,33 +52,6 @@ on_signal() { cleanup; exit 143; }
 trap cleanup EXIT
 trap on_signal INT TERM
 
-# --- parse the manifest -------------------------------------------------------
-shard_files_b=(); shard_files_c=()
-: > "$TMPD/listed_b"; : > "$TMPD/listed_c"
-while read -r tok path _; do
-  case "$tok" in
-    ''|'#'*) continue ;;
-    shard_b) shard_files_b+=("$path"); printf '%s\n' "$path" >> "$TMPD/listed_b" ;;
-    shard_c) shard_files_c+=("$path"); printf '%s\n' "$path" >> "$TMPD/listed_c" ;;
-    *) die "unknown shard token '$tok' in $MANIFEST (want shard_b or shard_c)" ;;
-  esac
-  [ -n "${path:-}" ] || die "empty path after '$tok' in $MANIFEST"
-  [ -f "$path" ] || die "listed path does not exist: $path"
-done < "$MANIFEST"
-
-all_files=()
-for f in "$PKG"/*_test.go; do all_files+=("$f"); done
-[ ${#all_files[@]} -gt 0 ] || die "no _test.go files under $PKG/"
-
-# shard_a = the complement: every _test.go not listed for b or c.
-shard_files_a=()
-for f in "${all_files[@]}"; do
-  if ! grep -qxF "$f" "$TMPD/listed_b" "$TMPD/listed_c"; then
-    shard_files_a+=("$f")
-  fi
-done
-
-# --- derive per-shard test-name sets and check coverage ------------------------
 names_of() { # files... -> sorted unique top-level test names
   # TestMain is the package's test entry point, not a test: -run can never
   # select it, so counting it would inflate every denominator.
@@ -84,34 +62,86 @@ names_of() { # files... -> sorted unique top-level test names
     | sed -E 's/^func ((Test|Example|Fuzz)[A-Za-z0-9_]*)\(.*/\1/' \
     | grep -vx TestMain | sort -u
 }
-declared=$(names_of "${all_files[@]}")
-set_a=$(names_of "${shard_files_a[@]}")
-set_b=""; [ ${#shard_files_b[@]} -gt 0 ] && set_b=$(names_of "${shard_files_b[@]}")
-set_c=""; [ ${#shard_files_c[@]} -gt 0 ] && set_c=$(names_of "${shard_files_c[@]}")
-
-overlap_ab=$(comm -12 <(printf '%s\n' "$set_a") <(printf '%s\n' "$set_b") | grep -c . || true)
-overlap_bc=$(comm -12 <(printf '%s\n' "$set_b") <(printf '%s\n' "$set_c") | grep -c . || true)
-overlap_ac=$(comm -12 <(printf '%s\n' "$set_a") <(printf '%s\n' "$set_c") | grep -c . || true)
-if [ "$overlap_ab" -gt 0 ] || [ "$overlap_bc" -gt 0 ] || [ "$overlap_ac" -gt 0 ]; then
-  die "the same test is assigned to two shards (a∩b=$overlap_ab b∩c=$overlap_bc a∩c=$overlap_ac); fix $MANIFEST"
-fi
-union=$(printf '%s\n%s\n%s\n' "$set_a" "$set_b" "$set_c" | grep -v '^$' | sort -u)
-if [ "$union" != "$declared" ]; then
-  { echo "manifest does not cover the package exactly once:"
-    echo "  declared but unassigned: $(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$union") | tr '\n' ' ')"
-    echo "  assigned but undeclared: $(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$union") | tr '\n' ' ')"
-  } >&2
-  exit 2
-fi
-
 count() { printf '%s\n' "$1" | grep -c . || true; }
-n_a=$(count "$set_a"); n_b=$(count "$set_b"); n_c=$(count "$set_c")
-echo "service-shard-lane: $PKG split into 3 shards — a: ${#shard_files_a[@]} files/$n_a tests, b: ${#shard_files_b[@]}/$n_b, c: ${#shard_files_c[@]}/$n_c (total $(count "$declared"))"
+
+# prepare PKG MANIFEST IDX — parse the manifest, check it covers the package
+# exactly once, and write the three -run alternations to $TMPD/IDX.re_{a,b,c}
+# and their counts to $TMPD/IDX.n_{a,b,c}. Refuses (exit 2) on any drift.
+prepare() {
+  local PKG="$1" MANIFEST="$2" idx="$3" tok path rest f
+  [ -f "$MANIFEST" ] || die "manifest $MANIFEST not found"
+  local shard_files_b=() shard_files_c=() all_files=() shard_files_a=()
+  : > "$TMPD/listed_b"; : > "$TMPD/listed_c"
+  while read -r tok path rest; do
+    case "$tok" in
+      ''|'#'*) continue ;;
+      shard_b) shard_files_b+=("$path"); printf '%s\n' "$path" >> "$TMPD/listed_b" ;;
+      shard_c) shard_files_c+=("$path"); printf '%s\n' "$path" >> "$TMPD/listed_c" ;;
+      *) die "unknown shard token '$tok' in $MANIFEST (want shard_b or shard_c)" ;;
+    esac
+    [ -n "${path:-}" ] || die "empty path after '$tok' in $MANIFEST"
+    [ -f "$path" ] || die "listed path does not exist: $path"
+  done < "$MANIFEST"
+
+  for f in "$PKG"/*_test.go; do [ -f "$f" ] && all_files+=("$f"); done
+  [ ${#all_files[@]} -gt 0 ] || die "no _test.go files under $PKG/"
+
+  # shard_a = the complement: every _test.go not listed for b or c.
+  for f in "${all_files[@]}"; do
+    if ! grep -qxF "$f" "$TMPD/listed_b" "$TMPD/listed_c"; then
+      shard_files_a+=("$f")
+    fi
+  done
+
+  local declared set_a set_b="" set_c=""
+  declared=$(names_of "${all_files[@]}")
+  set_a=$(names_of "${shard_files_a[@]}")
+  [ ${#shard_files_b[@]} -gt 0 ] && set_b=$(names_of "${shard_files_b[@]}")
+  [ ${#shard_files_c[@]} -gt 0 ] && set_c=$(names_of "${shard_files_c[@]}")
+
+  local overlap_ab overlap_bc overlap_ac union
+  overlap_ab=$(comm -12 <(printf '%s\n' "$set_a") <(printf '%s\n' "$set_b") | grep -c . || true)
+  overlap_bc=$(comm -12 <(printf '%s\n' "$set_b") <(printf '%s\n' "$set_c") | grep -c . || true)
+  overlap_ac=$(comm -12 <(printf '%s\n' "$set_a") <(printf '%s\n' "$set_c") | grep -c . || true)
+  if [ "$overlap_ab" -gt 0 ] || [ "$overlap_bc" -gt 0 ] || [ "$overlap_ac" -gt 0 ]; then
+    die "the same test is assigned to two shards of $PKG (a∩b=$overlap_ab b∩c=$overlap_bc a∩c=$overlap_ac); fix $MANIFEST"
+  fi
+  union=$(printf '%s\n%s\n%s\n' "$set_a" "$set_b" "$set_c" | grep -v '^$' | sort -u)
+  if [ "$union" != "$declared" ]; then
+    { echo "service-shard-lane: $MANIFEST does not cover $PKG exactly once:"
+      echo "  declared but unassigned: $(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$union") | tr '\n' ' ')"
+      echo "  assigned but undeclared: $(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$union") | tr '\n' ' ')"
+    } >&2
+    exit 2
+  fi
+
+  local s
+  for s in a b c; do
+    local set_s
+    eval "set_s=\$set_$s"
+    printf '%s\n' "$set_s" | grep -v '^$' | paste -sd'|' - > "$TMPD/$idx.re_$s"
+    count "$set_s" > "$TMPD/$idx.n_$s"
+  done
+  echo "service-shard-lane: $PKG split into 3 shards — a: ${#shard_files_a[@]} files/$(cat "$TMPD/$idx.n_a") tests, b: ${#shard_files_b[@]}/$(cat "$TMPD/$idx.n_b"), c: ${#shard_files_c[@]}/$(cat "$TMPD/$idx.n_c") (total $(count "$declared"))"
+}
+
+pkgs=()
+idx=0
+for pair in $SHARD_SETS; do
+  pkg="${pair%%=*}"; manifest="${pair#*=}"
+  [ "$pkg" != "$pair" ] && [ -n "$pkg" ] && [ -n "$manifest" ] || die "SHARD_SETS entry '$pair' is not package=manifest"
+  prepare "$pkg" "$manifest" "$idx"
+  pkgs+=("$pkg")
+  idx=$((idx + 1))
+done
+[ ${#pkgs[@]} -gt 0 ] || die "SHARD_SETS names no package"
 
 # --- fan out -------------------------------------------------------------------
+excl=""
+for pkg in "${pkgs[@]}"; do excl="${excl:+$excl|}/${pkg//\//\\/}\$"; done
 # shellcheck disable=SC2086  # word-splitting the package list is the point
-sweep_pkgs=$("$GO_BIN" list ./... | grep -vE "/${PKG//\//\\/}\$" || true)
-[ -n "$sweep_pkgs" ] || die "nothing left to sweep — is $PKG the whole tree?"
+sweep_pkgs=$("$GO_BIN" list ./... | grep -vE "($excl)" || true)
+[ -n "$sweep_pkgs" ] || die "nothing left to sweep — are the sharded packages the whole tree?"
 
 # shellcheck disable=SC2086
 "$GO_BIN" test "${flags[@]}" $sweep_pkgs > "$TMPD/sweep.log" 2>&1 &
@@ -122,24 +152,25 @@ rc=0
 # streams to the terminal, but the driver holds the PID so an interrupted run
 # kills its go test instead of orphaning the test binary (observed 2026-11-12:
 # a killed wrapper left three service.test binaries running).
-run_shard() { # label re n
-  local label="$1" re="$2" n="$3"
+run_shard() { # pkg label re n
+  local pkg="$1" label="$2" re="$3" n="$4"
   if [ -z "$re" ]; then
-    echo "service-shard-lane: [$label] no declared tests — skipped"
+    echo "service-shard-lane: [$pkg $label] no declared tests — skipped"
     return 0
   fi
-  echo "service-shard-lane: [$label] running $n tests"
-  "$GO_BIN" test "${flags[@]}" -run "^($re)$" "./$PKG" &
+  echo "service-shard-lane: [$pkg $label] running $n tests"
+  "$GO_BIN" test "${flags[@]}" -run "^($re)$" "./$pkg" &
   shard_pid=$!
   wait "$shard_pid" || rc=1
   shard_pid=""
 }
-re_a=$(printf '%s\n' "$set_a" | grep -v '^$' | paste -sd'|' -)
-re_b=$(printf '%s\n' "$set_b" | grep -v '^$' | paste -sd'|' -)
-re_c=$(printf '%s\n' "$set_c" | grep -v '^$' | paste -sd'|' -)
-run_shard a "$re_a" "$n_a"
-run_shard b "$re_b" "$n_b"
-run_shard c "$re_c" "$n_c"
+idx=0
+for pkg in "${pkgs[@]}"; do
+  for s in a b c; do
+    run_shard "$pkg" "$s" "$(cat "$TMPD/$idx.re_$s")" "$(cat "$TMPD/$idx.n_$s")"
+  done
+  idx=$((idx + 1))
+done
 
 sweep_rc=0
 wait "$sweep_pid" || sweep_rc=$?

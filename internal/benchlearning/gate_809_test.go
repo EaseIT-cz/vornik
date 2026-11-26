@@ -15,7 +15,7 @@ import (
 
 func TestGate809_RunsUntilFrozenAndStaysFrozenAcrossARestart(t *testing.T) {
 	dir := t.TempDir()
-	g, err := Open(dir)
+	g, _, err := Open(dir, armB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestGate809_RunsUntilFrozenAndStaysFrozenAcrossARestart(t *testing.T) {
 	if err != nil || !again.Equal(at) {
 		t.Fatalf("a second freeze moved the time: %v vs %v (%v)", again, at, err)
 	}
-	reopened, err := Open(dir)
+	reopened, _, err := Open(dir, armB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestGate809_RunsUntilFrozenAndStaysFrozenAcrossARestart(t *testing.T) {
 }
 
 func TestGate809_TheFreezeWaitsForATickInFlight(t *testing.T) {
-	g, _ := Open(t.TempDir())
+	g, _, _ := Open(t.TempDir(), armB)
 	inTick, release := make(chan struct{}), make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -83,7 +83,7 @@ func TestGate809_ALeftoverTemporaryFileIsNotAFreeze(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, FrozenFile+".tmp"), []byte("half"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	g, err := Open(dir)
+	g, _, err := Open(dir, armB)
 	if err != nil {
 		t.Fatal(err)
 	}

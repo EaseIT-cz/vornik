@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
+
 	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/egressscan"
@@ -146,6 +149,9 @@ type TaskRepository interface {
 type ModelLimit struct {
 	MaxTokens   int
 	ContextSize int
+	// Reasoning is the model's default reasoning level (GitHub #869): used
+	// when the role sets none.
+	Reasoning string
 }
 
 // worktreeCleanupTimeout bounds the detached context used for
@@ -222,6 +228,10 @@ type Config struct {
 
 	// AgentLLMEnv holds the resolved LLM env vars to inject into agent containers.
 	AgentLLMEnv map[string]string
+	// ManagedModelCatalogue is a managed instance's model catalogue
+	// (agent_admin.models). Non-empty: a step whose resolved model is outside
+	// it fails before its container starts (GitHub #881). Empty: not managed.
+	ManagedModelCatalogue []string
 
 	// NamedSecrets are operator-declared, project-scoped credentials injected
 	// into agent containers — only for the projects each one allows (per-secret
@@ -387,6 +397,10 @@ type Executor struct {
 	spend        llmspend.Recorder
 	reservRepo   persistence.BudgetReservationRepository
 	outcomeRepo  persistence.ExecutionStepOutcomeRepository
+	// recallChunks reads which chunks each memory recall of a task returned,
+	// so the skill distiller judges a memory_search step by them
+	// (taint-lineage design §16, GitHub #858). Nil refuses such a step.
+	recallChunks StepRecallReader
 	// retryModeFor returns the task retry mode for a failure class (GitHub
 	// #123, permanent-failure design §8.3 D1). nil means
 	// persistence.TaskRetryModeFor, whose table ships empty; tests set it to
@@ -449,6 +463,15 @@ type Executor struct {
 	// the fallback in a metric without making memory.* a direct
 	// executor dependency.
 	ingestEnqueueFallbackRecorder func(projectID string)
+	// memoryProjectFor maps a task's project to the project whose memory it
+	// writes (agent-administered design part 24 §24.2, #920); nil: itself.
+	memoryProjectFor func(projectID string) string
+	// counterfactualStamper stamps a replay's provenance on the execution
+	// row just created (GitHub #912); nil outside Postgres.
+	counterfactualStamper CounterfactualStamper
+	// handOverFirer starts a hand_over's target (part 24 §24.3, #920); nil:
+	// hand-overs are counted failed and logged.
+	handOverFirer HandOverFirer
 	// agentHealth (optional) is the per-model circuit breaker for
 	// agent-container LLM calls (LLD 2026-07-12-agent-llm-health-breaker).
 	// Nil = the gate is a passthrough (byte-identical to pre-breaker
@@ -509,6 +532,9 @@ type Executor struct {
 	// boot. Nil-safe — spawn handler returns
 	// CROSS_PROJECT_DISABLED when missing.
 	templateCatalog spawnTemplateCatalog
+	// spawnModelCheck checks a spawned template's swarm models before any
+	// file is written (GitHub #881). Nil: not checked.
+	spawnModelCheck func(ctx context.Context, models []string) error
 	// configsDir is the daemon's writable configs root (the
 	// parent of configs/projects/, configs/swarms/, etc.).
 	// The spawn handler writes rendered template output below
@@ -838,6 +864,20 @@ func resolveBacklogFile(workflows WorkflowResolver, workspacePath, projectID str
 	return abs
 }
 
+// WithMemoryProjectResolver sets the project whose memory a task's outputs
+// and inputs are ingested into (part 24 §24.2 A2, #920).
+func WithMemoryProjectResolver(f func(projectID string) string) Option {
+	return func(e *Executor) { e.memoryProjectFor = f }
+}
+
+// memoryProject is the project whose memory projectID's tasks write.
+func (e *Executor) memoryProject(projectID string) string {
+	if e.memoryProjectFor == nil {
+		return projectID
+	}
+	return e.memoryProjectFor(projectID)
+}
+
 // WithWarmPool sets the warm container pool for the executor.
 func WithWarmPool(pool WarmPool) Option {
 	return func(e *Executor) {
@@ -971,6 +1011,20 @@ func (e *Executor) settleBudgetReservation(ctx context.Context, taskID string) {
 func WithStepOutcomeRepository(repo persistence.ExecutionStepOutcomeRepository) Option {
 	return func(e *Executor) {
 		e.outcomeRepo = repo
+	}
+}
+
+// StepRecallReader is the one read the skill distiller needs from the memory
+// retrieval audit (GitHub #858).
+type StepRecallReader interface {
+	StepRecallChunks(ctx context.Context, taskID string) ([]persistence.StepRecallChunk, error)
+}
+
+// WithStepRecallReader wires the memory retrieval audit for the skill
+// distiller's judgement of memory_search steps (taint-lineage design §16).
+func WithStepRecallReader(r StepRecallReader) Option {
+	return func(e *Executor) {
+		e.recallChunks = r
 	}
 }
 
@@ -1222,6 +1276,23 @@ func (e *Executor) CheckAgentModel(ctx context.Context, projectID string, role *
 // checkModelReach runs the model verifier for an agent-namespace role whose
 // model an agent chose or a payload override replaced; operator projects
 // and an agent role on the global model are not judged.
+// checkManagedCatalogue fails a step whose resolved model is outside a
+// managed instance's catalogue, before its container starts (GitHub #881,
+// registry design §12.2 C3). Such a step used to reach the gateway and fail
+// there.
+func (e *Executor) checkManagedCatalogue(role *registry.SwarmRole, effective string) error {
+	cat := e.config.ManagedModelCatalogue
+	if len(cat) == 0 || effective == "" || slices.Contains(cat, effective) {
+		return nil
+	}
+	name := ""
+	if role != nil {
+		name = role.Name
+	}
+	return fmt.Errorf("MODEL_NOT_IN_CATALOGUE: role %q resolves to model %q, which is not in this instance's model catalogue (%s); point the role or its tier at a catalogue model",
+		name, effective, strings.Join(cat, ", "))
+}
+
 func (e *Executor) checkModelReach(ctx context.Context, projectID string, role *registry.SwarmRole, effective string) error {
 	if _, agent := agentns.FromID(projectID); !agent || role == nil || effective == "" {
 		return nil
@@ -1487,6 +1558,12 @@ func WithProjectTemplateCatalog(catalog spawnTemplateCatalog) Option {
 	return func(e *Executor) {
 		e.templateCatalog = catalog
 	}
+}
+
+// WithSpawnModelCheck installs the #881 check spawn_project runs over the
+// models a rendered template names. Nil leaves spawns unchecked.
+func WithSpawnModelCheck(check func(ctx context.Context, models []string) error) Option {
+	return func(e *Executor) { e.spawnModelCheck = check }
 }
 
 // WithConfigsDir wires the writable configs root path so the
@@ -2111,6 +2188,7 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, taskID string) error 
 	if err := e.execRepo.Create(ctx, execution); err != nil {
 		return fmt.Errorf("failed to create execution record: %w", err)
 	}
+	e.stampCounterfactual(ctx, task, execution)
 
 	// Record execution started
 	if e.metrics != nil {

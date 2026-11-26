@@ -65,6 +65,11 @@ func (r *ReminderRepository) MarkErrored(context.Context, string, string) error 
 	return ErrSQLiteRemindersUnsupported
 }
 
+// MarkAttemptFailed is unsupported: reminders are Postgres-only (GitHub #861).
+func (r *ReminderRepository) MarkAttemptFailed(context.Context, string, string, persistence.ReminderAttemptOutcome) error {
+	return ErrSQLiteRemindersUnsupported
+}
+
 func (r *ReminderRepository) Cancel(context.Context, string) error {
 	return ErrSQLiteRemindersUnsupported
 }

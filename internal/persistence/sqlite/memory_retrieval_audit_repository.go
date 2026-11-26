@@ -217,3 +217,31 @@ func (r *MemoryRetrievalAuditRepository) A2AChunksByCallerKey(ctx context.Contex
 	}
 	return out, rows.Err()
 }
+
+// StepRecallChunks returns every chunk every recall of taskID returned
+// (taint-lineage design §16, GitHub #858). SQLite's chunk table keeps no
+// content class, so a found chunk reports an empty class, which the skill
+// distiller refuses: fail-closed on a driver whose memory writes do not run
+// today (internal/memory/repository.go).
+func (r *MemoryRetrievalAuditRepository) StepRecallChunks(ctx context.Context, taskID string) ([]persistence.StepRecallChunk, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT COALESCE(a.execution_id, ''), COALESCE(a.step_id, ''), COALESCE(je.value, ''),
+		       c.id IS NOT NULL
+		FROM memory_retrieval_audit a
+		LEFT JOIN json_each(a.chunk_ids) je
+		LEFT JOIN project_memory_chunks c ON c.id = je.value
+		WHERE a.task_id = ?`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("step recall chunks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.StepRecallChunk
+	for rows.Next() {
+		var x persistence.StepRecallChunk
+		if err := rows.Scan(&x.ExecutionID, &x.StepID, &x.ChunkID, &x.Found); err != nil {
+			return nil, fmt.Errorf("step recall chunks: scan: %w", err)
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}

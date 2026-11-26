@@ -682,13 +682,17 @@ func TestRetryTask_Happy(t *testing.T) {
 func TestRetryTask_ExecuteActionError(t *testing.T) {
 	task := &persistence.Task{ID: "t1", ProjectID: "snake", Status: persistence.TaskStatusFailed}
 	repo := &mocks.MockTaskRepository{
-		GetFunc:    func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
-		UpdateFunc: func(_ context.Context, _ *persistence.Task) error { return errors.New("db down") },
+		GetFunc: func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
+		// The atomic requeue fails (#916: retry_task no longer uses Update).
+		RequeueTerminalTaskFunc: func(context.Context, string, int, int) (bool, error) { return false, errors.New("db down") },
 	}
 	confirms := newFakeConfirmRepo(nil)
 	seedTaskAck(confirms, scopeRetryTask, "t1", testMemOperator, time.Now().Add(time.Hour))
 	te := taskExecutor(confirms, repo)
 	res := te.retryTask(sharedCtx(), `{"task_id":"t1"}`, nil)
+	if strings.Contains(res.Content, "db down") {
+		t.Errorf("the store error is quoted (#916): %q", res.Content)
+	}
 	if !strings.Contains(res.Content, "Error") {
 		t.Errorf("expected error surface: %q", res.Content)
 	}

@@ -73,11 +73,14 @@ func (p agentAdminProxy) ListRecipesJSON(ctx context.Context, key *persistence.A
 // its tools are approved after it connects.
 func (s *agentAdminService) advertiseRecipeTargets(ctx context.Context, ns string, input json.RawMessage) map[string]toolListing {
 	out := map[string]toolListing{}
-	for _, url := range s.renderer.RecipeListTargets(ns, input) {
+	project, urls := s.renderer.RecipeListTargets(ns, input)
+	for _, url := range urls {
 		if _, done := out[url]; done {
 			continue
 		}
-		listed, err := s.c.listMCPTools(ctx, mcpServerConfigFor(ns, url))
+		// The install's project: its intranet grant is the one the dial
+		// uses (§6.12, GitHub #403).
+		listed, err := s.c.listMCPTools(ctx, mcpServerConfigFor(project, url))
 		if err != nil {
 			s.c.Logger.Info().Str("namespace", ns).Err(err).Msg("agent admin: could not list a recipe server's tools; its tools will be approved after it connects")
 			continue

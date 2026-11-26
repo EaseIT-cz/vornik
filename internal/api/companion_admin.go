@@ -248,7 +248,7 @@ func companionAdminToolDefs() []mcpToolDef {
 		"awaiting_approval means the user must approve on their phone at approval_url; tell them the sentence."
 	roleTools := "Each tool is a workspace/clock built-in (see describe_installation) or mcp__<server>__<tool> for a read tool of a server already approved for this project."
 	return []mcpToolDef{
-		{Name: agentadmin.VerbShowWorkflow, Description: "Read an owned project's active workflow definition: steps, prompts, schemas, schedule and limits. Read this before redefining a workflow; pending changes are not live. Returns an error when the project or workflow is missing or outside your namespace. No credentials or runtime settings.", InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "slug": str("Workflow slug within the project.")}, "project", "slug")},
+		{Name: agentadmin.VerbShowWorkflow, Description: "Read an owned project's active workflow definition: steps, prompts, schemas, schedule, hand-over and limits. Read this before redefining a workflow; pending changes are not live. Returns an error when the project or workflow is missing or outside your namespace. No credentials or runtime settings.", InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "slug": str("Workflow slug within the project.")}, "project", "slug")},
 		{Name: toolDescribeInstallation, Description: "Call this first. How to work with Vornik, what you may and may not do, what needs the user's approval on their phone, the models a role may choose, and your current setup.", InputSchema: obj(map[string]any{})},
 		{Name: toolListMySetup, Description: "Your projects, roles, workflows, servers, credentials (names only, never values), budgets, and requests awaiting approval, failed or expired. " +
 			"A credential's status set means the value is stored, not that the provider accepts it; test_connection checks that. " +
@@ -257,7 +257,8 @@ func companionAdminToolDefs() []mcpToolDef {
 			agentadmin.TestConnectionRule,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "name": str("The server or API name, as list_my_setup shows it.")}, "project", "name")},
 		{Name: agentadmin.VerbCreateProject, Description: "Create a project (a private, broker-only space) with the default budget." + effect,
-			InputSchema: obj(map[string]any{"slug": str(agentadmin.NewSlugRule), "purpose": str("One line saying what it is for."), "template": str("Optional; only \"default\".")}, "slug", "purpose")},
+			InputSchema: obj(map[string]any{"slug": str(agentadmin.NewSlugRule), "purpose": str("One line saying what it is for."), "template": str("Optional; only \"default\"."),
+				"shared_memory": map[string]any{"type": "boolean", "description": "Optional, default false (memory sealed). True joins your namespace's shared memory, read and written by every project that also set it: use it for jobs on one topic that build on each other's findings, never for a project that reads private data (mail, calendar, files, banking) when another shared project reaches the web. The user approves joining on their phone; leaving applies at once. describe_installation's patterns list the layouts."}}, "slug", "purpose")},
 		{Name: agentadmin.VerbDefineSwarm, Description: "Set the roles of a project (its slug). A worker role always remains." + effect,
 			InputSchema: obj(map[string]any{"slug": str(agentadmin.ProjectRefRule), "roles": map[string]any{"type": "array", "maxItems": 8, "items": obj(map[string]any{
 				"name": str("Role name: a-z, 0-9, _ or -."), "instructions": str("What the role does. No lines starting with #, --- or ```."),
@@ -286,7 +287,15 @@ func companionAdminToolDefs() []mcpToolDef {
 					"cron":     str("5-field cron: minute hour day-of-month month day-of-week, e.g. \"0 8 1 * *\" for 08:00 on the 1st of every month. At most hourly; no @shortcuts."),
 					"timezone": str("IANA timezone, e.g. Europe/Prague; default UTC."),
 					"inputs":   map[string]any{"type": "object", "description": "The inputs every scheduled run gets; they must match the workflow's inputs schema."},
-				}, "cron", "inputs"))}, "project", "slug", "steps", "egress")},
+				}, "cron", "inputs")),
+				"hand_over": described("Optional: when this workflow completes, start another workflow of your namespace and hand it chosen output files. "+
+					"The user approves the hand-over on their phone. The target runs on its own project's budget. A chain stops after 3 hand-overs from one delegation, and a loop is refused. "+
+					"Do not hand a private-data job's files (mail, calendar, files, banking) to a job that reaches the web.", obj(map[string]any{
+					"project":   str("The target workflow's project. " + agentadmin.ProjectRefRule),
+					"workflow":  str("The target workflow's slug. It must already be defined."),
+					"documents": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Map each of the target's document inputs (declared with x-untrusted-document) to a file this workflow writes directly under artifacts/out/, as a bare name or the full path: {\"venues\": \"scout.md\"} and {\"venues\": \"artifacts/out/scout.md\"} are the same. At most 2."},
+					"inputs":    map[string]any{"type": "object", "description": "Fixed values for the target's other inputs; they must match its inputs schema."},
+				}, "project", "workflow"))}, "project", "slug", "steps", "egress")},
 		{Name: agentadmin.VerbAddMCPServer, Description: "Connect a project to a remote MCP server (https, or http on this machine). Always needs approval." + effect,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "name": str("Server name."), "url": str("Server URL."),
 				"auth": obj(map[string]any{"mode": str("none, static, or oauth (the user signs in on their phone)."),
@@ -300,10 +309,11 @@ func companionAdminToolDefs() []mcpToolDef {
 				"account": accountSchema()}, "project", "name", "url", "auth")},
 		{Name: agentadmin.VerbSetBudget, Description: "Set a project's monthly budget. Lowering applies at once; raising needs approval." + effect,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "monthly_usd": map[string]any{"type": "number", "exclusiveMinimum": 0}}, "project", "monthly_usd")},
-		{Name: agentadmin.VerbUpdateProject, Description: "Update a project's purpose or display name. Applies at once; its slug stays unchanged." + effect,
+		{Name: agentadmin.VerbUpdateProject, Description: "Update a project's purpose, display name, concurrency or shared memory. Applies at once unless it widens (see each field); its slug stays unchanged." + effect,
 			InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule + " Immutable."), "purpose": str("Optional nonempty purpose, at most 300 characters on one line."), "display_name": str("Optional nonempty display label, at most 300 characters on one line."),
 				"max_concurrent_tasks": map[string]any{"type": "integer", "description": "Optional: how many of the project's tasks may run at once, 1 up to describe_installation's limits.max_concurrent_tasks. " +
-					"Raising it needs the user's approval. Supply at least one field."}}, "project")},
+					"Raising it needs the user's approval. Supply at least one field."},
+				"shared_memory": map[string]any{"type": "boolean", "description": "Optional, default false (memory sealed). True joins your namespace's shared memory, read and written by every project that also set it: use it for jobs on one topic that build on each other's findings, never for a project that reads private data (mail, calendar, files, banking) when another shared project reaches the web. The user approves joining on their phone; leaving applies at once. describe_installation's patterns list the layouts."}}, "project")},
 		{Name: agentadmin.VerbRemove, Description: "Remove a project, a workflow or a server." + effect,
 			InputSchema: obj(map[string]any{"kind": str("project, workflow or integration."), "id": str("A project: " + agentadmin.ProjectRefRule + " A workflow: <project>--<workflow>, without the namespace. An integration: the server name."), "project": str("For an integration: " + agentadmin.ProjectRefRule)}, "kind", "id")},
 		{Name: agentadmin.VerbAddAPI, Description: "Connect a project to a REST API (https, or http on this machine). Always needs approval. " +

@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrockdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go"
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/ctxerr"
@@ -406,10 +407,8 @@ func (p *BedrockProvider) CompleteWithToolsStream(ctx context.Context, messages 
 	// Same reasoning hint as the non-streaming path. Carried here too so a
 	// caller does not silently lose it by streaming — the streaming request is
 	// built separately and would otherwise drop the field with no error.
-	if effort := ReasoningEffortFromContext(ctx); effort != "" {
-		input.AdditionalModelRequestFields = bedrockdoc.NewLazyDocument(
-			map[string]any{"reasoning_effort": effort},
-		)
+	if effort := openAIReasoningEffort(ctx); effort != "" {
+		input.AdditionalModelRequestFields = reasoningEffortDocument(effort)
 	}
 	if bedrockTools, terr := openAIToolsToBedrock(tools); terr != nil {
 		return nil, fmt.Errorf("bedrock: translate tools: %w", terr)
@@ -425,7 +424,7 @@ func (p *BedrockProvider) CompleteWithToolsStream(ctx context.Context, messages 
 	defer cancel()
 
 	start := time.Now()
-	out, err := p.converseStream(callCtx, input)
+	out, err := p.converseStreamWithReasoning(callCtx, input)
 	if err != nil {
 		// Fall back to non-streaming. Models without ConverseStream
 		// support return ValidationException on the first call; the
@@ -663,7 +662,7 @@ func (p *BedrockProvider) complete(ctx context.Context, messages []Message, tool
 	defer cancel()
 
 	start := time.Now()
-	out, err := p.converse(callCtx, input)
+	out, err := p.converseWithReasoning(callCtx, input)
 	dur := time.Since(start)
 	var usage *bedrocktypes.TokenUsage
 	if out != nil {
@@ -898,13 +897,12 @@ func applyMaxTokens(ctx context.Context, p *BedrockProvider, input *bedrockrunti
 // Sent only when the caller asked for one, so no existing call changes shape:
 // a model that does not understand reasoning_effort never sees the key.
 func applyReasoningEffort(ctx context.Context, input *bedrockruntime.ConverseInput) {
-	effort := ReasoningEffortFromContext(ctx)
+	// "off" is written "none", the spelling models take (GitHub #869).
+	effort := openAIReasoningEffort(ctx)
 	if effort == "" {
 		return
 	}
-	input.AdditionalModelRequestFields = bedrockdoc.NewLazyDocument(
-		map[string]any{"reasoning_effort": effort},
-	)
+	input.AdditionalModelRequestFields = reasoningEffortDocument(effort)
 }
 
 // recordMetrics emits provider-level latency + error counters when a
@@ -1082,4 +1080,98 @@ func requestIDFromMetadata(out *bedrockruntime.ConverseOutput) string {
 	// layer. The empty string is fine for phase 1 telemetry — the
 	// SDK already logs the ID on errors via its own middleware.
 	return ""
+}
+
+// bedrockRefusalEndpoint keys a Bedrock model's remembered reasoning refusal
+// beside the OpenAI-compatible ones (GitHub #869).
+func (p *BedrockProvider) bedrockRefusalEndpoint() string { return "bedrock:" + p.region }
+
+// isBedrockReasoningRefusal reports whether err is Bedrock's answer to a
+// model that does not accept the reasoning field: a ValidationException
+// naming reasoning_effort. Any other ValidationException is not one.
+func isBedrockReasoningRefusal(err error) bool {
+	var api smithy.APIError
+	if !errors.As(err, &api) || api.ErrorCode() != "ValidationException" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(api.ErrorMessage()), "reasoning_effort")
+}
+
+// converseWithReasoning is converse with the reasoning-refusal rules
+// (reasoning control design B4, B16, B17).
+func (p *BedrockProvider) converseWithReasoning(ctx context.Context, input *bedrockruntime.ConverseInput) (*bedrockruntime.ConverseOutput, error) {
+	var out *bedrockruntime.ConverseOutput
+	err := p.withReasoningRules(ctx, &input.AdditionalModelRequestFields, func() (err error) {
+		out, err = p.converse(ctx, input)
+		return err
+	})
+	return out, err
+}
+
+// converseStreamWithReasoning is the same rules for ConverseStream.
+func (p *BedrockProvider) converseStreamWithReasoning(ctx context.Context, input *bedrockruntime.ConverseStreamInput) (*bedrockruntime.ConverseStreamOutput, error) {
+	var out *bedrockruntime.ConverseStreamOutput
+	err := p.withReasoningRules(ctx, &input.AdditionalModelRequestFields, func() (err error) {
+		out, err = p.converseStream(ctx, input)
+		return err
+	})
+	return out, err
+}
+
+// withReasoningRules makes call with the reasoning hint in *fields, which
+// carries only that hint (applyReasoningEffort), so replacing or dropping it
+// changes nothing else. A model that refused the field gets none (B16). A
+// model that refused the value "none" gets "low" for off (B17). A first
+// refusal of either kind is remembered and retried once.
+func (p *BedrockProvider) withReasoningRules(ctx context.Context, fields *bedrockdoc.Interface, call func() error) error {
+	if *fields == nil {
+		return call()
+	}
+	endpoint := p.bedrockRefusalEndpoint()
+	if reasoningRefused(endpoint, p.model) {
+		*fields = nil
+		return call()
+	}
+	off := openAIReasoningEffort(ctx) == "none"
+	if off && reasoningOffAsLowFor(endpoint, p.model) {
+		*fields = reasoningEffortDocument(ReasoningEffortLow)
+		off = false // already low: a refusal now is not of "none"
+	}
+	err := call()
+	switch {
+	case off && isBedrockNoneRefusal(err):
+		if rememberReasoningOffAsLow(endpoint, p.model) {
+			p.logger.Warn().Str("model", p.model).
+				Msg("the model refused reasoning_effort \"none\"; sending \"low\", the nearest level it takes, for off on this model until restart")
+		}
+		*fields = reasoningEffortDocument(ReasoningEffortLow)
+		return call()
+	case isBedrockReasoningRefusal(err):
+		if rememberReasoningRefusal(endpoint, p.model) {
+			p.logger.Warn().Str("model", p.model).
+				Msg("the model refused the reasoning field; retrying without it, and not sending it to this model again until restart. Remove the role's or model's reasoning setting for this model")
+		}
+		*fields = nil
+		return call()
+	}
+	return err
+}
+
+// isBedrockNoneRefusal reports whether err is Bedrock's answer to a model
+// that takes reasoning_effort but not the value "none" (GLM 5.3, B17): a
+// ValidationException that quotes 'none' as unsupported. The message does
+// not name the field, so isBedrockReasoningRefusal does not match it.
+func isBedrockNoneRefusal(err error) bool {
+	var api smithy.APIError
+	if !errors.As(err, &api) || api.ErrorCode() != "ValidationException" {
+		return false
+	}
+	msg := strings.ToLower(api.ErrorMessage())
+	return strings.Contains(msg, "'none'") && strings.Contains(msg, "not supported")
+}
+
+// reasoningEffortDocument is the AdditionalModelRequestFields value that
+// carries one reasoning_effort.
+func reasoningEffortDocument(effort string) bedrockdoc.Interface {
+	return bedrockdoc.NewLazyDocument(map[string]any{"reasoning_effort": effort})
 }

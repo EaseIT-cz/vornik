@@ -52,6 +52,7 @@ func ProjectSchema() AssetSchema {
 					{Path: "autonomy.maxTasksPerHour", Label: "Max tasks/hour", Kind: KindInt},
 					{Path: "autonomy.allowedTaskTypes", Label: "Allowed task types", Kind: KindStringList},
 					{Path: "autonomy.requireApproval", Label: "Require approval", Kind: KindBool},
+					{Path: "autonomy.observe", Label: "Observe only", Kind: KindBool, Help: "Record what autonomy would start (WOULD_START) and start nothing (GitHub #602)."},
 					{Path: "autonomy.pollInterval", Label: "Poll interval", Kind: KindDuration, Default: "5m"},
 					{Path: "autonomy.evaluate_timeout", Label: "Evaluate timeout", Kind: KindDuration, Advanced: true},
 					{Path: "autonomy.preCheck", Label: "Pre-check", Kind: KindString, Advanced: true, Help: "Optional pre-check workflow/gate before firing."},
@@ -204,6 +205,9 @@ func ProjectSchema() AssetSchema {
 // editable via the raw-YAML editor. The drift-guard treats these as
 // consciously-deferred (not missing); shrink this set as forms are added.
 var ProjectDeferredPaths = []string{
+	// Part 24 §24.6 (#920): rendered by the agent admin verbs on an agent
+	// project and approved on the phone; never set in the operator form.
+	"memory.shared_with_namespace",
 	// GitHub #800: written by Vornik for an installed repository's review
 	// project; an operator never sets them in the form.
 	"github.use_registration",
@@ -295,6 +299,9 @@ var ProjectDeferredPaths = []string{
 	"forge.ci.review_on_failure", "forge.ci.success_workflow_id",
 	"forge.ci.workflow_paths", "forge.ci.comment_on_failure",
 	"forge.ci.trigger_workflow_paths", "forge.ci.block_approval_on_failure",
+	// The App review canary's floors (GitHub #873). YAML-only: set after
+	// four measured runs, per the forge guide; the form does not edit them.
+	"forge.canary.floor_detections", "forge.canary.ceiling_decoys",
 	"github.app_id", "github.installation_id", "github.private_key_path", "github.api_base_url",
 	"github.repo",
 	// Forge automation. mention_handle joins the rest of the block as YAML-only:

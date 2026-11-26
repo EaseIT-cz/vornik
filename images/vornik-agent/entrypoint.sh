@@ -106,6 +106,9 @@ LLM_CONTEXT_SIZE="${VORNIK_LLM_CONTEXT_SIZE:-0}"
 # to 2048, which is too small for agents that write medium-to-large files.
 # Set VORNIK_LLM_MAX_TOKENS to override; 0 means omit and rely on gateway default.
 LLM_MAX_TOKENS="${VORNIK_LLM_MAX_TOKENS:-8192}"
+# The role's reasoning level (GitHub #869): off, low, medium or high, resolved
+# by the daemon (role, then model). Empty sends no reasoning field, as before.
+LLM_REASONING="${VORNIK_LLM_REASONING:-}"
 MAX_TOOL_ITERATIONS="${VORNIK_MAX_TOOL_ITERATIONS:-30}"
 SHELL_TIMEOUT="${VORNIK_SHELL_TIMEOUT:-300}"
 # Max bytes of a single tool result fed back to the model. Historically a hard
@@ -1451,12 +1454,14 @@ build_llm_request_file() {
         --slurpfile tools "$tools_file" \
         --argjson ctx_size "${LLM_CONTEXT_SIZE:-0}" \
         --argjson max_tokens "${LLM_MAX_TOKENS:-0}" \
+        --arg reasoning "$LLM_REASONING" \
         --arg response_format "$response_format" \
         --arg schema_name "$schema_name" \
         --argjson response_schema "$response_schema_json" \
         --arg force_tool "$force_tool" \
         '{"model":$model,"messages":$msgs[0],"tools":$tools[0]}
          | if $max_tokens > 0 then . + {"max_tokens":$max_tokens} else . end
+         | if $reasoning != "" then . + {"reasoning_effort": (if $reasoning == "off" then "none" else $reasoning end)} else . end
          | if $ctx_size > 0 then . + {"options":{"num_ctx":$ctx_size}} else . end
          | if $force_tool != "" then
              . + {"tool_choice":{"type":"function","function":{"name":$force_tool}}}
@@ -3684,9 +3689,15 @@ ${previous_result}
             _cap_ct=$(printf '%s' "$response" | jq -r '.usage.completion_tokens // 0')
             _cap_bytes=$(printf '%s' "$response" | jq -r '.choices[0].message.content // "" | if type == "string" then . else tostring end | utf8bytelength')
             _cap_calls=$(printf '%s' "$response" | jq -r '[.choices[0].message.tool_calls[]? | (.function.name // "?")] | join(",")')
-            log "output cap: iteration=$iteration finish_reason=length completion_tokens=$_cap_ct requested_max_tokens=${LLM_MAX_TOKENS:-0} content_bytes=$_cap_bytes tool_calls_not_run=[${_cap_calls}] hit=$OUTPUT_CAP_HITS/$((OUTPUT_CAP_MAX_NUDGES + 1))"
+            # Where the tokens went (GitHub #869): the proxy reports the size
+            # of the reasoning text, and the reasoning token count where the
+            # provider gives one. Unreported stays "unknown", never 0.
+            local _cap_rbytes _cap_rtok
+            _cap_rbytes=$(printf '%s' "$response" | jq -r '.usage.reasoning_bytes // 0')
+            _cap_rtok=$(printf '%s' "$response" | jq -r '.usage.completion_tokens_details.reasoning_tokens // "unknown"')
+            log "output cap: iteration=$iteration finish_reason=length completion_tokens=$_cap_ct requested_max_tokens=${LLM_MAX_TOKENS:-0} content_bytes=$_cap_bytes reasoning_bytes=$_cap_rbytes reasoning_tokens=$_cap_rtok tool_calls_not_run=[${_cap_calls}] hit=$OUTPUT_CAP_HITS/$((OUTPUT_CAP_MAX_NUDGES + 1))"
             if [ "$OUTPUT_CAP_HITS" -gt "$OUTPUT_CAP_MAX_NUDGES" ]; then
-                write_result "FAILED" "Output cap: the model's response was cut off at its output token limit $OUTPUT_CAP_HITS times in this step (the last after $_cap_ct output tokens), so it never produced a complete answer. Raise the output token limit the model actually runs under (the smaller of the role's maxTokens and the route's cap, chat.router.<route>.max_tokens else chat.max_tokens: raise the role's value, and the route's cap too if the role is already at it; codex-subscription sends no cap), or use a model that spends less of its output on reasoning." "" "$(get_duration)" "output_cap"
+                write_result "FAILED" "Output cap: the model's response was cut off at its output token limit $OUTPUT_CAP_HITS times in this step (the last after $_cap_ct output tokens; reasoning: $_cap_rbytes bytes of text, tokens $_cap_rtok), so it never produced a complete answer. Raise the output token limit the model actually runs under (the smaller of the role's maxTokens and the route's cap, chat.router.<route>.max_tokens else chat.max_tokens: raise the role's value, and the route's cap too if the role is already at it; codex-subscription sends no cap), or use a model that spends less of its output on reasoning." "" "$(get_duration)" "output_cap"
                 log "failed (output cap)"
                 return 1
             fi

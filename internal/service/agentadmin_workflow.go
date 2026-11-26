@@ -35,9 +35,12 @@ type WorkflowDefinitionView struct {
 	EffectiveMaxBytes   int                                  `json:"effective_max_bytes"`
 	EffectiveProvenance string                               `json:"effective_provenance"`
 	Schedule            *registry.BrokerSchedule             `json:"schedule,omitempty"`
-	MaxStepVisits       int                                  `json:"max_step_visits"`
-	MaxIterations       int                                  `json:"max_iterations"`
-	MaxWallClock        string                               `json:"max_wall_clock,omitempty"`
+	// HandOver is the workflow started when this one completes (part 24
+	// §24.3 B5, #920).
+	HandOver      *registry.BrokerHandOver `json:"hand_over,omitempty"`
+	MaxStepVisits int                      `json:"max_step_visits"`
+	MaxIterations int                      `json:"max_iterations"`
+	MaxWallClock  string                   `json:"max_wall_clock,omitempty"`
 }
 
 func (s *agentAdminService) ShowWorkflowJSON(_ context.Context, key *persistence.APIKey, raw json.RawMessage) (any, error) {
@@ -65,7 +68,7 @@ func (s *agentAdminService) ShowWorkflowJSON(_ context.Context, key *persistence
 	// BrokerEgress is a value struct, so this preserves the registry's declared
 	// fields without aliasing or modifying registry state.
 	egress := wf.Broker.Egress
-	return WorkflowDefinitionView{ID: wf.ID, DisplayName: wf.DisplayName, Description: wf.Description, Entrypoint: wf.Entrypoint, Steps: steps, Terminals: wf.Terminals, InputSchema: wf.Broker.InputSchema, Egress: egress, EffectiveMaxBytes: egress.EffectiveMaxBytes(), EffectiveProvenance: egress.EffectiveProvenance(), Schedule: wf.Broker.Schedule, MaxStepVisits: wf.MaxStepVisits, MaxIterations: wf.MaxIterations, MaxWallClock: wf.MaxWallClock}, nil
+	return WorkflowDefinitionView{ID: wf.ID, DisplayName: wf.DisplayName, Description: wf.Description, Entrypoint: wf.Entrypoint, Steps: steps, Terminals: wf.Terminals, InputSchema: wf.Broker.InputSchema, Egress: egress, EffectiveMaxBytes: egress.EffectiveMaxBytes(), EffectiveProvenance: egress.EffectiveProvenance(), Schedule: wf.Broker.Schedule, HandOver: wf.Broker.HandOver, MaxStepVisits: wf.MaxStepVisits, MaxIterations: wf.MaxIterations, MaxWallClock: wf.MaxWallClock}, nil
 }
 
 func (p agentAdminProxy) ShowWorkflowJSON(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (any, error) {

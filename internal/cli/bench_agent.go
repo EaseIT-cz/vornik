@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -239,10 +241,10 @@ func init() {
 		"where to write the run journal")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentRunID, "run-id", "", "identifier for this run")
 	benchAgentRunCmd.Flags().BoolVar(&benchAgentPublishedTaskSet, "published-task-set", false,
-		"run a release gate on a published task set (outside tasksets/unreleased/); the journal records it (#790)")
+		"run a release gate on a published task set (outside tasksets/unreleased/); the journal records it")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentPhase, "phase", "",
 		"\"warmup\" for a learning study's warm-up pass: journaled, and refused by every scoring reader "+
-			"unless --include-warmup (GitHub #809)")
+			"unless --include-warmup")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentArm, "arm", "",
 		"name of the arm being run; must be one the pre-registration declares")
 	benchAgentRunCmd.Flags().IntVar(&benchAgentRepeats, "repeats", 1,
@@ -284,7 +286,7 @@ func init() {
 	}
 
 	benchAgentCmd.PersistentFlags().BoolVar(&benchAgentIncludeWarmup, "include-warmup", false,
-		"read a learning study's warm-up journal (refused by default: a warm-up pass is not scored; GitHub #809)")
+		"read a learning study's warm-up journal (refused by default: a warm-up pass is not scored)")
 	benchAgentCmd.AddCommand(benchAgentGoldCmd, benchAgentRunCmd, benchAgentReportCmd,
 		benchAgentRollupCmd, benchAgentCompareCmd, benchAgentTaskSetHashCmd,
 		benchAgentGoldMergeCmd, benchAgentRescoreCmd, benchAgentCalibrateCmd,
@@ -1126,7 +1128,38 @@ func benchWorkspace() agentbench.WorkspacePreparer {
 	if benchAgentWorkspace == "" {
 		return nil
 	}
-	return gitWorkspace{dir: benchAgentWorkspace}
+	return gitWorkspace{dir: benchAgentWorkspace, taskStatus: benchTaskStatus}
+}
+
+// benchTaskStatus asks the bench daemon for a task's status in the run's
+// project, so Prepare can wait for a learning arm's replay worktree (#915,
+// benchmark LLD §12.30 amendment 2026-11-25). found=false is a 404.
+func benchTaskStatus(_ context.Context, taskID string) (string, bool, error) {
+	project := strings.TrimSpace(benchAgentProject)
+	if project == "" {
+		return "", false, fmt.Errorf("no --project to look the task up in")
+	}
+	resp, err := ClientFromEnv().Get(fmt.Sprintf("/api/v1/projects/%s/tasks/%s", url.PathEscape(project), url.PathEscape(taskID)))
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("task %s: HTTP %d", taskID, resp.StatusCode)
+	}
+	var t struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&t); err != nil {
+		return "", false, fmt.Errorf("task %s: %w", taskID, err)
+	}
+	if t.Status == "" {
+		return "", false, fmt.Errorf("task %s: no status in the answer", taskID)
+	}
+	return t.Status, true, nil
 }
 
 // loadTaskSet reads the benchmark task set.

@@ -88,16 +88,25 @@ func (c *Client) ListProviders() []apigateway.ProviderInfo {
 				methods = append(methods, m)
 			}
 		}
-		out = append(out, apigateway.ProviderInfo{Name: api.Name, Description: "your API at " + hostOfURL(api.BaseURL), AllowedMethods: methods})
+		out = append(out, apigateway.ProviderInfo{Name: api.Name, Description: describeBase(api.BaseURL), AllowedMethods: methods})
 	}
 	return out
 }
 
-func hostOfURL(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		return u.Host
+// describeBase names the API's base URL, path included, without its query.
+// Showing only the host hid the base path, and a role repeated it in every
+// request path (/res/v1/res/v1/...), GitHub #910.
+func describeBase(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "your API at " + raw
 	}
-	return raw
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	out := "your API at " + u.Scheme + "://" + u.Host + path + "; a query_api path is relative to it"
+	if path != "" {
+		out += " (do not start it with " + path + ")"
+	}
+	return out
 }
 
 // Call makes one request.

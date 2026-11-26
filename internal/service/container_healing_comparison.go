@@ -51,7 +51,7 @@ func (a *healingComparisonAdapter) ProposeForHealing(ctx context.Context, projec
 	case res == nil:
 		return nil, fmt.Errorf("configassist: healing produced no result")
 	case res.Refusal != nil:
-		return nil, fmt.Errorf("configassist: healing refused: %s: %s", res.Refusal.Code, res.Refusal.Message)
+		return nil, &configassist.RefusalError{Refusal: *res.Refusal}
 	case res.Proposal == nil:
 		return nil, fmt.Errorf("configassist: healing filed nothing and refused nothing")
 	}

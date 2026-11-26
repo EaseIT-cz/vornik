@@ -97,12 +97,23 @@ type pageListing struct {
 // "<file>|<the read's source text, whitespace collapsed>". A key covers every
 // identical read in its file.
 var integrationPageListed = map[string]pageListing{
+	// GitHub #864: t864 lives in a database the test creates for itself
+	// (bootstrapShapedDB), so no other test's rows exist there.
+	"internal/cli/restore_clean_864_integration_test.go|`SELECT id FROM t864 ORDER BY e <-> '[4,5,6]' LIMIT 1`": {pageResetFirst,
+		"t864 is in a per-test database (bootstrapShapedDB) holding only the two rows the test seeds"},
 	// GitHub #669 item 5: each subtest of the approver suite runs on a fresh
 	// repository (newApproverHarness(t, fresh)), so only its own rows exist.
 	"internal/persistence/repotest/approver_device_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 20)": {pageResetFirst,
 		"the subtest's repository is fresh (newApproverHarness(t, fresh)); it holds only the five rows the subtest creates"},
 	"internal/persistence/repotest/approver_device_suite.go|h.repo.ListApplyFailedSince(h.ctx, h.now.Add(-7*day), 1)": {pageLimitIsSubject,
 		"the call tests the limit itself, on the subtest's fresh repository"},
+	// GitHub #475: the breach-ledger suite's offset-paging check. Whatever
+	// other rows the lane holds, the two pages are compared with a full
+	// paged-through read taken just before, with no write in between.
+	"internal/persistence/repotest/incident_suite.go|s.List(ctx, 2, 0)": {pageLimitIsSubject,
+		"the call tests offset paging itself, against the full ledger read paged through just before it, with no write in between"},
+	"internal/persistence/repotest/incident_suite.go|s.List(ctx, 2, 2)": {pageLimitIsSubject,
+		"the call tests offset paging itself, against the full ledger read paged through just before it, with no write in between"},
 	// GitHub #459: the limit itself is under test; the presence checks in the
 	// same suite read unbounded.
 	"internal/persistence/repotest/knowledge_reembed_459_suite.go|repo.ListMissingEmbedding(ctx, 1)": {pageLimitIsSubject,

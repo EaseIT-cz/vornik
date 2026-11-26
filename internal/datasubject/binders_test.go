@@ -1,6 +1,7 @@
 package datasubject
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -185,6 +186,54 @@ func TestAllBindersProduceValidBindings(t *testing.T) {
 		if err := b.Validate(); err != nil {
 			t.Errorf("binder %d produced an invalid binding: %v", i, err)
 		}
+	}
+}
+
+// GitHub #478, GDPR design §7 "binder determinism": the same input produces the
+// same links with the same source and confidence. Binders 1 and 2 have no
+// production caller that persists them yet, so this is the level they are
+// observed at; binder 3's persisted path is pinned on the Postgres lane by
+// TestIntegrationKGBind_SameInputSameLinks. Each binder runs twice per input,
+// including inputs that normalise to one value (case, whitespace, a display
+// name around an address, a confidence above the source ceiling), and the
+// bindings must be identical.
+func TestBinders_SameInputSameBinding(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b func() (Binding, error)
+	}{
+		{"authenticated",
+			func() (Binding, error) { return BindAuthenticatedIdentity("u-1", "telegram", "12345") },
+			func() (Binding, error) { return BindAuthenticatedIdentity(" u-1 ", " telegram", "12345 ") }},
+		{"operator link",
+			func() (Binding, error) { return BindOperatorLink("op-1", "telegram:1") },
+			func() (Binding, error) { return BindOperatorLink("op-1 ", " telegram:1") }},
+		{"email envelope",
+			func() (Binding, error) { return BindEmailEnvelope("Jane <Jane.Doe@Example.COM>", "m1", "p") },
+			func() (Binding, error) { return BindEmailEnvelope("jane.doe@example.com", "m1", "p") }},
+		{"kg extraction",
+			func() (Binding, error) { return BindKGExtraction("ent-1", "chunk-1", "p", ConfidencePossible) },
+			func() (Binding, error) { return BindKGExtraction("ent-1", "chunk-1", "p", ConfidenceCertain) }},
+		{"kg entity row",
+			func() (Binding, error) { return BindKGEntityRow("ent-1", "p", "") },
+			func() (Binding, error) { return BindKGEntityRow(" ent-1", "p", ConfidenceProbable) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			first, err := c.a()
+			if err != nil {
+				t.Fatalf("first: %v", err)
+			}
+			for run, fn := range []func() (Binding, error){c.a, c.b} {
+				got, err := fn()
+				if err != nil {
+					t.Fatalf("run %d: %v", run, err)
+				}
+				if !reflect.DeepEqual(got, first) {
+					t.Fatalf("run %d differs:\n got  %+v\n want %+v", run, got, first)
+				}
+			}
+		})
 	}
 }
 

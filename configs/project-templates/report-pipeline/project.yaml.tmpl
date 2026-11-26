@@ -8,6 +8,9 @@ maxConcurrentTasks: 1
 
 autonomy:
   enabled: true
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   # cron mode fires the goal below VERBATIM as the task prompt on
   # every tick — no LLM evaluation step. duplicateWindow must be
   # "0" for cron projects whose goal is identical every tick (see

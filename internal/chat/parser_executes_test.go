@@ -131,10 +131,11 @@ func TestExecuteAction_Routing(t *testing.T) {
 	if err != nil || !res.Success {
 		t.Errorf("retry_task: %v / %+v", err, res)
 	}
-	// retry_task non-failed.
+	// retry_task non-failed: the atomic requeue refuses an in-flight task.
 	tr.GetFunc = func(_ context.Context, id string) (*persistence.Task, error) {
 		return &persistence.Task{ID: id, Status: persistence.TaskStatusRunning}, nil
 	}
+	tr.RequeueTerminalTaskFunc = func(context.Context, string, int, int) (bool, error) { return false, nil }
 	res, _ = ExecuteAction(ctx, Action{Type: ActionRetryTask, TaskID: "t1", Confirm: true}, tr, er, nil)
 	if res.Success {
 		t.Error("retry_task on RUNNING should fail")

@@ -23,6 +23,7 @@ func TestErasureEscalation_StartsWithRetentionDisabled(t *testing.T) {
 	}
 	c := &Container{Config: cfg, DB: db.DB, backend: &storage.Backend{Driver: "sqlite"}, Logger: zerolog.Nop()}
 	c.initErasureEscalation()
+	c.startErasureEscalation() // startWork starts it since #586
 	if c.erasureEscalation == nil || c.erasureEscalation.pass == nil {
 		t.Fatal("the escalation loop did not start with retention disabled")
 	}

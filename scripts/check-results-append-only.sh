@@ -62,17 +62,47 @@ for side in base head; do
         exit 1
     fi
 done
-base_rows="$(git show "$base:$page" | table_rows results)"
+# Issue references are not results: public pages cite no enterprise issue
+# numbers (operator 2026-11-25, scripts/check-public-issue-refs.sh), so rows
+# are compared with "(GitHub #N)", "#N" and "GitHub #N" stripped on both
+# sides. Removing one passes; any other change to the row still fails.
+strip_refs() {
+    sed -E -e 's/[[:space:]]*\((GitHub[[:space:]]+)?#[0-9]+([[:space:]]*,[[:space:]]*#[0-9]+)*\)//g' \
+        -e 's/(GitHub[[:space:]]+)?#[0-9]{2,5}//g' -e 's/\([[:space:]]*[,;]?[[:space:]]*\)//g' \
+        -e 's/[[:space:]]*,[[:space:]]*([,)])/\1/g' -e 's/\([[:space:]]*,[[:space:]]*/(/g' -e 's/[[:space:]]+/ /g'
+}
+base_rows="$(git show "$base:$page" | table_rows results | strip_refs)"
 exempt="$(git show "$base:$page" | table_rows summary)"
-head_rows="$(table_rows results < "$page")"
+head_rows="$(table_rows results < "$page" | strip_refs)"
 # A multiset: a row published n times at the base must appear n times at HEAD,
 # so editing one of two identical rows still fails (#796 review).
 missing="$(awk 'NR == FNR { if ($0 != "") have[$0]++; next } $0 != "" { if (have[$0] > 0) have[$0]--; else print }' \
     <(printf '%s\n' "$head_rows") <(printf '%s\n' "$base_rows"))"
+# An editorial correction of a published row (a reworded reference, never a
+# number) is allowed only when the base row's SHA-256, taken before
+# strip_refs, is listed in scripts/results-editorial-corrections.txt with a
+# reason: "<sha256>  <reason>". The list is reviewed like code.
+corrections=scripts/results-editorial-corrections.txt
+corrected=0
+if [ -n "$missing" ] && [ -f "$corrections" ]; then
+    allowed="$(grep -E '^[0-9a-f]{64}[[:space:]]+[^[:space:]]' "$corrections" | cut -d' ' -f1 || true)"
+    kept=""
+    while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        listed=0
+        while IFS= read -r raw; do
+            [ "$(strip_refs <<<"$raw")" = "$m" ] || continue
+            h="$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
+            grep -qx "$h" <<<"$allowed" && listed=1
+        done < <(git show "$base:$page" | table_rows results)
+        if [ "$listed" -eq 1 ]; then corrected=$((corrected + 1)); else kept+="$m"$'\n'; fi
+    done <<<"$missing"
+    missing="${kept%$'\n'}"
+fi
 rows="$(grep -c . <<<"$base_rows" || true)"
 if [ -n "$missing" ]; then
     echo "check-results-append-only: FAIL — published row(s) of $page at $base are no longer at HEAD (edited or removed; append a new row instead):" >&2
     printf '%s\n' "$missing" >&2
     exit 1
 fi
-echo "check-results-append-only: OK — $rows published result row(s) at $base unchanged; $exempt summary table line(s) exempt, its header included (#796)"
+echo "check-results-append-only: OK — $rows published result row(s) at $base unchanged ($corrected listed editorial correction(s)); $exempt summary table line(s) exempt, its header included (#796)"

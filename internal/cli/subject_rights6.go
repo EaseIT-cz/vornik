@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -191,12 +190,15 @@ func confirmTyped(word string) bool {
 
 // storeRequestReport stores the report on the request ALWAYS (an incomplete run's
 // report is the record of what is outstanding), then actions the request only
-// when complete — the contract writeErasureReport established.
+// when complete — the contract writeErasureReport established. A re-run keeps
+// every earlier run's report (#901, GDPR design §4.16.8): the rows an earlier
+// rectification corrected no longer match, so its report is the only record of
+// their inaccurate originals.
 func storeRequestReport(ctx context.Context, repo *subjectstore.Repository,
 	req *datasubject.Request, report any, complete bool) error {
-	blob, err := json.MarshalIndent(report, "", "  ")
+	blob, err := reportWithRuns(ctx, repo, req.ID, report)
 	if err != nil {
-		return err
+		return fmt.Errorf("store report: %w", err)
 	}
 	sum := sha256.Sum256(blob)
 	hash := "sha256:" + hex.EncodeToString(sum[:])
@@ -270,8 +272,14 @@ func runSubjectRestrict(_ *cobra.Command, args []string) error {
 	fmt.Printf("\nrestriction %s in force for subject %s from %s\n",
 		res.ID, res.SubjectID, res.RestrictedAt.Format(time.RFC3339))
 	// The restriction is in force before the report is stored: if storing fails,
-	// the data is still protected and the operator re-runs nothing but the report.
-	return storeRequestReport(ctx, repo, &req, rep, true)
+	// the data is still protected. A re-run cannot store the report while the
+	// restriction stands (ErrRestrictionActive), so the error says what holds
+	// (GDPR design §4.16.8).
+	if err := storeRequestReport(ctx, repo, &req, rep, true); err != nil {
+		return fmt.Errorf("restriction %s is in force, but its report was not stored and request %s is not actioned: %w",
+			res.ID, req.ID, err)
+	}
+	return nil
 }
 
 func printRestrictionReport(rep datasubject.RestrictionReport) {
@@ -355,6 +363,14 @@ func runSubjectRectify(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	return rectifyRequest(ctx, repo, db, req, correction, subjectRectifyReviewer)
+}
+
+// rectifyRequest is runSubjectRectify after the database is open: plan, review,
+// execute, store the report, and action the request when complete.
+func rectifyRequest(ctx context.Context, repo *subjectstore.Repository, db *sql.DB,
+	req datasubject.Request, correction datasubject.Correction,
+	approve func(datasubject.RectificationProposal) (bool, error)) error {
 	links, err := repo.ListLinks(ctx, req.SubjectID)
 	if err != nil {
 		return err
@@ -381,7 +397,7 @@ func runSubjectRectify(_ *cobra.Command, args []string) error {
 	r := &datasubject.Rectifier{
 		Chunks:   postgres.NewChunkRedactorRepository(db),
 		Entities: postgres.NewEntityRectifierRepository(db),
-		Approve:  subjectRectifyReviewer,
+		Approve:  approve,
 	}
 	res, execErr := r.Execute(ctx, plan)
 	if res == nil {

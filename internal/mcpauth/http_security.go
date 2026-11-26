@@ -3,10 +3,11 @@ package mcpauth
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // secureOAuthURL accepts HTTPS endpoints and HTTP only for local loopback
@@ -20,18 +21,10 @@ func secureOAuthURL(raw, field string) (*url.URL, error) {
 	if u.User != nil || u.Fragment != "" {
 		return nil, fmt.Errorf("mcpauth: invalid %s URL %q", field, raw)
 	}
-	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopbackHost(u.Hostname())) {
+	if u.Scheme != "https" && (u.Scheme != "http" || !dialguard.IsLoopbackHost(u.Hostname())) {
 		return nil, fmt.Errorf("mcpauth: %s must use https (http is allowed only for loopback)", field)
 	}
 	return u, nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // doSensitivePOST never follows redirects. Go may replay a POST body on

@@ -29,6 +29,8 @@ import (
 // across the INSERT, which is safe because the repository is built once per
 // daemon over the connection pool (storage.Build(c.instrumentedDB())), never
 // over a caller's transaction; a second instance would have its own stripes.
+// The architecture law live_event_pool_749_law_test.go enforces that census
+// (GitHub #749).
 type ExecutionLiveEventRepository struct {
 	db          DBTX
 	appendLocks [liveEventAppendStripes]sync.Mutex

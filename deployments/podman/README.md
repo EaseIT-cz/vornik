@@ -207,6 +207,13 @@ own session.
    (`server.public_base_url`). On an existing install it is not changed: the
    quickstart prints the block to add under `server:`.
 4. Firewall port 8080 from everything but this host.
+5. Limit each source address before any key is checked: add
+   `api.rate_limit.per_ip` with `rps: 20` and `burst: 40` to `config.yaml`
+   (managed instances run with these values). It is not turned on for you,
+   because agents call the daemon from one address and their rate on a busy
+   host has not been measured. Each companion key is limited on its own
+   regardless: 5 requests a second, bursts of 50
+   (`api.rate_limit.companion_key`).
 
 Anything more serious should go through the Helm chart in
 `deployments/helm/vornik` onto a real cluster.

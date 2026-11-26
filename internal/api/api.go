@@ -10,8 +10,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
 	"vornik.io/vornik/internal/aimark"
 	"vornik.io/vornik/internal/benchlearning"
+	"vornik.io/vornik/internal/modelcheck"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -1116,6 +1118,14 @@ type Server struct {
 	// disables enforcement. Same instance is shared with the UI
 	// subtree (service/container wires both).
 	apiKeyLimiter *ratelimit.APIKeyLimiter
+	// oidcTrusts backs GitHub Actions ID tokens bound to companion keys
+	// (GitHub #792, design 27). Nil leaves that backend out of the chain.
+	oidcTrusts persistence.CompanionOIDCTrustRepository
+	// restartGen and the value read at start back setup/status's generations
+	// (GitHub #799, operations-API design §6.13).
+	restartGen         RestartGeneration
+	restartGenLoaded   int64
+	restartGenLoadedOK bool
 	// rateLimitMetrics records per-key and per-project limiter outcomes.
 	// Nil keeps enforcement working without Prometheus emission.
 	rateLimitMetrics *ratelimit.Metrics
@@ -1154,6 +1164,9 @@ type Server struct {
 	// drainState is the bit's writer side: the operator drain lease
 	// (GitHub #290) and the permanent SIGTERM drain; see drain.go.
 	drainState
+	// holdState is the held start (GitHub #586): the gate's bit, the
+	// release and the deadline; see hold.go.
+	holdState
 	// inflight counts in-flight chat-proxy requests for the deploy idle
 	// gate (GitHub #97); see inflight.go.
 	inflight        longRequestCounter
@@ -1256,6 +1269,10 @@ type Server struct {
 	// re-resolving the registry.
 	apiMetrics     *APIMetrics
 	memorySearcher MemorySearcher
+	// memoryProjectFor maps a project to the project whose memory its
+	// searches read (agent-administered design part 24 §24.2, #920); nil:
+	// the project itself.
+	memoryProjectFor func(projectID string) string
 	// memorySearchRolePolicy resolves an executor task key's role policy for
 	// the REST memory search (#550). Nil: no role policy is applied.
 	memorySearchRolePolicy MemorySearchRolePolicyFunc
@@ -1458,6 +1475,10 @@ type Server struct {
 	// LLM the dispatcher is configured with (typically Claude via the
 	// `claude` CLI) without knowing how the provider is implemented.
 	chatProvider chat.Provider
+	// modelChecker and managedCatalogue check a model before a save writes
+	// it (GitHub #881). Nil: not checked; not managed.
+	modelChecker     *modelcheck.Checker
+	managedCatalogue func() []string
 	// explainRenderer powers POST /api/v1/projects/{p}/tasks/{id}/explain.
 	// Deterministic — never calls an LLM. Joins playbook.Lookup with the
 	// task's step outcomes / tool audit / log tail to produce a plain-
@@ -2331,6 +2352,12 @@ func WithGistReader(r GistReader) ServerOption {
 // instance after a successful DB-key lookup. The service
 // container constructs a single shared limiter so the api
 // router and UI subtree count requests against the same buckets.
+// WithCompanionOIDCTrusts wires the trust store for GitHub Actions ID tokens
+// (GitHub #792, design 27).
+func WithCompanionOIDCTrusts(r persistence.CompanionOIDCTrustRepository) ServerOption {
+	return func(s *Server) { s.oidcTrusts = r }
+}
+
 func WithAPIKeyLimiter(l *ratelimit.APIKeyLimiter) ServerOption {
 	return func(s *Server) {
 		s.apiKeyLimiter = l
@@ -2685,6 +2712,20 @@ func WithMemorySearcher(ms MemorySearcher) ServerOption {
 	return func(s *Server) {
 		s.memorySearcher = ms
 	}
+}
+
+// WithMemoryProjectResolver sets the project whose memory a project's
+// /memory/search reads (part 24 §24.2 A2, #920).
+func WithMemoryProjectResolver(f func(projectID string) string) ServerOption {
+	return func(s *Server) { s.memoryProjectFor = f }
+}
+
+// memoryProject is the project whose memory projectID's searches read.
+func (s *Server) memoryProject(projectID string) string {
+	if s.memoryProjectFor == nil {
+		return projectID
+	}
+	return s.memoryProjectFor(projectID)
 }
 
 // WithMemorySearchRolePolicy wires the resolver of a task's role
@@ -3274,4 +3315,13 @@ func WireDoctorAPIMetrics(m *APIMetrics) {
 // bounded by the role ceiling alone — the behaviour before grants existed.
 func WithToolGrants(repo persistence.ExecutionToolGrantRepository) ServerOption {
 	return func(s *Server) { s.toolGrants = repo }
+}
+
+// WithModelChecker installs the check a save runs before writing a model, and
+// on a managed instance the catalogue a model must be in (GitHub #881).
+func WithModelChecker(c *modelcheck.Checker, managedCatalogue func() []string) ServerOption {
+	return func(s *Server) {
+		s.modelChecker = c
+		s.managedCatalogue = managedCatalogue
+	}
 }

@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/autonomy/manager.go
-      sha256: 9d2815da34c0986caea818a20f1929b968d694c9bda5b0f39b04db4da65953a3
+      sha256: f4af087ad0e047e967e713ce26582c80876edfd42df2cda7ec8669c0aa1e8e24
     - path: internal/registry/project.go
-      sha256: b43d6ecb5b4d87b0f6edb23ee01526fc909e37825eed9565a4a5d6f2917bcaec
+      sha256: ced970c52679d03bf42e43a75f38e459596cacaee6e339d50084e157a49d0ed7
 ---
 # Autonomy — self-running projects
 
@@ -34,6 +34,7 @@ Autonomy is configured per project under an `autonomy` block:
 ```yaml
 autonomy:
   enabled: true
+  observe: true              # record what it would start, start nothing (see "Observe first")
   mode: llm
   goal: "Scan the configured feeds and open a digest task when something material lands."
   pollInterval: "30m"        # must carry a unit ("30m", "60s") — a bare number falls back to 5m
@@ -46,6 +47,7 @@ Useful keys:
 | Key | Meaning |
 |-----|---------|
 | `autonomy.enabled` | master switch for the project (default `false`) |
+| `autonomy.observe` | record what autonomy would start and start nothing (default `false`; new projects get `true`) |
 | `autonomy.goal` | the standing objective (required for `llm`/`cron`) |
 | `autonomy.mode` | `llm` / `cron` / `backlog` |
 | `autonomy.pollInterval` | tick cadence (Go duration; default `5m`) |
@@ -123,6 +125,31 @@ Additional bounds worth knowing:
 - **Circuit breaker.** A daemon-level breaker
   (`autonomy.circuit_breaker.*`) automatically disables a project's autonomy if
   it sees sustained failures, and alerts you.
+
+### Observe first
+
+With `autonomy.observe: true`, autonomy runs every tick and every check as
+usual, then records what it would have started (outcome `WOULD_START`, with
+the prompt) and starts nothing. Turn it on, read a week of proposals, then
+set `observe: false` to let it act.
+
+- **Where to read them.** The project page shows "Observe only", the count of
+  would-starts in the last 7 days (shown as "200+" past 200) and the latest
+  five. All of them:
+  `vornikctl autonomy evaluations -p <project> --outcome WOULD_START`
+  (`--json` for the whole prompt).
+- **What a proposal means.** It passed every check that act mode applies,
+  spend caps included, so act mode would have started it at that tick.
+- **What it costs.** Each tick still runs the assessment, so its model cost is
+  the same as in act mode. No task runs, so no task cost follows.
+- **Repeats.** The same proposal within the duplicate window is recorded once
+  and then as `DUPLICATE`.
+- **New projects start here.** Every shipped template, the example configs and
+  `vornikctl init project --autonomy` write `observe: true`, and the project
+  form pre-sets "Observe only" when it turns autonomy on. Existing projects
+  keep acting: an absent key means `false`.
+- **Secrets.** A proposal's prompt is scanned for secrets before it is stored,
+  like the other audit tables.
 
 To stop autonomy, set `autonomy.enabled: false` (or toggle it from the project
 page in the UI) — the loop is cancelled.

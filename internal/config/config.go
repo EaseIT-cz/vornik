@@ -340,6 +340,10 @@ type Config struct {
 	// over a different stored credential (GitHub #626). Names only.
 	credentialCandidates []string
 	shadowedCredentials  []string
+	// undeclaredKeys: the file's keys the struct does not declare
+	// (UnknownKeys, GitHub #869). The decode accepts them silently, so the
+	// daemon logs each at startup.
+	undeclaredKeys []string
 
 	// SteeringNotificationsEnabled pushes a prompt to the originating
 	// chat/DM when a task that was created there enters a steering state
@@ -780,13 +784,50 @@ type AgentAdminConfig struct {
 	// design part 06, §6.7, GitHub #734; §6.8, GitHub #740). Self-hosted only;
 	// folded at load. Not renamed when it gained MCP servers: it shipped in
 	// 2026.11.5.
-	PrivateAPIHosts []string           `yaml:"private_api_hosts" doc:"Host names an agent project's approved API or MCP server may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API or server still needs its approval on an approver device. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed."`
+	// Since GitHub #403 (§6.12) an item is a string or a mapping
+	// (PrivateAPIHost); PrivateHosts() is the parsed list.
+	PrivateAPIHosts []PrivateAPIHost   `yaml:"private_api_hosts" doc:"Intranet hosts an agent project's approved API or MCP server may reach on a private (RFC 1918, ULA or CGNAT 100.64.0.0/10) address. Each item is a host name or an IP literal, either with :port; an IPv6 literal takes its port in brackets. Hosts are compared without case or a trailing dot. The URL must be https, and an item with a port covers that port only. An item may instead be a mapping. host is as above. addresses lists CIDRs or addresses: every dial of the host must resolve inside them, public or private. projects lists the agent project IDs the item serves; absent, it serves every agent project, so name projects when more than one agent project exists. A listed host never reaches loopback, link-local or a metadata address, which cannot be listed. Each API or server still needs its approval on an approver device, which records the grant. Read at daemon start. Empty (the default): agent APIs and MCP servers reach public addresses only. Refused under hosting.mode managed."`
 	Models          []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
 	// The caps on what the admin verbs may set (agent-administered design
 	// part 06 §6.9, GitHub #798, #805); accessors in agent_admin_limits_798.go.
 	MaxConcurrentTasks    int `yaml:"max_concurrent_tasks" doc:"Highest maxConcurrentTasks update_project may set on an agent project (default 2, below the scheduler's default cap of 4, so one project cannot take every slot). scheduler.max_concurrent_tasks still caps all projects together. Raising a project's value needs approval on an approver device."`
 	MaxRoleTokens         int `yaml:"max_role_tokens" doc:"Highest max_tokens define_swarm may set on an agent role (default 32768). A value above the role's current one needs approval on an approver device."`
 	MaxRoleToolIterations int `yaml:"max_role_tool_iterations" doc:"Highest max_tool_iterations define_swarm may set on an agent role (default 120). It caps the role's base budget; with tool_budget.enabled the executor may scale that base by up to tool_budget.max_factor. A value above the role's current one (30 when unset) needs approval on an approver device."`
+}
+
+// PrivateAPIHost is one agent_admin.private_api_hosts item (agent-administered
+// design part 06 §6.12, GitHub #403): a plain string sets Host only.
+type PrivateAPIHost struct {
+	Host      string   `yaml:"host"`
+	Addresses []string `yaml:"addresses,omitempty"`
+	Projects  []string `yaml:"projects,omitempty"`
+}
+
+// UnmarshalYAML accepts a string (the form shipped in 2026.11.5) or a
+// mapping with host, addresses and projects; any other key is refused, since
+// the loader's unknown-key check skips a type that decodes itself.
+func (h *PrivateAPIHost) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*h = PrivateAPIHost{Host: n.Value}
+		return nil
+	}
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("agent_admin.private_api_hosts: line %d: an item is a host or a mapping", n.Line)
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		switch k := n.Content[i].Value; k {
+		case "host", "addresses", "projects":
+		default:
+			return fmt.Errorf("agent_admin.private_api_hosts: line %d: unknown key %q (host, addresses, projects)", n.Content[i].Line, k)
+		}
+	}
+	type plain PrivateAPIHost
+	var p plain
+	if err := n.Decode(&p); err != nil {
+		return fmt.Errorf("agent_admin.private_api_hosts: %w", err)
+	}
+	*h = PrivateAPIHost(p)
+	return nil
 }
 
 // AgentModelConfig is one model of agent_admin.models.
@@ -1755,7 +1796,7 @@ type RetentionConfig struct {
 	Interval string `yaml:"interval" doc:"How often the sweeper runs."`
 	// Default retention windows in days. Zero → compiled default.
 	TaskLLMUsageDays int `yaml:"task_llm_usage_days" doc:"Days to keep per-task LLM usage rows."`
-	ToolAuditDays    int `yaml:"tool_audit_days" doc:"Days to keep tool-call audit rows and memory recall audit rows; clamped up to tool_audit_floor_days."`
+	ToolAuditDays    int `yaml:"tool_audit_days" doc:"Days to keep tool-call audit rows, memory recall audit rows and autonomy evaluation rows; clamped up to tool_audit_floor_days."`
 	// ToolAuditFloorDays is the minimum tool_audit_log window, overriding any
 	// lower daemon or project tool_audit_days. 0 → 180 (six months, EU AI Act
 	// Art 26(6)). A larger value raises the floor; a smaller one is ignored
@@ -1855,11 +1896,18 @@ type RetentionConfig struct {
 	// Phase D) whose last_hit_at is older than the window. Global table
 	// — not scoped by project — swept once per cycle alongside
 	// llm_response_cache. Default 0 → keep forever. Embeddings are
-	// deterministic per (content, model) so a hit is always exact; this
-	// window only bounds unbounded growth by dropping cold entries (they
-	// re-embed on next use). Set a window on deployments where the table
-	// grows large; 30d mirrors the response-cache recommendation.
-	EmbeddingCacheDays int `yaml:"embedding_cache_days" doc:"Days to keep cached embeddings before evicting cold entries (0 = keep forever; 30d recommended if the table grows large)."`
+	// deterministic per (content, model), so a dropped cold entry only
+	// re-embeds on next use.
+	//
+	// The window is a storage-limitation control (Art 5(1)(e)), not only a
+	// size knob (GitHub #479). Recall QUERIES are cached under the hash of
+	// their own text, which often names a person, and no erasure path can
+	// find them: erasure and project deletion evict only the vectors of the
+	// memory records they delete. This window is the only bound on the rest.
+	// configs/retention-recommended.yaml sets 30; the doctor warns when it is
+	// unset while memory.embedding_cache_enabled is on. Postgres only: SQLite
+	// has no embedding_cache table. GDPR design §4.20.3 item 5.
+	EmbeddingCacheDays int `yaml:"embedding_cache_days" doc:"Days to keep a cached embedding after its last use (0 = keep forever). Set it wherever personal data is processed: cached recall queries often name a person and no erasure reaches them (30 in the recommended profile). Postgres only."`
 	// BlackboxTraceCacheDays bounds blackbox_trace_cache, the assembled
 	// traces of the black box (each a copy of a task's messages and audit
 	// rows). Always on; zero → 1 day, the cache's own TTL — a row past it is
@@ -2247,6 +2295,14 @@ type AgentLLMConfig struct {
 	// Keyed by model name; applied automatically when a role uses that model.
 	// Example: {"claude-haiku-4-5": {MaxTokens: 4096}, "claude-opus-4-6": {MaxTokens: 32768}}
 	ModelLimits map[string]ModelLimitConfig `yaml:"model_limits"`
+	// Tiers maps a role's modelTier (trivial, standard, complex, coding,
+	// vision) to this instance's model and fallback (GitHub #880, project and
+	// swarm registry design §11). A tier with no entry uses Model.
+	Tiers map[string]ModelChoice `yaml:"tiers" doc:"modelTier -> model and fallback for roles that name a tier."`
+	// Roles maps "<swarm>/<role>" to a model and fallback, for a choice
+	// narrower than a tier. It wins over Tiers; a role's own model wins over
+	// both.
+	Roles map[string]ModelChoice `yaml:"roles" doc:"\"<swarm>/<role>\" -> model and fallback, ahead of the tier map."`
 	// Health configures the per-model agent-LLM circuit breaker (LLD
 	// 2026-07-12-agent-llm-health-breaker). Absent/nil Enabled → ON with
 	// agent defaults (MinSamples=3 — containers are expensive); explicit
@@ -2257,9 +2313,26 @@ type AgentLLMConfig struct {
 
 // ModelLimitConfig holds output and context limits for a specific model.
 // Both fields are optional; zero means inherit the global AgentLLMConfig value.
+// ModelChoice is a model and an optional fallback, the value of the
+// runtime.agent_llm tiers and roles maps and of a model profile (#880).
+type ModelChoice struct {
+	Model    string `yaml:"model" json:"model" doc:"Model id."`
+	Fallback string `yaml:"fallback,omitempty" json:"fallback,omitempty" doc:"Fallback model id; empty for none."`
+}
+
 type ModelLimitConfig struct {
 	MaxTokens   int `yaml:"max_tokens"`
 	ContextSize int `yaml:"context_size"`
+	// Reasoning is the model's default reasoning level for agent roles: off,
+	// low, medium or high (GitHub #869). A role's own reasoning wins; empty
+	// sends nothing, as before.
+	Reasoning string `yaml:"reasoning" doc:"Default reasoning level for agent roles on this model: off, low, medium or high (empty = the model's own default)."`
+	// ReasoningTemplateVariable names the chat-template variable that
+	// switches this model's reasoning on a llama.cpp-style server, for a
+	// template that ignores reasoning_effort (enable_thinking for Gemma 4
+	// and Nemotron, reasoning for Cohere's North). Off sends it false, a
+	// level true, in chat_template_kwargs (GitHub #869).
+	ReasoningTemplateVariable string `yaml:"reasoning_template_variable" doc:"Chat-template variable that switches this model's reasoning on a llama.cpp-style server (e.g. enable_thinking); empty = reasoning_effort only."`
 }
 
 // WarmPoolConfig configures the warm container pool.
@@ -2414,6 +2487,10 @@ type APIRateLimitConfig struct {
 	// in TrustedProxies; otherwise falls back to RemoteAddr's IP.
 	PerIP PerIPRateLimit `yaml:"per_ip" json:"per_ip"`
 
+	// CompanionKey is the default per-key limit for companion keys whose
+	// row has no limit of its own (GitHub #847, design 26 §4).
+	CompanionKey CompanionKeyRateLimit `yaml:"companion_key" json:"companion_key" since:"2026.11.8"`
+
 	// Backend selects the per-project rate-limiter storage —
 	// "memory" (default, legacy single-daemon) or "postgres"
 	// (multi-daemon SaaS; counters live in the ratelimit_counters
@@ -2430,6 +2507,45 @@ type APIRateLimitConfig struct {
 	// table size bounded under sustained traffic. Only consulted
 	// when Backend == "postgres".
 	CounterRetention string `yaml:"counter_retention" json:"counter_retention"`
+}
+
+// CompanionKeyRateLimit is the default per-key limit every companion key
+// gets when its row sets none (GitHub #847, design 26 §4). Zero RPS or Burst
+// takes the default (5 per second, burst 50); Off removes the default only,
+// so a key whose row has its own limit is still limited by it.
+type CompanionKeyRateLimit struct {
+	RPS   int  `yaml:"rps" json:"rps" doc:"Default per-key request rate for companion keys with no limit of their own (0 = 5 per second)."`
+	Burst int  `yaml:"burst" json:"burst" doc:"Default per-key burst for companion keys with no limit of their own (0 = 50)."`
+	Off   bool `yaml:"off" json:"off" doc:"Turn the default companion-key limit off (the memory benchmark's daemon); a key's own row limit still applies."`
+}
+
+// Default companion-key limit (design 26 §4.2).
+const (
+	DefaultCompanionKeyRPS   = 5
+	DefaultCompanionKeyBurst = 50
+)
+
+// Validate refuses a negative rate or burst.
+func (c CompanionKeyRateLimit) Validate() error {
+	if c.RPS < 0 || c.Burst < 0 {
+		return fmt.Errorf("api.rate_limit.companion_key: rps (%d) and burst (%d) must not be negative", c.RPS, c.Burst)
+	}
+	return nil
+}
+
+// Effective returns the limit to apply and whether one applies at all.
+func (c CompanionKeyRateLimit) Effective() (rps, burst int, on bool) {
+	if c.Off {
+		return 0, 0, false
+	}
+	rps, burst = c.RPS, c.Burst
+	if rps <= 0 {
+		rps = DefaultCompanionKeyRPS
+	}
+	if burst <= 0 {
+		burst = DefaultCompanionKeyBurst
+	}
+	return rps, burst, true
 }
 
 // PerIPRateLimit is the per-client-IP backstop token-bucket. Sits

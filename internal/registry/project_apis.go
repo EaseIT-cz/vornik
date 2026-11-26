@@ -2,10 +2,11 @@ package registry
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // ProjectAPI is a per-project REST provider (agent-administered Vornik
@@ -146,8 +147,7 @@ func checkAPIBaseURL(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		h := u.Hostname()
-		if ip := net.ParseIP(h); h == "localhost" || (ip != nil && ip.IsLoopback()) {
+		if dialguard.IsLoopbackHost(u.Hostname()) { // the one rule (#168)
 			return nil
 		}
 	}

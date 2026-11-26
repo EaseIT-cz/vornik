@@ -49,7 +49,10 @@ func TestDocumentRenderStagedMarkdown(t *testing.T) {
 
 func stubDocumentRenderer(t *testing.T, mode string) documentRenderer {
 	t.Helper()
-	return documentRenderer{timeout: time.Second, command: func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	// 30 s, not 1 s: under a loaded gate host the passing cases took 1.5 s
+	// (VM gate on ea0eb97a7, 2026-11-25). The timeout case sets its own
+	// 10 ms, so the deadline path is still exercised.
+	return documentRenderer{timeout: 30 * time.Second, command: func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		switch name {
 		case "/usr/bin/pandoc":
 			// audit 2026-10-12 (#339): front matter is off, so a document

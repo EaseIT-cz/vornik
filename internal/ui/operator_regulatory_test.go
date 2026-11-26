@@ -331,8 +331,8 @@ func TestRegulatory_ProfileAuditSQLiteNoteOnlyOnSQLite(t *testing.T) {
 }
 
 // audit 2026-10-12 (GitHub #355): the subject-request ledger now exists on
-// SQLite, so a SQLite page (requests wired, incidents and the profile-use audit
-// not) shows the ledger and names only what is still not recorded there.
+// SQLite, so a SQLite page (requests wired; incidents unwired in this fixture;
+// no profile-use audit) shows the ledger and names only what is not recorded.
 func TestRegulatory_SQLiteShowsTheRequestLedger(t *testing.T) {
 	reqs, _, disc := regFixture(time.Now())
 	body := regGet(regServer(reqs, nil, disc, &stubAdminAuditRepo{}), "/operator/regulatory", withAuthOff).Body.String()
@@ -342,8 +342,13 @@ func TestRegulatory_SQLiteShowsTheRequestLedger(t *testing.T) {
 	if strings.Contains(body, "no subject-request ledger") {
 		t.Error("the page must not claim SQLite has no subject-request ledger")
 	}
-	if !strings.Contains(body, "no breach ledger") {
-		t.Error("the breach ledger is still Postgres-only and must say so")
+	// GitHub #475: the breach ledger runs on SQLite too, so an unwired one is
+	// named as unwired, never blamed on the driver.
+	if !strings.Contains(body, "no breach ledger is wired") {
+		t.Error("an unwired breach ledger must say so")
+	}
+	if strings.Contains(body, "SQLite backend has no breach ledger") || strings.Contains(body, "Incidents require PostgreSQL") {
+		t.Error("the page must not claim SQLite has no breach ledger")
 	}
 	if !strings.Contains(body, "not recorded on the SQLite backend") {
 		t.Error("the profile-use audit's SQLite gap must still be named")

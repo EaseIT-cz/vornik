@@ -315,13 +315,11 @@ func (r *Runner) tickOnce(ctx context.Context) {
 // interrupted), and (c) the pre-existing text-kind case where a failed
 // Send leaves the row firing forever. Recurring rows re-arm via the
 // same cron/bound logic as finalize (§4.1/§4.2's re-arm path);
-// one-shot rows get MarkErrored — which, by design, does not itself
-// change status off 'firing' (see MarkErrored's doc comment), so a
-// permanently-broken one-shot row is re-flagged (error_count bumped,
-// metric incremented) on every subsequent sweep cycle until an
-// operator cancels it. That matches the existing accepted behavior for
-// a failed text-kind send; this sweep just makes it periodic /
-// observable instead of silent. ReclaimStuckFiring never returns
+// one-shot rows count as one failed attempt (scheduled-reminders design
+// §11 R4: a text row retries until its third failure, then expires; a
+// task-kind row expires at once). A broken one-shot row therefore ends
+// 'expired' with its error, where reminders_undelivered reports it, instead
+// of being re-flagged forever. ReclaimStuckFiring never returns
 // 'awaiting_task' rows, so a genuinely long-running task is never
 // touched here.
 func (r *Runner) sweepStuckFiring(ctx context.Context) {
@@ -341,15 +339,13 @@ func (r *Runner) sweepStuckFiring(ctx context.Context) {
 		}
 		metricFiringReclaimed.Inc()
 		if !rem.IsRecurring() {
-			if err := r.cfg.Repo.MarkErrored(ctx, rem.ID, "reclaimed: stuck in firing after crash"); err != nil {
-				r.cfg.Logger.Warn().Err(err).Str("reminder_id", rem.ID).
-					Msg("reminders: stuck-firing reclaim mark_errored failed")
-			}
+			// §11 R4: one failed attempt; a task-kind row expires (R2).
+			r.failAttempt(ctx, rem, "reclaimed: stuck in firing after crash")
 			continue
 		}
 		next, nerr := NextFireAt(rem.CronExpr, r.cfg.Clock())
 		if nerr != nil {
-			_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "reclaimed: re-arm cron invalid: "+nerr.Error())
+			r.expire(ctx, rem, "reclaimed: re-arm cron invalid: "+nerr.Error())
 			r.cfg.Logger.Warn().Err(nerr).Str("reminder_id", rem.ID).Str("cron_expr", rem.CronExpr).
 				Msg("reminders: stuck-firing reclaim cron parse failed; marked errored")
 			continue
@@ -370,19 +366,64 @@ func (r *Runner) sweepStuckFiring(ctx context.Context) {
 	}
 }
 
+// retryAfter is the wait before attempts 2 and 3 of a failed text send
+// (scheduled-reminders design §11 R1, GitHub #861): three attempts in all.
+var retryAfter = []time.Duration{time.Minute, 5 * time.Minute}
+
+// failAttempt records one failed delivery attempt (§11 R1 to R5):
+//   - a text reminder retries until it has failed len(retryAfter)+1 times;
+//   - then, and at once for a task-kind reminder (a retry would move fire_at
+//     and with it the task's idempotency key), a one-shot reminder expires and
+//     a recurring one re-arms for its next occurrence with the count reset;
+//   - a recurring reminder that cannot re-arm (a corrupt cron, or past its
+//     bound) expires.
+//
+// last_error is kept in every case; a reminder cancelled meanwhile is left as
+// it is.
+func (r *Runner) failAttempt(ctx context.Context, rem *persistence.Reminder, errorMessage string) {
+	now := r.cfg.Clock()
+	if !rem.IsTaskKind() && rem.ErrorCount < len(retryAfter) {
+		r.markAttempt(ctx, rem, errorMessage, persistence.ReminderAttemptOutcome{
+			Kind: persistence.ReminderAttemptRetry, At: now.Add(retryAfter[rem.ErrorCount])})
+		return
+	}
+	if !rem.IsRecurring() {
+		r.expire(ctx, rem, errorMessage)
+		return
+	}
+	next, err := NextFireAt(rem.CronExpr, now)
+	if err != nil || (rem.RecurrenceUntil != nil && next.After(*rem.RecurrenceUntil)) {
+		r.expire(ctx, rem, errorMessage)
+		return
+	}
+	r.markAttempt(ctx, rem, errorMessage, persistence.ReminderAttemptOutcome{Kind: persistence.ReminderAttemptRearm, At: next})
+}
+
+// expire makes a firing reminder terminal with its error (§11).
+func (r *Runner) expire(ctx context.Context, rem *persistence.Reminder, errorMessage string) {
+	r.markAttempt(ctx, rem, errorMessage, persistence.ReminderAttemptOutcome{Kind: persistence.ReminderAttemptExpire})
+}
+
+func (r *Runner) markAttempt(ctx context.Context, rem *persistence.Reminder, errorMessage string, o persistence.ReminderAttemptOutcome) {
+	if err := r.cfg.Repo.MarkAttemptFailed(ctx, rem.ID, errorMessage, o); err != nil {
+		r.cfg.Logger.Warn().Err(err).Str("reminder_id", rem.ID).Str("outcome", string(o.Kind)).
+			Msg("reminders: recording a failed delivery attempt failed")
+	}
+}
+
 // deliver sends one reminder via its channel. On success the
 // repo flips status=fired + writes an audit row; on failure the
-// row stays in 'firing' with last_error stamped (v1 has no
-// retry policy — operator can re-create if needed).
+// attempt is recorded by failAttempt (retry, re-arm or expire,
+// scheduled-reminders design §11).
 func (r *Runner) deliver(ctx context.Context, rem *persistence.Reminder) {
 	if r.cfg.Resolver == nil {
-		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "no channel resolver wired")
-		r.cfg.Logger.Warn().Str("reminder_id", rem.ID).Msg("reminders: no resolver — row marked errored")
+		r.failAttempt(ctx, rem, "no channel resolver wired")
+		r.cfg.Logger.Warn().Str("reminder_id", rem.ID).Msg("reminders: no resolver — delivery attempt failed")
 		return
 	}
 	ch := r.cfg.Resolver.ResolveChannel(rem.Channel)
 	if ch == nil {
-		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "channel "+rem.Channel+" not configured")
+		r.failAttempt(ctx, rem, "channel "+rem.Channel+" not configured")
 		r.cfg.Logger.Warn().
 			Str("reminder_id", rem.ID).
 			Str("channel", rem.Channel).
@@ -397,7 +438,7 @@ func (r *Runner) deliver(ctx context.Context, rem *persistence.Reminder) {
 	// Art 50: the reminder text is composed by the set_reminder tool (LLM), so
 	// it takes the shared disclosure path (GitHub #342).
 	if _, err := conversation.SendDisclosed(ctx, r.cfg.Disclosure, ch, msg, true); err != nil {
-		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, err.Error())
+		r.failAttempt(ctx, rem, err.Error())
 		r.cfg.Logger.Warn().
 			Err(err).
 			Str("reminder_id", rem.ID).
@@ -430,8 +471,8 @@ func (r *Runner) deliver(ctx context.Context, rem *persistence.Reminder) {
 // See design §4.1.
 func (r *Runner) deliverTask(ctx context.Context, rem *persistence.Reminder) {
 	if r.cfg.Creator == nil {
-		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "task creator not wired")
-		r.cfg.Logger.Warn().Str("reminder_id", rem.ID).Msg("reminders: no task creator wired — row marked errored")
+		r.failAttempt(ctx, rem, "task creator not wired")
+		r.cfg.Logger.Warn().Str("reminder_id", rem.ID).Msg("reminders: no task creator wired — delivery attempt failed")
 		return
 	}
 	// Idempotency: rem.ID + fire slot. A re-leased slot returns the same task.
@@ -444,7 +485,7 @@ func (r *Runner) deliverTask(ctx context.Context, rem *persistence.Reminder) {
 		ReminderID:     rem.ID,
 	})
 	if err != nil {
-		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "task creation failed: "+err.Error())
+		r.failAttempt(ctx, rem, "task creation failed: "+err.Error())
 		r.cfg.Logger.Warn().Err(err).Str("reminder_id", rem.ID).Msg("reminders: task-kind spawn failed")
 		return
 	}
@@ -452,9 +493,11 @@ func (r *Runner) deliverTask(ctx context.Context, rem *persistence.Reminder) {
 	if rem.IsRecurring() {
 		next, nerr := NextFireAt(rem.CronExpr, r.cfg.Clock())
 		if nerr != nil {
-			_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, "re-arm cron invalid: "+nerr.Error())
+			// §11 R3: retrying cannot fix a corrupt cron. The task was
+			// created and runs; the reminder goes terminal.
+			r.expire(ctx, rem, "re-arm cron invalid: "+nerr.Error())
 			r.cfg.Logger.Warn().Err(nerr).Str("reminder_id", rem.ID).Str("cron_expr", rem.CronExpr).
-				Msg("reminders: task-kind re-arm cron parse failed; task created but row marked errored")
+				Msg("reminders: task-kind re-arm cron parse failed; task created, reminder expired")
 			return
 		}
 		if rem.RecurrenceUntil == nil || !next.After(*rem.RecurrenceUntil) {
@@ -504,8 +547,9 @@ func (r *Runner) finalize(ctx context.Context, rem *persistence.Reminder) error 
 			Err(err).
 			Str("reminder_id", rem.ID).
 			Str("cron_expr", rem.CronExpr).
-			Msg("reminders: cron parse failed at re-arm; marking errored")
-		return r.cfg.Repo.MarkErrored(ctx, rem.ID, "re-arm cron invalid: "+err.Error())
+			Msg("reminders: cron parse failed at re-arm; expiring")
+		return r.cfg.Repo.MarkAttemptFailed(ctx, rem.ID, "re-arm cron invalid: "+err.Error(),
+			persistence.ReminderAttemptOutcome{Kind: persistence.ReminderAttemptExpire})
 	}
 	if rem.RecurrenceUntil != nil && next.After(*rem.RecurrenceUntil) {
 		// Past the operator-named bound — terminate cleanly so

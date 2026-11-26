@@ -134,7 +134,6 @@ verifiers:
 # agent's response text.
 hallucinationJudge:
   enabled: true
-  model: "openai.gpt-oss-120b-1:0"
   # Custom judge prompt tuned for trading: extends the default
   # to specifically check (a) tickers cited exist in the
   # watchlist, (b) indicator values cited match what the TA

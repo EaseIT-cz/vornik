@@ -96,8 +96,9 @@ var (
 	companionGrantNoDelegate   bool
 	companionGrantJSON         bool
 
-	companionKeysProject string
-	companionKeysJSON    bool
+	companionKeysProject   string
+	companionKeysJSON      bool
+	companionGrantOIDCOnly bool
 )
 
 var companionGrantCmd = &cobra.Command{
@@ -149,6 +150,8 @@ func init() {
 	companionGrantCmd.Flags().BoolVar(&companionGrantNoDelegate, "no-delegate", false,
 		"Refuse every task tool (delegate/status/result/cancel/list/catalog) for this key — the shape of a front agent's memory key")
 	companionGrantCmd.Flags().BoolVar(&companionGrantJSON, "json", false, "Emit JSON instead of human text")
+	companionGrantCmd.Flags().BoolVar(&companionGrantOIDCOnly, "oidc-only", false,
+		"Do not print the secret: the key is used only through a GitHub Actions trust (vornikctl companion trust-github)")
 	_ = companionGrantCmd.MarkFlagRequired("project")
 	_ = companionGrantCmd.MarkFlagRequired("client")
 
@@ -256,6 +259,10 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("the daemon does not support --no-delegate (upgrade it first); the key it minted (%s) could delegate, so it was revoked", out.ID)
 	}
+	if companionGrantOIDCOnly {
+		// GitHub #792 (design 27 §C4): the secret never leaves the daemon.
+		out.Secret = ""
+	}
 	if companionGrantJSON {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
@@ -301,6 +308,11 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 	// The daemon's record decides, not the flag (review b240 finding 7).
 	if out.ClientKind == "hermes" {
 		printHermesEnvTail(out, client.baseURL, memRead)
+		return nil
+	}
+	if companionGrantOIDCOnly {
+		fmt.Println("No secret printed (--oidc-only). Bind the key to a workflow:")
+		fmt.Printf("  vornikctl companion trust-github --key %s -p %s --repo <owner/name> --repo-id <id> --ref refs/heads/main --workflow .github/workflows/<file>.yml\n", out.ID, out.ProjectID)
 		return nil
 	}
 	fmt.Println("Secret (shown ONCE — copy it now and paste it into your plugin's .mcp.json):")

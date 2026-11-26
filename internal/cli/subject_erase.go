@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -289,16 +288,19 @@ func writeErasureReport(
 	// The narrative is what the SUBJECT reads; plan and result are what an auditor
 	// reads. Both go in the stored report, and the narrative comes first because a
 	// report whose honest summary is buried under two pages of row ids is honest
-	// only in a technical sense (§7).
+	// only in a technical sense (§7). A re-run keeps every earlier run's report
+	// (#900, GDPR design §4.6.1): the rows an earlier run deleted took their links
+	// with them, so its report is the only record of them. The top level is always
+	// the latest run: the Art 12(3) escalation pass reads its deferrals from there.
 	report := struct {
 		Narrative datasubject.SubjectNarrative `json:"subject_narrative"`
 		Plan      *datasubject.ErasurePlan     `json:"plan"`
 		Result    *datasubject.ErasureResult   `json:"result"`
 	}{res.Narrative(plan), plan, res}
 
-	blob, err := json.MarshalIndent(report, "", "  ")
+	blob, err := reportWithRuns(ctx, repo, req.ID, report)
 	if err != nil {
-		return err
+		return fmt.Errorf("store erasure report: %w", err)
 	}
 	sum := sha256.Sum256(blob)
 	hash := "sha256:" + hex.EncodeToString(sum[:])

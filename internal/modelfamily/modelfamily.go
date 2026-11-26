@@ -15,6 +15,7 @@
 package modelfamily
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -118,13 +119,29 @@ func isWordByte(b byte) bool {
 	return b >= 'a' && b <= 'z'
 }
 
-// SameFamily reports whether two ids resolve to the same known family. Two
-// Unknown ids are reported as SAME (deny by default): a pair the daemon
-// cannot classify must not pass a check whose whole point is separation.
-func SameFamily(a, b string) bool {
-	fa, fb := Family(a), Family(b)
-	if fa == Unknown || fb == Unknown {
-		return true
+// PairProblem reports why judge cannot judge assistant's work, or "" when it
+// can: an id is empty, either id has no known family, or both share one
+// (deny by default: a pair the daemon cannot classify must not pass a check
+// whose whole point is separation). Ids are trimmed, because a value from
+// YAML or the environment can carry stray whitespace that is not part of
+// the id. unclassifiable is true for the second
+// case, whose remedy differs. The one rule behind the config assistant's
+// refusal, its feature doctor, and the healing checks (GitHub #891,
+// config-assistant design §7.3a).
+func PairProblem(assistant, judge string) (reason string, unclassifiable bool) {
+	assistant, judge = strings.TrimSpace(assistant), strings.TrimSpace(judge)
+	switch {
+	case assistant == "":
+		return "the assistant model is not set", false
+	case judge == "":
+		return fmt.Sprintf("the judge model is not set (assistant %q)", assistant), false
 	}
-	return fa == fb
+	fa, fj := Family(assistant), Family(judge)
+	if fa == Unknown || fj == Unknown {
+		return fmt.Sprintf("cannot classify the model family of %q (%s) / %q (%s)", assistant, fa, judge, fj), true
+	}
+	if fa == fj {
+		return fmt.Sprintf("assistant %q and judge %q are the same family (%s)", assistant, judge, fa), false
+	}
+	return "", false
 }

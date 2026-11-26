@@ -359,6 +359,13 @@ func cloneRolesWithoutSystemPrompts(roles []SwarmRole) []SwarmRole {
 	out := make([]SwarmRole, len(roles))
 	for i, r := range roles {
 		r.SystemPrompt = ""
+		// A model ResolveRoleModels filled is the instance's choice, not
+		// the file's: never write it back as a pin (#880). This clone is the
+		// one path both role serialisers take (MarshalSwarmMarkdown and
+		// MarshalSwarmSkill).
+		if resolvedModelSource(r.ModelSource) {
+			r.Model, r.ModelFallback, r.ModelSource = "", "", ""
+		}
 		if r.OutputSchema != nil {
 			r.RequiredOutputKeys = nil
 			r.PlausibilityRules = nil

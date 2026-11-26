@@ -782,6 +782,19 @@ func TestA2AKeyRetrieval_PostgresContract(t *testing.T) {
 		NewTaskRepository(db.DB), NewAPIKeyRepository(db.DB))
 }
 
+// #858: the chunks each recall of a task returned, with their class now.
+func TestStepRecallChunks_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	seed := func(t *testing.T, id, projectID, class string) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO project_memory_chunks (id, project_id, source_name, content, content_hash, content_class)
+			VALUES ($1, $2, 'src', 'text', $1, $3)`, id, projectID, class); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repotest.RunStepRecallChunksSuite(t, NewMemoryRetrievalAuditRepository(db.DB), seed, true)
+}
+
 // Round-2 trading-event contracts.
 func TestTradingFillRepository_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)

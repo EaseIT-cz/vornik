@@ -447,6 +447,7 @@ var ProjectScopedTablesNotWiped = map[string]string{
 	"knowledge_edges":             NotWipedCascadePrefix + "knowledge_entities",
 	"workflow_healing_candidates": NotWipedCascadePrefix + "workflow_healing_triggers",
 	"memory_verification_backup":  NotWipedCascadePrefix + "memory_verification_events",
+	"companion_key_oidc_trusts":   NotWipedCascadePrefix + "api_keys",
 
 	"secret_redaction_audit": NotWipedKeptPrefix + "the security record that a secret reached a sink in this " +
 		"project, the evidence for rotating a credential that lives on at its vendor; it holds ids, a sink " +

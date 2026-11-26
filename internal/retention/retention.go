@@ -427,8 +427,12 @@ type Counts struct {
 	// queries) pruned, on the tool_audit_log window (retention design §5a,
 	// GitHub #549).
 	MemoryRetrievalAudit int
-	Tasks                int
-	Executions           int
+	// AutonomyEvaluations is the count of autonomy_evaluations rows (one per
+	// autonomy tick, with observe mode's proposed prompt) pruned, on the
+	// tool_audit_log window (retention design §5b, GitHub #870).
+	AutonomyEvaluations int
+	Tasks               int
+	Executions          int
 	// StepPrompts is the count of step_prompts rows no outcome row referenced
 	// any more (pruned after executions, since outcome rows go with them).
 	StepPrompts int
@@ -706,6 +710,47 @@ type GlobalPolicy struct {
 	ProjectGistsDays int
 }
 
+// The windows whose zero means a compiled default at the point of sweeping
+// rather than in Resolve. One function per window, read by the sweeper and by
+// the Art 15 report (GDPR design §4.22, #470), so the two cannot drift.
+
+// EffectiveExecutionRatingsDays is the execution_ratings window in force.
+func (p GlobalPolicy) EffectiveExecutionRatingsDays() int {
+	return positiveOr(p.ExecutionRatingsDays, DefaultExecutionRatingsDays)
+}
+
+// EffectiveConfigApplyJournalDays is the config_apply_journal window in force.
+func (p GlobalPolicy) EffectiveConfigApplyJournalDays() int {
+	return positiveOr(p.ConfigApplyJournalDays, DefaultConfigApplyJournalDays)
+}
+
+// EffectiveBlackboxTraceCacheDays is the blackbox_trace_cache window in force.
+func (p GlobalPolicy) EffectiveBlackboxTraceCacheDays() int {
+	return positiveOr(p.BlackboxTraceCacheDays, DefaultBlackboxTraceCacheDays)
+}
+
+// EffectiveProjectGistsDays is the project_gists window in force.
+func (p GlobalPolicy) EffectiveProjectGistsDays() int {
+	return positiveOr(p.ProjectGistsDays, DefaultProjectGistsDays)
+}
+
+// EffectiveGraphQuarantineDays is the quarantined-graph horizon in force:
+// zero is the default, and a negative value (the legal hold that disables the
+// purge) is returned as it is.
+func (p Policy) EffectiveGraphQuarantineDays() int {
+	if p.GraphQuarantineDays == 0 {
+		return DefaultGraphQuarantineDays
+	}
+	return p.GraphQuarantineDays
+}
+
+func positiveOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
 // SweepGlobal prunes non-project-scoped tables (caches, ratings, and the
 // always-on session/key/code cleanups). Runs once per cycle, regardless of the
 // project count. Returns counts + best-effort error — a failure in one table
@@ -759,20 +804,20 @@ func (s *Sweeper) runGlobal(ctx context.Context, p GlobalPolicy, previewOnly boo
 		s.pruneAPIKeys, &counts.APIKeys, &firstErr)
 	s.runGlobalPrune(ctx, "link_codes", days(linkCodeGraceDays, linkCodeGraceDays), previewOnly,
 		s.pruneLinkCodes, &counts.LinkCodes, &firstErr)
-	s.runGlobalPrune(ctx, "execution_ratings", days(p.ExecutionRatingsDays, DefaultExecutionRatingsDays), previewOnly,
+	s.runGlobalPrune(ctx, "execution_ratings", days(p.EffectiveExecutionRatingsDays(), 0), previewOnly,
 		s.pruneExecutionRatings, &counts.ExecutionRatings, &firstErr)
-	s.runGlobalPrune(ctx, "config_apply_journal", days(p.ConfigApplyJournalDays, DefaultConfigApplyJournalDays), previewOnly,
+	s.runGlobalPrune(ctx, "config_apply_journal", days(p.EffectiveConfigApplyJournalDays(), 0), previewOnly,
 		s.pruneConfigApplyJournal, &counts.ConfigApplyJournal, &firstErr)
 
 	// Derived copies of transcript text (GitHub #394, design §8.2.1/§8.2.2):
 	// always on, zero is the default. Each reports its denominator.
-	s.runGlobalPrune(ctx, "blackbox_trace_cache", days(p.BlackboxTraceCacheDays, DefaultBlackboxTraceCacheDays), previewOnly,
+	s.runGlobalPrune(ctx, "blackbox_trace_cache", days(p.EffectiveBlackboxTraceCacheDays(), 0), previewOnly,
 		func(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
 			n, examined, err := s.pruneBlackboxTraceCache(ctx, threshold, previewOnly)
 			counts.BlackboxTraceCacheExamined = examined
 			return n, err
 		}, &counts.BlackboxTraceCache, &firstErr)
-	s.runGlobalPrune(ctx, "project_gists", days(p.ProjectGistsDays, DefaultProjectGistsDays), previewOnly,
+	s.runGlobalPrune(ctx, "project_gists", days(p.EffectiveProjectGistsDays(), 0), previewOnly,
 		func(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
 			n, narratives, examined, err := s.pruneProjectGists(ctx, threshold, previewOnly)
 			counts.ProjectGistNarratives = narratives
@@ -1189,6 +1234,23 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 		}
 	} else {
 		counts.MemoryRetrievalAudit = n
+	}
+
+	// 2d. autonomy_evaluations — the accountability record of what autonomy
+	//     decided, with observe mode's proposed prompt; tool_audit_log's
+	//     window, floor included (retention design §5b, GitHub #870).
+	if n, err := s.pruneOlderThan(ctx,
+		"autonomy_evaluations", "created_at",
+		"project_id = $2", p.ProjectID,
+		now.AddDate(0, 0, -p.toolAuditWindow()),
+		previewOnly,
+	); err != nil {
+		s.warn("autonomy_evaluations", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		counts.AutonomyEvaluations = n
 	}
 
 	// 3. Artifacts — DB record + file on disk. Do this BEFORE tasks so
@@ -1767,10 +1829,7 @@ func (s *Sweeper) purgeQuarantinedGraph(
 		}
 		return 0, nil
 	}
-	days := p.GraphQuarantineDays
-	if days == 0 {
-		days = DefaultGraphQuarantineDays
-	}
+	days := p.EffectiveGraphQuarantineDays()
 	before := now.AddDate(0, 0, -days)
 
 	if previewOnly {
@@ -1923,6 +1982,7 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 		"tool_audit_log":            true,
 		"agent_admin_refusals":      true, // tool_audit_log's window — retention design §5
 		"memory_retrieval_audit":    true, // tool_audit_log's window — retention design §5a
+		"autonomy_evaluations":      true, // tool_audit_log's window — retention design §5b
 		"tasks":                     true,
 		"executions":                true,
 		"step_prompts":              true,

@@ -14,6 +14,9 @@ command -v go >/dev/null || { echo "service-shard-lane_test: FAIL (no go on PATH
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fails=0
+# The original cases are about one package; the two-package case (#888) sets
+# its own SHARD_SETS.
+export SHARD_SETS="internal/service=scripts/service-test-shards.txt"
 pass() { echo "ok   $1"; }
 fail() { echo "FAIL $1"; fails=$((fails + 1)); }
 
@@ -39,7 +42,7 @@ if [ "$1" = "test" ] && [[ "$*" != *"-run"* ]]; then
   for i in 1 2 3 4 5 6; do echo "--- PASS: TestSweepOnly$i (0.00s)"; done
 fi
 if [ "$1" = "list" ]; then
-  printf '%s\n' example.com/m/internal/service example.com/m/internal/other example.com/m/cmd/vornik
+  printf '%s\n' example.com/m/internal/service example.com/m/internal/ui example.com/m/internal/other example.com/m/cmd/vornik
   exit 0
 fi
 exit 0
@@ -170,5 +173,49 @@ n=$(grep -c 'TestSweepOnly' "$TMP/out" || true)
 [ "$n" -eq 6 ] && pass "the passing sweep's output is printed, not a five-line tail" || fail "sweep output on success: $n marker line(s): $(cat "$TMP/out")"
 
 echo
+# --- #888: two sharded packages (testing design 19 §16) ----------------------
+# Found at: integration (the CI VM gate, make test, 2026-11-22/23): internal/ui
+# neared the race timeout like internal/service before it.
+setup
+mkdir -p "$TMP/tree/internal/ui"
+tdef "$TMP/tree/internal/service/a1_test.go" TestAlpha
+tdef "$TMP/tree/internal/service/b1_test.go" TestBeta
+tdef "$TMP/tree/internal/ui/u1_test.go" TestUIOne
+tdef "$TMP/tree/internal/ui/u2_test.go" TestUITwo
+printf '%s\n' 'shard_b internal/service/b1_test.go' > "$TMP/tree/scripts/service-test-shards.txt"
+printf '%s\n' 'shard_b internal/ui/u2_test.go' > "$TMP/tree/scripts/ui-test-shards.txt"
+( cd "$TMP/tree" && SHARD_SETS="internal/service=scripts/service-test-shards.txt internal/ui=scripts/ui-test-shards.txt" \
+  STUB_LOG="$TMP/go-calls.log" PATH="$TMP:$PATH" bash scripts/service-shard-lane.sh -race -short > "$TMP/out" 2>&1 )
+rc=$?
+[ "$rc" -eq 0 ] && pass "two sharded packages exit 0" || fail "two packages rc=$rc: $(cat "$TMP/out")"
+sweep=$(grep '^CALL test' "$TMP/go-calls.log" | grep -v -- '-run ' | sed -n 1p)
+[[ "$sweep" != *internal/ui* && "$sweep" != *internal/service* && "$sweep" == *internal/other* ]] \
+  && pass "the sweep excludes both sharded packages" || fail "sweep: $sweep"
+grep '^CALL test.*-run .*TestUIOne.* ./internal/ui' "$TMP/go-calls.log" >/dev/null && grep '^CALL test.*-run .*TestUITwo.* ./internal/ui' "$TMP/go-calls.log" >/dev/null \
+  && pass "internal/ui runs both its shards" || fail "ui shards: $(grep internal/ui "$TMP/go-calls.log")"
+grep '^CALL test.*-run .*TestBeta.* ./internal/service' "$TMP/go-calls.log" >/dev/null \
+  && pass "internal/service still runs its shards" || fail "service shards: $(cat "$TMP/go-calls.log")"
+[ "$(grep -c '^CALL test' "$TMP/go-calls.log")" -eq 5 ] \
+  && pass "five go test calls: the sweep and two shards per package (c is empty)" || fail "calls: $(grep -c '^CALL test' "$TMP/go-calls.log")"
+
+# A drifted manifest in the SECOND package still refuses (exit 2).
+setup
+mkdir -p "$TMP/tree/internal/ui"
+tdef "$TMP/tree/internal/service/a1_test.go" TestAlpha
+tdef "$TMP/tree/internal/ui/u1_test.go" TestUIOne
+: > "$TMP/tree/scripts/service-test-shards.txt"
+printf '%s\n' 'shard_b internal/ui/gone_test.go' > "$TMP/tree/scripts/ui-test-shards.txt"
+( cd "$TMP/tree" && SHARD_SETS="internal/service=scripts/service-test-shards.txt internal/ui=scripts/ui-test-shards.txt" \
+  STUB_LOG="$TMP/go-calls.log" PATH="$TMP:$PATH" bash scripts/service-shard-lane.sh -race -short > "$TMP/out" 2>&1 )
+rc=$?
+[ "$rc" -eq 2 ] && grep 'gone_test.go' "$TMP/out" >/dev/null && pass "a bad second manifest refuses with exit 2" || fail "second manifest rc=$rc: $(cat "$TMP/out")"
+
+
+# SHARD_SETS and SHARD_PKG together are refused, not resolved silently (review 49e4 F6).
+setup
+( cd "$TMP/tree" && SHARD_SETS="internal/service=scripts/service-test-shards.txt" SHARD_PKG=internal/service \
+  STUB_LOG="$TMP/go-calls.log" PATH="$TMP:$PATH" bash scripts/service-shard-lane.sh -race -short > "$TMP/out" 2>&1 )
+rc=$?
+[ "$rc" -eq 2 ] && grep 'not both' "$TMP/out" >/dev/null && pass "SHARD_SETS with SHARD_PKG refuses" || fail "conflict rc=$rc: $(cat "$TMP/out")"
 if [ "$fails" -gt 0 ]; then echo "service-shard-lane_test: $fails FAILURE(S)"; exit 1; fi
 echo "service-shard-lane_test: all pass"

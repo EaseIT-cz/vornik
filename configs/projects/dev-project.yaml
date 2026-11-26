@@ -17,6 +17,9 @@ autonomy:
   # the UI (Settings → Autonomy) or set true. While on, the lead evaluates state
   # every pollInterval (5m) and may schedule up to maxTasksPerHour (6) tasks.
   enabled: false
+  # Observe first (GitHub #602): record what autonomy would start, start
+  # nothing. Set to false once the would-starts look right.
+  observe: true
   # Autonomy mode (one of: llm | cron | backlog).
   # `llm` (default) — lead evaluates state each tick and picks the
   # next task via tool-use. Best for state-driven projects like

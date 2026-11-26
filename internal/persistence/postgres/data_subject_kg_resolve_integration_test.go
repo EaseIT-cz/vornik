@@ -278,3 +278,118 @@ func resetKGFixture(t *testing.T, db *DB, project string, subjectIDs ...string) 
 		}
 	}
 }
+
+// GitHub #478, GDPR design §7 "binder determinism" (§4.20.1 item 25): the same
+// input produces the same links with the same source and confidence. Observed
+// where the links are written: binder 3 (KGResolver.Bind, the code behind
+// `vornikctl subject resolve-kg` and the console) over the real graph index and
+// subject store. The knowledge-graph index is Postgres-only, so this runs on the
+// Postgres lane only.
+//
+// Three runs over one graph: a bind, a re-bind (the "re-running is safe"
+// promise of KGBoundHere), and a bind for a fresh subject after the fixture is
+// rebuilt with its mentions inserted in the reverse order. All three must leave
+// the identical link set: one exclusive entity-row link plus one shared link per
+// distinct chunk, every one kg_extraction at `possible`.
+func TestIntegrationKGBind_SameInputSameLinks(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewDataSubjectRepository(db.DB)
+	r := &datasubject.KGResolver{Store: repo, Index: NewDataSubjectKGIndex(db.DB)}
+
+	const project = "kg-bind-determinism-478"
+	type mention struct {
+		chunk      string
+		start, end int
+	}
+	mentions := []mention{{"chunk_d1", 0, 8}, {"chunk_d1", 23, 31}, {"chunk_d2", 0, 8}, {"chunk_d3", 4, 12}}
+	seed := func(subjectID string, reverse bool) {
+		t.Helper()
+		resetKGFixture(t, db, project, "ds_det_a", "ds_det_b")
+		seedEntity(t, db, "ent_det", project, "Jane Doe", `["Janey"]`)
+		seedChunkInProject(t, db, "chunk_d1", project, "Jane Doe called, then Jane Doe wrote.")
+		seedChunkInProject(t, db, "chunk_d2", project, "Jane Doe sent the invoice.")
+		seedChunkInProject(t, db, "chunk_d3", project, "Ask Jane Doe about the plan.")
+		order := append([]mention(nil), mentions...)
+		if reverse {
+			for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
+				order[i], order[j] = order[j], order[i]
+			}
+		}
+		for _, m := range order {
+			if _, err := db.DB.Exec(`
+				INSERT INTO entity_mentions (chunk_id, entity_id, char_start, char_end, surface)
+				VALUES ($1, 'ent_det', $2, $3, 'Jane Doe')`, m.chunk, m.start, m.end); err != nil {
+				t.Fatalf("seed mention: %v", err)
+			}
+		}
+		if err := repo.CreateSubject(ctx, datasubject.Subject{ID: subjectID, DisplayName: "Jane Doe"}); err != nil {
+			t.Fatalf("create %s: %v", subjectID, err)
+		}
+	}
+	bind := func(subjectID string) ([]datasubject.Link, []datasubject.Identifier) {
+		t.Helper()
+		if _, err := r.Bind(ctx, datasubject.KGBindRequest{
+			SubjectID: subjectID, EntityID: "ent_det", Projects: []string{project},
+		}); err != nil {
+			t.Fatalf("Bind(%s): %v", subjectID, err)
+		}
+		links, err := repo.ListLinks(ctx, subjectID)
+		if err != nil {
+			t.Fatalf("ListLinks(%s): %v", subjectID, err)
+		}
+		ids, err := repo.ListIdentifiers(ctx, subjectID)
+		if err != nil {
+			t.Fatalf("ListIdentifiers(%s): %v", subjectID, err)
+		}
+		return links, ids
+	}
+	t.Cleanup(func() { resetKGFixture(t, db, project, "ds_det_a", "ds_det_b") })
+
+	seed("ds_det_a", false)
+	first, firstIDs := bind("ds_det_a")
+
+	want := []datasubject.Link{{Table: datasubject.TableKnowledgeEntities, RowID: "ent_det", ProjectID: project,
+		Source: datasubject.SourceKGExtraction, Confidence: datasubject.ConfidencePossible,
+		Exclusivity: datasubject.ExclusiveRow}}
+	for _, c := range []string{"chunk_d1", "chunk_d2", "chunk_d3"} {
+		want = append(want, datasubject.Link{Table: datasubject.TableProjectMemoryChunks, RowID: c,
+			ProjectID: project, Source: datasubject.SourceKGExtraction,
+			Confidence: datasubject.ConfidencePossible, Exclusivity: datasubject.SharedRow})
+	}
+	assertSameLinks(t, "first bind", first, want)
+	wantID := datasubject.Identifier{Kind: datasubject.KindKGEntity, Value: "ent_det",
+		Source: datasubject.SourceKGExtraction, Confidence: datasubject.ConfidencePossible}
+	if len(firstIDs) != 1 || firstIDs[0] != wantID {
+		t.Fatalf("first bind identifiers = %+v, want only %+v", firstIDs, wantID)
+	}
+
+	again, againIDs := bind("ds_det_a")
+	assertSameLinks(t, "re-bind of the same subject", again, first)
+	if len(againIDs) != 1 || againIDs[0] != wantID {
+		t.Fatalf("re-bind changed the identifiers: %+v", againIDs)
+	}
+
+	// Rebuild from scratch, mentions in the reverse order, and bind a fresh
+	// subject: an independent run over the same input.
+	seed("ds_det_b", true)
+	fresh, freshIDs := bind("ds_det_b")
+	assertSameLinks(t, "independent bind over the re-seeded graph", fresh, first)
+	if len(freshIDs) != 1 || freshIDs[0] != wantID {
+		t.Fatalf("independent bind identifiers = %+v, want only %+v", freshIDs, wantID)
+	}
+}
+
+// assertSameLinks compares two link sets. ListLinks orders by table and row, so
+// equal sets compare element by element.
+func assertSameLinks(t *testing.T, what string, got, want []datasubject.Link) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: %d links, want %d\n got  %+v\n want %+v", what, len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%s: link %d = %+v, want %+v", what, i, got[i], want[i])
+		}
+	}
+}

@@ -206,7 +206,7 @@
     </div>
     <div class="min-w-0 space-y-0.5">
         <div class="text-sm text-gray-200"><span class="font-medium text-gray-100">{{.ActionKind}}</span> via <span class="font-mono text-gray-300">{{.Tool}}</span></div>
-        <div class="text-xs text-gray-500">task <a class="underline" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{if .KeyLabel}} · requested by {{.KeyLabel}}{{end}}</div>
+        <div class="text-xs text-gray-500">task <a class="underline" href="/ui/tasks/{{.TaskID}}" title="{{.TaskID}}">{{shortID .TaskID}}</a>{{if .KeyLabel}} · requested by {{.KeyLabel}}{{end}}</div>
         <div class="text-xs text-gray-600 font-mono truncate">{{.ActionID}}</div>
     </div>
     <div class="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
@@ -364,9 +364,9 @@
     <div class="min-w-0">
         {{if .Title}}
         <a href="{{.Href}}" class="text-sm text-gray-200 hover:text-gray-100 line-clamp-2">{{.Title}}</a>
-        <div class="text-xs text-gray-600 font-mono truncate">{{.TaskID}}</div>
+        <div class="text-xs text-gray-600 font-mono truncate" title="{{.TaskID}}">{{shortID .TaskID}}</div>
         {{else}}
-        <a href="{{.Href}}" class="text-sm text-gray-200 hover:text-gray-100 truncate font-mono block">{{.TaskID}}</a>
+        <a href="{{.Href}}" class="text-sm text-gray-200 hover:text-gray-100 truncate font-mono block" title="{{.TaskID}}">{{shortID .TaskID}}</a>
         {{end}}
         {{if .Detail}}<div class="text-xs text-rose-800/80 dark:text-rose-400/80">{{.Detail}}</div>{{end}}
     </div>

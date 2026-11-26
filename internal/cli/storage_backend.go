@@ -70,6 +70,31 @@ func subjectStoreFor(backend *storage.Backend, feature string) (*subjectstore.Re
 	}
 }
 
+// incidentStoreFor opens the GDPR Art 33/34 breach ledger on whichever driver
+// the backend runs: both since GitHub #475 (GDPR design §4.21). Art 33(5)
+// obliges every controller to document a breach, whatever its database.
+func incidentStoreFor(backend *storage.Backend) (*subjectstore.IncidentRepository, error) {
+	const feature = "incident"
+	if backend == nil {
+		return nil, fmt.Errorf("%s requires a database backend", feature)
+	}
+	switch backend.Driver {
+	case "postgres":
+		db, err := requirePostgresDB(backend, feature)
+		if err != nil {
+			return nil, err
+		}
+		return postgres.NewIncidentRepository(db), nil
+	case "sqlite":
+		if backend.DB == nil {
+			return nil, fmt.Errorf("%s requires an initialized sqlite database backend", feature)
+		}
+		return sqlite.NewIncidentRepository(backend.DB), nil
+	default:
+		return nil, fmt.Errorf("%s: unsupported database driver %q", feature, backend.Driver)
+	}
+}
+
 // requirePostgresSubjectVerb is requirePostgresDB for a subject verb whose
 // machinery is Postgres-only (GDPR design §4.19.4). The refusal names that
 // machinery and says the ledger itself works, so an operator on SQLite knows

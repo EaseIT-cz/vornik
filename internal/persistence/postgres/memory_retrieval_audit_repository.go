@@ -251,3 +251,30 @@ func (r *MemoryRetrievalAuditRepository) A2AChunksByCallerKey(ctx context.Contex
 	}
 	return out, rows.Err()
 }
+
+// StepRecallChunks returns every chunk every recall of taskID returned, with
+// the chunk's class now (taint-lineage design §16, GitHub #858). A recall
+// with no chunks yields one row with an empty chunk id; a deleted chunk is
+// found=false.
+func (r *MemoryRetrievalAuditRepository) StepRecallChunks(ctx context.Context, taskID string) ([]persistence.StepRecallChunk, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT COALESCE(a.execution_id, ''), COALESCE(a.step_id, ''), COALESCE(u.cid, ''),
+		       COALESCE(c.content_class, ''), c.id IS NOT NULL
+		FROM memory_retrieval_audit a
+		LEFT JOIN LATERAL unnest(a.chunk_ids) AS u(cid) ON true
+		LEFT JOIN project_memory_chunks c ON c.id = u.cid
+		WHERE a.task_id = $1`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("step recall chunks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.StepRecallChunk
+	for rows.Next() {
+		var x persistence.StepRecallChunk
+		if err := rows.Scan(&x.ExecutionID, &x.StepID, &x.ChunkID, &x.Class, &x.Found); err != nil {
+			return nil, fmt.Errorf("step recall chunks: scan: %w", err)
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}

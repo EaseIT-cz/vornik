@@ -103,7 +103,7 @@
                                 {{end}}
                                 {{if .Task}}
                                 <span class="text-gray-700 mx-1">·</span>
-                                <a href="/ui/tasks/{{.Task.ID}}" class="hover:text-gray-300" title="{{.Task.ID}}">{{.Task.ID}}</a>
+                                <a href="/ui/tasks/{{.Task.ID}}" class="hover:text-gray-300" title="{{.Task.ID}}">{{shortID .Task.ID}}</a>
                                 {{end}}
                             </p>
                             <p class="text-xs text-gray-500 mt-2 flex items-center gap-3 flex-wrap tabular-nums">

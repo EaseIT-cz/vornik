@@ -62,6 +62,11 @@ const (
 	KindCrossProjectCallResolved = "cross_project_call_resolved"
 	KindCrossProjectCallReceived = "cross_project_call_received"
 	KindProjectSpawned           = "project_spawned"
+	// KindHandOverStarted and KindHandOverRefused fire on a COMPLETED agent
+	// job's stream when its hand_over starts the target workflow, or does
+	// not (agent-administered design part 24 §24.3 B5, #920).
+	KindHandOverStarted = "handover_started"
+	KindHandOverRefused = "handover_refused"
 	// KindNarrationLine is republished by the narrator worker
 	// (internal/narrator, Narrated Execution Phase 2.1) after it
 	// persists an execution_narration row (persist-then-publish,

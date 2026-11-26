@@ -427,8 +427,8 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 		"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1",
 		"MAX_THINKING_TOKENS=0",
 	)
-	if c.effortLevel != "" {
-		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+c.effortLevel)
+	if effort := cliEffort(ctx, c.effortLevel); effort != "" {
+		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+effort)
 	}
 	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env, WaitDelay: cliWaitDelay, ProcessGroup: true})
 	if err != nil {

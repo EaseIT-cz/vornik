@@ -48,7 +48,7 @@ func init() {
 	f.StringVar(&ghTokenKeyPath, "key", "", "path to the App private key PEM (required)")
 	f.StringVar(&ghTokenAPIBase, "api-base", "https://api.github.com", "GitHub REST API base URL")
 	f.BoolVar(&ghTokenWithExp, "with-expiry", false, "also print the RFC3339 expiry on a second line")
-	f.StringArrayVar(&ghTokenRepos, "repo", nil, "scope the token to this owner/name repository (repeatable; #820)")
+	f.StringArrayVar(&ghTokenRepos, "repo", nil, "scope the token to this owner/name repository (repeatable)")
 	f.BoolVar(&ghTokenUnscoped, "unscoped", false, "mint a token for every repository the installation covers")
 	rootCmd.AddCommand(githubTokenCmd)
 }

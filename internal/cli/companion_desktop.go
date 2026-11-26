@@ -34,6 +34,8 @@ var (
 	companionDeskURL      string
 	companionDeskKeyStdin bool
 	companionDoctorClient string
+	// companionGenericPrint is connect generic's --print (design 25 §D2).
+	companionGenericPrint bool
 )
 
 // companionDeskTimeout bounds each call connect and doctor make.
@@ -59,11 +61,31 @@ protocol only; diagnostics go to stderr and never include the key.`,
 }
 
 var companionConnectCmd = &cobra.Command{
-	Use:   "connect claude-desktop",
-	Short: "Connect Claude Desktop (and Cowork) to Vornik with a companion key",
-	Long: `Store a companion key in a file only you can read, add one MCP server entry
-to Claude Desktop's config that runs 'vornikctl companion mcp-bridge', and
-check the key against Vornik. The Claude config never holds the key.
+	Use:   "connect <claude-desktop|cursor|opencode|generic>",
+	Short: "Connect Claude Desktop (and Cowork), Cursor, opencode, or any other assistant, to Vornik with a companion key",
+	Long: `Check a companion key against Vornik, then store it in a file only you can
+read. For claude-desktop, also add one MCP server entry to Claude Desktop's
+config that runs 'vornikctl companion mcp-bridge'. The Claude config never
+holds the key.
+
+For cursor, also install the Vornik plugin (MCP entry, an always-applied
+rule, skills) into ~/.cursor/plugins/local/vornik-companion; its MCP entry
+runs this binary's bridge, so no Cursor config holds the key. It refuses a
+key with no default repo scope unless --allow-unscoped. Reload the Cursor
+window after.
+
+For opencode, also add a stdio entry that runs the bridge to opencode.json,
+and install a plugin that adds Vornik's working rules and a session digest
+to the system prompt, plus the companion skills (as skills/vornik-*), into
+opencode's config directory ($XDG_CONFIG_HOME/opencode). A commented
+opencode.json, or a plugin file that is not Vornik's, is refused before
+anything is written. It refuses an unscoped key unless --allow-unscoped.
+
+For any other assistant (Gemini CLI, ...), 'connect generic --print'
+writes no assistant config. It prints the MCP entry to paste: a stdio form
+that runs the bridge, and a streamable-HTTP form that reads the key from an
+environment variable. It warns when the key has no default repo scope. The
+key is never printed.
 
 The key comes from --key-stdin, else VORNIK_COMPANION_TOKEN. connect does not
 mint keys: an operator mints one with 'vornikctl companion grant'. An
@@ -79,8 +101,8 @@ Claude Code and Codex use their companion plugins instead.`,
 }
 
 var companionDisconnectCmd = &cobra.Command{
-	Use:          "disconnect claude-desktop",
-	Short:        "Remove the companion entry from Claude Desktop and delete its key file",
+	Use:          "disconnect <claude-desktop|cursor|opencode|generic>",
+	Short:        "Remove the companion entry from Claude Desktop (if any) and delete its key file",
 	Long:         `Remove what 'vornikctl companion connect' wrote. It revokes nothing on the daemon: the key belongs to the operator who minted it ('vornikctl companion keys').`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
@@ -91,17 +113,29 @@ var companionDisconnectCmd = &cobra.Command{
 
 var companionDoctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check a companion connection in Claude Desktop and print the fix for each failure",
-	Long: `Check the Claude Desktop entry, the key file, the daemon and the key itself,
-one line per check, each failure with its fix. It changes nothing. Exit status
+	Short: "Check a companion connection and print the fix for each failure",
+	Long: `Check the key file, the daemon and the key itself, one line per check, each
+failure with its fix; for claude-desktop, also the Claude Desktop entry. With
+--client generic it also names the key the bridge uses and what it cannot see
+(your assistant's own entry and environment). It changes nothing. Exit status
 0 when every check passes, 1 otherwise.`,
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		if companionDoctorClient != harnessconfig.ClaudeDesktop {
-			return fmt.Errorf("--client %q: only claude-desktop is checked here", companionDoctorClient)
+		var failed int
+		switch companionDoctorClient {
+		case harnessconfig.ClaudeDesktop:
+			failed = runCompanionDoctor(cmd.Context(), cmd.OutOrStdout())
+		case harnessGeneric:
+			failed = runCompanionDoctorGeneric(cmd.Context(), cmd.OutOrStdout())
+		case harnessCursor:
+			failed = runCompanionDoctorCursor(cmd.Context(), cmd.OutOrStdout())
+		case harnessOpenCode:
+			failed = runCompanionDoctorOpenCode(cmd.Context(), cmd.OutOrStdout())
+		default:
+			return fmt.Errorf("--client %q: the doctor checks claude-desktop, cursor, opencode, or generic", companionDoctorClient)
 		}
-		if failed := runCompanionDoctor(cmd.Context(), cmd.OutOrStdout()); failed > 0 {
+		if failed > 0 {
 			return fmt.Errorf("%d check(s) failed", failed)
 		}
 		return nil
@@ -116,6 +150,7 @@ func init() {
 		c.Flags().StringVar(&companionDeskURL, "url", "", "Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then "+DefaultAPIURL+")")
 	}
 	companionConnectCmd.Flags().BoolVar(&companionDeskKeyStdin, "key-stdin", false, "Read the companion key from standard input (piped)")
+	companionConnectCmd.Flags().BoolVar(&companionGenericPrint, "print", false, "generic only: write no assistant config; print the MCP entry to paste")
 	companionDoctorCmd.Flags().StringVar(&companionDoctorClient, "client", harnessconfig.ClaudeDesktop, "The client to check")
 	companionCmd.AddCommand(companionMCPBridgeCmd, companionConnectCmd, companionDisconnectCmd, companionDoctorCmd)
 }
@@ -163,8 +198,14 @@ func runCompanionMCPBridge(ctx context.Context, in io.Reader, out, errw io.Write
 // companionIdentity is what connect and doctor learn from the endpoint.
 type companionIdentity struct {
 	Project   string
-	RepoScope string
-	Admin     bool // tools/list offers describe_installation: an agent-admin key
+	RepoScope string // whoami's effective_repo_scope
+	// DefaultScope is the key's own default_repo_scope: the only scope a
+	// client with no SessionStart hook gives its notes (design 25 §D1).
+	DefaultScope string
+	// Instructions is what initialize returned: the working rules the daemon
+	// sends every companion session.
+	Instructions string
+	Admin        bool // tools/list offers describe_installation: an agent-admin key
 }
 
 // errCompanionUnauthorized is a 401 from the companion endpoint.
@@ -231,10 +272,14 @@ func probeCompanion(ctx context.Context, base, key string) (companionIdentity, e
 	var id companionIdentity
 	rpc := &companionRPC{hc: &http.Client{Timeout: companionDeskTimeout}, base: base, endpoint: base + "/api/v1/mcp/companion", key: key}
 	call := func(method string, params any, out any) error { return rpc.call(ctx, method, params, out) }
+	var initRes struct {
+		Instructions string `json:"instructions"`
+	}
 	if err := call("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{},
-		"clientInfo": map[string]any{"name": "vornikctl-companion-connect", "version": "1"}}, nil); err != nil {
+		"clientInfo": map[string]any{"name": "vornikctl-companion-connect", "version": "1"}}, &initRes); err != nil {
 		return id, err
 	}
+	id.Instructions = initRes.Instructions
 	var tools struct {
 		Tools []struct {
 			Name string `json:"name"`
@@ -259,15 +304,17 @@ func probeCompanion(ctx context.Context, base, key string) (companionIdentity, e
 	if err := call("tools/call", map[string]any{"name": "whoami", "arguments": map[string]any{}}, &res); err != nil {
 		return id, err
 	}
-	if len(res.Content) > 0 {
-		var who struct {
-			ProjectID string `json:"project_id"`
-			Scope     string `json:"effective_repo_scope"`
-		}
-		if json.Unmarshal([]byte(res.Content[0].Text), &who) == nil {
-			id.Project, id.RepoScope = who.ProjectID, who.Scope
-		}
+	// An unreadable whoami is an error: read as "no scope" it would warn a
+	// healthy key (design 25 §D2, review a004 F3).
+	var who struct {
+		ProjectID    string `json:"project_id"`
+		Scope        string `json:"effective_repo_scope"`
+		DefaultScope string `json:"default_repo_scope"`
 	}
+	if len(res.Content) == 0 || json.Unmarshal([]byte(res.Content[0].Text), &who) != nil {
+		return id, errors.New("whoami: the reply could not be read")
+	}
+	id.Project, id.RepoScope, id.DefaultScope = who.ProjectID, who.Scope, who.DefaultScope
 	return id, nil
 }
 
@@ -295,15 +342,20 @@ func companionEntry(name, base string) (harnessconfig.Entry, error) {
 	return harnessconfig.Entry{Kind: harnessconfig.KindCompanion, Namespace: name, Command: exe, URL: base}, nil
 }
 
-func requireClaudeDesktop(client string) error {
-	if client != harnessconfig.ClaudeDesktop {
-		return fmt.Errorf("%q: companion connect sets up claude-desktop; Claude Code and Codex use their companion plugins (contrib/claude-code-companion, contrib/codex-companion)", client)
+func requireConnectClient(client string) error {
+	switch {
+	case client != harnessconfig.ClaudeDesktop && client != harnessGeneric && client != harnessCursor && client != harnessOpenCode:
+		return fmt.Errorf("%q: companion connect sets up claude-desktop, cursor, opencode, or generic (any other assistant); Claude Code and Codex use their companion plugins (contrib/claude-code-companion, contrib/codex-companion)", client)
+	case client == harnessGeneric && !companionGenericPrint:
+		return errors.New("connect generic writes no assistant config; pass --print to store the key and print the MCP entry to paste")
+	case client != harnessGeneric && companionGenericPrint:
+		return fmt.Errorf("--print is for generic (vornikctl companion connect generic --print); connect %s writes its own config", client)
 	}
 	return nil
 }
 
 func runCompanionConnect(ctx context.Context, client string, in io.Reader, out io.Writer) error {
-	if err := requireClaudeDesktop(client); err != nil {
+	if err := requireConnectClient(client); err != nil {
 		return err
 	}
 	if ctx == nil {
@@ -341,11 +393,35 @@ func runCompanionConnect(ctx context.Context, client string, in io.Reader, out i
 	if id.Admin {
 		return errors.New("this is an agent-admin key; use vornikctl agent connect claude-desktop")
 	}
+	if client == harnessCursor || client == harnessOpenCode {
+		if err := requireCursorScope(id); err != nil {
+			return err
+		}
+	}
+	var ocCfg, ocDir string
+	if client == harnessOpenCode {
+		if ocCfg, ocDir, err = opencodeDir(); err != nil {
+			return err
+		}
+		if err := preflightOpenCode(ocCfg, ocDir, entry); err != nil {
+			return err
+		}
+	}
 	if err := agentDir(filepath.Dir(keyPath), os.Getuid()); err != nil {
 		return err
 	}
 	if err := writePrivate(keyPath, []byte(key+"\n")); err != nil {
 		return err
+	}
+	if client == harnessGeneric {
+		printGenericEntry(out, keyPath, entry, id)
+		return nil
+	}
+	if client == harnessCursor {
+		return finishConnectCursor(out, keyPath, entry, id)
+	}
+	if client == harnessOpenCode {
+		return finishConnectOpenCode(out, keyPath, ocCfg, ocDir, entry, id)
 	}
 	cfgPath, err := harnessconfig.Path(harnessconfig.ClaudeDesktop, userEnv().harnessEnv())
 	if err != nil {
@@ -374,8 +450,17 @@ func orDash(s string) string {
 }
 
 func runCompanionDisconnect(client string, out io.Writer) error {
-	if err := requireClaudeDesktop(client); err != nil {
-		return err
+	if client == harnessGeneric {
+		return runCompanionDisconnectGeneric(out)
+	}
+	if client == harnessCursor {
+		return runCompanionDisconnectCursor(out)
+	}
+	if client == harnessOpenCode {
+		return runCompanionDisconnectOpenCode(out)
+	}
+	if client != harnessconfig.ClaudeDesktop {
+		return fmt.Errorf("%q: companion disconnect removes claude-desktop, cursor, opencode, or generic", client)
 	}
 	entry := harnessconfig.Entry{Kind: harnessconfig.KindCompanion, Namespace: companionDeskName}
 	cfgPath, err := harnessconfig.Path(harnessconfig.ClaudeDesktop, userEnv().harnessEnv())

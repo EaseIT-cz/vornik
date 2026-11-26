@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: e95011ada8d07d6f85104a800c33189513170e297eb833066ff735155aaf6228
+      sha256: f45237c50b593e9f3c300e036126a789a955eb9294f752f1890fe5d6373cb5c6
     - path: internal/harnessconfig/harnessconfig.go
-      sha256: 0f975d706d42516be9408868b28f36e9de5dc8535b6eeec5427514f7080c49fe
+      sha256: 1885a2f2ef8d04dbb0ac01de58885583c79d5be3cca44e85d5f9ce89c9319a2d
     - path: internal/agentadmin/harness.go
       sha256: 769bbb380005cce2f52c94afeeedb369483a8ba2575c1d38298f4150c3f2fdc5
     - path: internal/agentadmin/admin_guidance.md
-      sha256: b84df1b489d0b74c3ab122225d799e8dc4bfe8fafd2e139bb44acd159b1d124b
+      sha256: 4473a9ff001346afb7e3e381c602ebcec32e52586335d2fae393f1be7594dc02
 ---
 # Let your assistant set up Vornik
 
@@ -25,6 +25,7 @@ Vornik is the safety harness around it:
   - a higher budget.
 - **Models come from your operator's list.** A team member may use a model your operator listed for assistants (`agent_admin.models`); the assistant cannot pick any other. A model on this machine or your local network applies at once. Nothing else changes for a member given no model: it runs on the installation's default, which may itself be a remote provider. A local proxy that forwards to a remote provider counts as local, because Vornik sees only the proxy's address: whoever sets one up is responsible for what it forwards.
 - **Automations run on a schedule only if you approve it.** When the assistant gives a workflow a schedule (for example 08:00 on the 1st of every month), your phone shows the schedule in words, its timezone and the fixed inputs each run gets. Any change to them is a new approval. A schedule runs at most hourly. A run whose time passed while Vornik was down is skipped, not made up later.
+- **Jobs can share a memory, and one job can start the next.** When the assistant asks for a project to share memory, your phone says so: projects that share memory read what the others stored. A project that reads private data (mail, calendar, files) should stay sealed. When the assistant gives a workflow a hand-over, your phone shows which workflow it starts and which files it passes on. The assistant's own memory stays separate from its projects.
 - **Writes are proposals.** A workflow that would send, pay, book or change something proposes it, and you approve each one before it happens. If the workflow declares it (and you approved that declaration with the workflow), the approval page also offers to approve future writes to the same recipient for up to 7 days, at most 20 times (your operator can lower both). Those later writes are sent without being shown to you first. Your phone's Standing approvals page lists each one with every write it sent, and pauses or revokes it with one tap; once a day you get a count of what was sent.
 - **It stays in its own namespace.** Everything it creates is prefixed with its namespace (for example `hermes--finance`), and it cannot touch anything else: not another assistant's setup, not your own projects, not Vornik's settings.
 - **Keys and tokens do not leak out through it.** Arguments, API requests, proposed writes and returned results are scanned for credential-shaped values. A finding refuses the call.

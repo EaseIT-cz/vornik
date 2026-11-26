@@ -49,6 +49,7 @@ import (
 
 	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatauth"
+	"vornik.io/vornik/internal/conversation"
 
 	"github.com/rs/zerolog"
 )
@@ -317,6 +318,11 @@ type Channel struct {
 	// outside ChannelReceiver (config assistant; GitHub #342). Set once at boot
 	// via SetAIDisclosure. Nil discloses with the compiled defaults.
 	aiDisclosure *aidisclosure.Service
+	// failureNotices allows one failed-turn notice per session per hour, and
+	// noticeSleep waits out a refused post before its one retry; nil is
+	// time.Sleep (#914, failure_notice_914.go).
+	failureNotices conversation.NoticeWindow
+	noticeSleep    func(time.Duration)
 	// configRuns holds the senders with an assistant run in flight — one each
 	// (review-20260915-8717 F5).
 	configRunsMu sync.Mutex

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"vornik.io/vornik/internal/configrecon"
 	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/leaderelection"
+	"vornik.io/vornik/internal/modelcheck"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
 	"vornik.io/vornik/internal/registry"
@@ -399,12 +401,24 @@ func mirrorOneFile(sourceRoot, sourceConfigsDir, rel string, content []byte, log
 // newProposalApplier builds the Phase-2 apply/rollback engine (LLD
 // 2026-07-08-control-plane-phase2). Returns nil when the proposal ledger
 // isn't wired. Deps are late-bound so the reloader can be set after this.
+// controlPlaneReloadGuard is the daemon's one ReloadGuard: every apply engine
+// shares its reload in flight and its last unconfirmed reload, which the
+// doctor reads (GitHub #859).
+func (c *Container) controlPlaneReloadGuard() *controlplane.ReloadGuard {
+	c.cpReloadGuardOnce.Do(func() { c.cpReloadGuard = &controlplane.ReloadGuard{} })
+	return c.cpReloadGuard
+}
+
 func (c *Container) newProposalApplier() *controlplane.ApplyEngine {
 	if c == nil || c.repos == nil || c.repos.Proposals == nil {
 		return nil
 	}
 	actionizer := c.newActionizer()
 	engine := &controlplane.ApplyEngine{
+		// One reload guard for every engine the daemon builds (#859).
+		ReloadGuard: c.controlPlaneReloadGuard(),
+		// GitHub #881: an apply checks the role models it adds, before the lock.
+		ModelCheck: c.saveModelCheck(),
 		// Apply-time semantic re-validation of actionized proposals
 		// (actionable-proposals §4.5): existence + model universe against
 		// CURRENT state; base-hash covers content drift.
@@ -903,7 +917,16 @@ func (c *Container) newActionizer() *controlplane.Actionizer {
 		return nil
 	}
 	configDir := filepath.Dir(c.ConfigPath)
+	check := c.saveModelCheck()
 	return &controlplane.Actionizer{
+		// GitHub #881: a swarm_role_model proposal is never rendered for a
+		// model that does not answer.
+		ReachableModel: func(model string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*modelcheck.Timeout)
+			defer cancel()
+			_, err := check(ctx, []string{model})
+			return err
+		},
 		ReadFile: func(rel string) ([]byte, error) {
 			base := filepath.Clean(configDir)
 			full := filepath.Clean(filepath.Join(base, rel))
@@ -1304,4 +1327,35 @@ func (c *Container) startSelfHealWorker(ctx context.Context) {
 		go elector.Run(ctx)
 	}
 	go w.Run(collectorsCtxFrom(ctx, c))
+}
+
+// saveModelCheck is the #881 check as the control plane calls it: on a
+// managed instance an off-catalogue model is refused first, then each model
+// is probed through the shared checker. Nil without a chat client.
+func (c *Container) saveModelCheck() func(ctx context.Context, changed []string) ([]string, error) {
+	catalogue := c.managedModelCatalogue()
+	return func(ctx context.Context, changed []string) ([]string, error) {
+		checker := c.modelChecker() // looked up per call: never a stale nil
+		if catalogue != nil {
+			cat := catalogue()
+			for _, m := range changed {
+				if !slices.Contains(cat, m) {
+					return nil, fmt.Errorf("%s is not in this instance's model catalogue", m)
+				}
+			}
+		}
+		if checker == nil {
+			return nil, nil
+		}
+		var warnings []string
+		res := checker.CheckAll(ctx, changed)
+		for _, m := range changed {
+			if r := res[m]; !r.OK {
+				return nil, errors.New(r.Reason)
+			} else if r.Warning != "" {
+				warnings = append(warnings, r.Warning)
+			}
+		}
+		return warnings, nil
+	}
 }

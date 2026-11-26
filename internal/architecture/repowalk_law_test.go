@@ -39,16 +39,21 @@ var repoWalkExempt = map[string]struct {
 	calls  int
 	reason string
 }{
-	"internal/api/companion_bundle_toolnames_test.go:scanBundleMCPNames":     {1, "content: walks one contrib plugin bundle; its .claude-plugin/.codex-plugin directories are shipped content"},
-	"internal/ui/ce_brand_guard_test.go:TestCEShippedFiles_NoRetiredPalette": {1, "content: walks docs/public, internal/ui, cmd and contrib for shipped text; contrib's dot-directories ship"},
-	"test/e2e/hermes/stack_test.go:writeConfigs":                             {1, "content: copies configs/agent-templates verbatim, as make install-config-assets installs it"},
-	"internal/ui/csrf_client_test.go:readTemplates":                          {1, "embed: walks the embedded templates filesystem, not the disk"},
+	"internal/api/companion_bundle_toolnames_test.go:scanBundleMCPNames":                {1, "content: walks one contrib plugin bundle; its .claude-plugin/.codex-plugin directories are shipped content"},
+	"internal/ui/ce_brand_guard_test.go:TestCEShippedFiles_NoRetiredPalette":            {1, "content: walks docs/public, internal/ui, cmd and contrib for shipped text; contrib's dot-directories ship"},
+	"test/e2e/hermes/stack_test.go:writeConfigs":                                        {1, "content: copies configs/agent-templates verbatim, as make install-config-assets installs it"},
+	"internal/ui/csrf_client_test.go:readTemplates":                                     {1, "embed: walks the embedded templates filesystem, not the disk"},
+	"contrib/cursor-companion/embed_test.go:TestBundle_EqualsTheTree":                   {2, "embed: compares the embedded Cursor plugin with its directory, whose .cursor-plugin manifest directory ships (LLD 28)"},
+	"contrib/opencode-companion/embed_test.go:TestBundle_EqualsTheTree":                 {2, "embed: compares the embedded opencode bundle with its directory, file for file (LLD 29)"},
+	"internal/api/cursor_companion_plugin_test.go:TestCursorBundle_NamesNoPrefixedTool": {1, "content: walks the Cursor plugin bundle; its .cursor-plugin directory is shipped content"},
 
 	"internal/architecture/test_env_law_test.go:TestTestEnvLaw_SentinelDataDirUntouchedByServiceTests":               {1, "temp: lists what a run left in its own sentinel data directory"},
 	"cmd/vornik-enterprise/provision_561_test.go:treeState":                                                          {1, "temp: lists what provision left in the test's own config directory"},
 	"internal/cli/agent_connect_generic_test.go:TestAgentConnectGeneric_PrintsEntryAndWritesNoFile":                  {1, "temp: lists every file the command wrote under the test's HOME"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_RoundTrip":                                                  {1, "temp: searches the test's HOME for the key"},
 	"internal/cli/companion_desktop_589_test.go:TestCompanionConnect_589_ClaudeDesktop":                              {1, "temp: searches the test's HOME for the companion key"},
+	"internal/cli/companion_cursor_621_test.go:TestCompanionConnectCursor_621_InstallsThePlugin":                     {1, "temp: searches the test's HOME for the companion key; .cursor and .config hold what connect wrote"},
+	"internal/cli/companion_opencode_841_test.go:TestCompanionConnectOpenCode_841_InstallsTheBundle":                 {1, "temp: searches the test's HOME for the companion key; .config/opencode holds what connect wrote"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_APIKeyStdinReadsKeyAndNotEnv":                               {1, "temp: searches the test's HOME for the admin key"},
 	"internal/cli/package_upgrade_test.go:readTree":                                                                  {1, "temp: reads back a configs tree the test wrote"},
 	"internal/executor/harvest_race_359_test.go:storedOutputs.bodies":                                                {1, "temp: reads the test's own artifact store"},

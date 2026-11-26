@@ -153,6 +153,11 @@ func (a *accessRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap exposes the wrapped writer to http.ResponseController, so a
+// handler's per-request write deadline reaches the connection (GitHub #908;
+// without it SetWriteDeadline returns http.ErrNotSupported).
+func (a *accessRecorder) Unwrap() http.ResponseWriter { return a.ResponseWriter }
+
 // Flush forwards to the wrapped writer so SSE / NDJSON
 // streaming endpoints continue to flush per-chunk under the
 // middleware.

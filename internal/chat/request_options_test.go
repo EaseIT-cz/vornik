@@ -104,7 +104,8 @@ func TestWithReasoningEffort(t *testing.T) {
 	if got := ReasoningEffortFromContext(nil); got != "" { //nolint:staticcheck // nil ctx is a real caller mistake worth covering
 		t.Errorf("nil ctx must be empty, got %q", got)
 	}
-	for _, lvl := range []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh} {
+	// "off" is a level since GitHub #869 (reasoning control design B1).
+	for _, lvl := range []string{ReasoningEffortOff, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh} {
 		if got := ReasoningEffortFromContext(WithReasoningEffort(ctx, lvl)); got != lvl {
 			t.Errorf("effort %q round-trip = %q", lvl, got)
 		}
@@ -112,7 +113,9 @@ func TestWithReasoningEffort(t *testing.T) {
 	// A typo must not silently reach the provider as a made-up level: an
 	// unrecognised value leaves the model's own default in place rather than
 	// changing behaviour in an unpredictable direction.
-	for _, bad := range []string{"", "LOW", "lowest", "none", "off", "0"} {
+	// "none" stays unrecognised here: it is the wire spelling, which the
+	// proxy turns into "off" before stamping (design B3).
+	for _, bad := range []string{"", "LOW", "lowest", "none", "OFF", "0"} {
 		if got := ReasoningEffortFromContext(WithReasoningEffort(ctx, bad)); got != "" {
 			t.Errorf("unrecognised effort %q must be ignored, got %q", bad, got)
 		}

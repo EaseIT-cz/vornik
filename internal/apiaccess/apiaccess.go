@@ -71,7 +71,8 @@ type Outcome struct {
 //  3. agent-write policy: a write method is refused unless
 //     AgentWrites(project, role).
 //  4. Client.Call; on error ⇒ mapped Refusal.
-//  5. success ⇒ Outcome{Body, ProvenanceThirdParty}.
+//  5. success ⇒ Outcome{Body, ProvenanceThirdParty}; a non-2xx status is
+//     stated in the body's first line (statedBody, GitHub #910).
 func (s *Service) Query(ctx context.Context, projectID, role string, req apigateway.Request) Outcome {
 	// 1. Validate + resolve (before the allowlist gate).
 	if strings.TrimSpace(req.Provider) == "" {
@@ -107,8 +108,31 @@ func (s *Service) Query(ctx context.Context, projectID, role string, req apigate
 		return Outcome{Refusal: mapGatewayError(err, req)}
 	}
 
-	// 5. Success — tag only. No redaction, no cap (caller-side).
-	return Outcome{Body: resp.Body, Provenance: outputguard.ProvenanceThirdParty}
+	// 5. Success — tag only. No redaction, no cap (caller-side). A non-2xx
+	// answer is still an answer, but the role sees only the body: state the
+	// status in it (GitHub #910).
+	return Outcome{Body: statedBody(req.Provider, resp), Provenance: outputguard.ProvenanceThirdParty}
+}
+
+// statedBody is the body a role sees. A 2xx body, or one with no known status
+// (0), is passed through unchanged. Any other status leads with one line
+// naming it, because the role sees only the body: a 301 with an empty body
+// read as an empty success, and a role reported zero results (GitHub #910).
+// A redirect is never followed (the approval binds the endpoint), and is
+// usually a path that repeats the base URL's own path.
+func statedBody(provider string, resp apigateway.Response) string {
+	if resp.Status == 0 || resp.Status/100 == 2 {
+		return resp.Body
+	}
+	line := fmt.Sprintf("HTTP %d from provider %q.", resp.Status, provider)
+	if resp.Status/100 == 3 {
+		line += " This is a redirect, and query_api does not follow redirects." +
+			" Check the path: it is relative to the base URL list_apis shows, so do not repeat the base URL's own path."
+	}
+	if strings.TrimSpace(resp.Body) == "" {
+		return line + " The response had an empty body."
+	}
+	return line + "\n" + resp.Body
 }
 
 // ListProviders returns the project's allowed providers (allowlist loaded

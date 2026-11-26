@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/termcheck"
 )
 
 // daemonOpsCredsConfig is --config: the managed instance's config file.
@@ -50,11 +51,7 @@ func init() {
 // stdoutIsTerminal reports whether w is a terminal; a seam for the tests.
 var stdoutIsTerminal = func(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return ok && termcheck.IsTerminal(f) // not /dev/null (GitHub #866)
 }
 
 func runDaemonOperationsCredentials(cmd *cobra.Command, path string) error {

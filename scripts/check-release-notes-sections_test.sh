@@ -104,6 +104,86 @@ d="$(fixture ee-final 2026-01-09 'A release.')"
 printf '\n> A release about drafts: drafting is reviewed.\n' >>"$d/notes/2026.1.1.md"
 expect 0 "--release passes final EE notes that mention drafts in prose" --release 2026.1.1 "$d/notes" "$d/index.md"
 
+# --- 4. the codename and its story (packaging design, Amendment 2026-11-25) ---
+# From the 2026.12 line a release's public heading carries " — <Name>" and
+# its section a "### The name" story of at least 60 words; --release refuses
+# either missing. A 2026.11 tag is not asked for one.
+story="word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"  # filler: the check counts words, it does not read them
+# codename_fixture NAME HEADING SECTION_TEXT
+codename_fixture() {
+	local d="$tmp/$1"
+	mkdir -p "$d/notes"
+	printf '# vornik 2026.11.8\n\n**Release date:** 2026-11-28\n' >"$d/notes/2026.11.8.md"
+	printf '# vornik 2026.12.1\n\n**Release date:** 2026-12-18\n' >"$d/notes/2026.12.1.md"
+	{
+		printf '# Release Notes\n\n'
+		printf '%s\n\n%s\n\n- **Thing.** Changed.\n\n---\n\n' "$2" "$3"
+		printf '## 2026.11.8\n\nA release.\n\n- **Other.** Fixed.\n'
+	} >"$d/index.md"
+	echo "$d"
+}
+d="$(codename_fixture cn-ok '## 2026.12.1 — Cifa' "A release.
+
+### The name
+
+$story")"
+expect 0 "--release passes a titled heading with its story" --release 2026.12.1 "$d/notes" "$d/index.md"
+expect 0 "--release asks no codename of a 2026.11 tag" --release 2026.11.8 "$d/notes" "$d/index.md"
+d="$(codename_fixture cn-untitled '## 2026.12.1' "A release.
+
+### The name
+
+$story")"
+expect 1 "--release refuses a heading without a codename" --release 2026.12.1 "$d/notes" "$d/index.md"
+d="$(codename_fixture cn-nostory '## 2026.12.1 — Cifa' 'A release.')"
+expect 1 "--release refuses a codename without its story" --release 2026.12.1 "$d/notes" "$d/index.md"
+d="$(codename_fixture cn-short '## 2026.12.1 — Cifa' "A release.
+
+### The name
+
+Cifa was a computer.")"
+expect 1 "--release refuses a story under 60 words" --release 2026.12.1 "$d/notes" "$d/index.md"
+d="$(codename_fixture cn-draft '## 2026.12.1' 'A release. Draft: not yet released.')"
+printf '# vornik 2026.12.1\n\n**Release date:** not released\n' >"$d/notes/2026.12.1.md"
+expect 0 "a draft section is not asked for a codename outside --release" "$d/notes" "$d/index.md"
+
+# --- 5. a stale undated release (docs-publishing design, Amendment 2026-11-25) ---
+# The docs build hides a section whose EE notes are undated. A version below
+# a dated one is released, so undated notes there are stale: 2026.7.7 was
+# tagged on 2026-07-29 and its notes still said "unreleased".
+d="$(fixture stale-undated 'unreleased (accumulating on main)' 'A release.')"
+printf '# vornik 2026.1.2\n\n**Release date:** 2026-01-20\n' >"$d/notes/2026.1.2.md"
+printf '## 2026.1.2\n\nLater.\n' | cat - "$d/index.md" >"$d/index2.md" && mv "$d/index2.md" "$d/index.md"
+expect 1 "an undated version below a dated one is refused (the site would hide it)" "$d/notes" "$d/index.md"
+d="$(fixture newest-undated 'not released (draft)' 'A release.')"
+expect 0 "the newest version may be undated (it is the release in preparation)" "$d/notes" "$d/index.md"
+
+# --- 7. older release lines are rolled up (packaging design, Amendment 2026-11-25) ---
+# At most three released monthly lines keep full sections; a line in
+# preparation (undated notes) does not count.
+# rollup_fixture NAME MONTHS... — one released release per month, newest first
+rollup_fixture() {
+	local d="$tmp/$1"; shift
+	mkdir -p "$d/notes"
+	{
+		printf '# Release Notes\n\n'
+		for m in "$@"; do
+			printf '# vornik 2026.%s.1\n\n**Release date:** 2026-%02d-10\n' "$m" "$m" >"$d/notes/2026.$m.1.md"
+			printf '## 2026.%s.1\n\nA release.\n\n' "$m"
+		done
+		printf '## Earlier releases\n\n### 2026.1.x\n\n- **2026.1.1** — Old.\n'
+	} >"$d/index.md"
+	echo "$d"
+}
+d="$(rollup_fixture four-lines 9 8 7 6)"
+out="$("$script" "$d/notes" "$d/index.md" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 1 ] && grep -q "2026.6" <<<"$out"; then pass "four released lines in full are refused, naming the oldest"; else fail "four lines: rc=$rc $out"; fi
+d="$(rollup_fixture three-lines 9 8 7)"
+expect 0 "three released lines in full pass" "$d/notes" "$d/index.md"
+d="$(rollup_fixture draft-line 10 9 8 7)"
+printf '# vornik 2026.10.1\n\n> **Draft.** Not yet released.\n' >"$d/notes/2026.10.1.md"
+expect 0 "a line in preparation does not count against the three" "$d/notes" "$d/index.md"
+
 if [ "$fails" -gt 0 ]; then
 	echo "check-release-notes-sections_test: $fails failure(s)"
 	exit 1
